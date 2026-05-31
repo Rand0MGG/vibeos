@@ -1,0 +1,7 @@
+{
+  "uuid": "vibeos@local",
+  "name": "VibeOS Session Bridge",
+  "description": "Exposes GNOME Wayland window capabilities to the VibeOS user-session agent runtime.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://example.local/vibeos"
+}

@@ -1,0 +1,135 @@
+from __future__ import annotations
+
+from urllib.parse import urlparse
+
+from .capabilities import CAPABILITIES, UNKNOWN_CAPABILITY
+from .models import Intent, PermissionReview
+
+
+MAX_NAME_LENGTH = 160
+MAX_URI_LENGTH = 2048
+MAX_CLIPBOARD_LENGTH = 4096
+MAX_NOTIFICATION_TITLE_LENGTH = 80
+MAX_NOTIFICATION_BODY_LENGTH = 500
+
+
+class PermissionPolicy:
+    """Risk policy for VibeOS system capabilities.
+
+    The model may request capabilities, but this policy decides whether the
+    broker can execute them automatically, must ask for review, or must reject.
+    """
+
+    def review(self, intent: Intent) -> PermissionReview:
+        if intent.action == "unknown":
+            return PermissionReview(
+                risk_level=UNKNOWN_CAPABILITY.risk_level,
+                review_required=UNKNOWN_CAPABILITY.review_required,
+                allowed=UNKNOWN_CAPABILITY.allowed,
+                reason=intent.reason or "Unsupported or unclear request.",
+                effects=UNKNOWN_CAPABILITY.effects,
+                reversible=UNKNOWN_CAPABILITY.reversible,
+            )
+
+        spec = CAPABILITIES.get(intent.action)
+        if spec:
+            target_error = validate_target(intent)
+            if target_error:
+                return PermissionReview(
+                    risk_level=UNKNOWN_CAPABILITY.risk_level,
+                    review_required=UNKNOWN_CAPABILITY.review_required,
+                    allowed=UNKNOWN_CAPABILITY.allowed,
+                    reason=target_error,
+                    effects=UNKNOWN_CAPABILITY.effects,
+                    reversible=UNKNOWN_CAPABILITY.reversible,
+                )
+            return PermissionReview(
+                risk_level=spec.risk_level,
+                review_required=spec.review_required,
+                allowed=spec.allowed,
+                reason=spec.reason,
+                effects=spec.effects,
+                reversible=spec.reversible,
+            )
+        return PermissionReview(
+            risk_level=UNKNOWN_CAPABILITY.risk_level,
+            review_required=UNKNOWN_CAPABILITY.review_required,
+            allowed=UNKNOWN_CAPABILITY.allowed,
+            reason=f"Capability {intent.action!r} is not allowed by VibeOS v0.1.",
+            effects=UNKNOWN_CAPABILITY.effects,
+            reversible=UNKNOWN_CAPABILITY.reversible,
+        )
+
+
+def validate_target(intent: Intent) -> str | None:
+    """Reject targets that are outside the narrow v0.1 capability contract."""
+
+    target = intent.target
+    action = intent.action
+
+    if action in {"app.list", "window.list", "system.status"}:
+        return None
+
+    if action == "app.open":
+        name = _target_text(target, "name", "app")
+        if not name:
+            return "app.open requires an application name."
+        return _validate_short_text(name, "application name", MAX_NAME_LENGTH)
+
+    if action in {"window.focus", "window.minimize", "window.maximize", "window.close"}:
+        name = _target_text(target, "name", "window") or "current"
+        return _validate_short_text(name, "window target", MAX_NAME_LENGTH)
+
+    if action == "notification.send":
+        title = _target_text(target, "title") or "VibeOS"
+        body = _target_text(target, "body", "message")
+        title_error = _validate_short_text(title, "notification title", MAX_NOTIFICATION_TITLE_LENGTH)
+        if title_error:
+            return title_error
+        if body:
+            return _validate_short_text(body, "notification body", MAX_NOTIFICATION_BODY_LENGTH)
+        return None
+
+    if action == "portal.open_uri":
+        uri = _target_text(target, "uri", "url")
+        if not uri:
+            return "portal.open_uri requires a URI target."
+        if len(uri) > MAX_URI_LENGTH:
+            return f"URI target exceeds {MAX_URI_LENGTH} characters."
+        parsed = urlparse(uri)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return "portal.open_uri only allows http or https URI targets."
+        if parsed.username or parsed.password:
+            return "portal.open_uri rejects URI targets containing credentials."
+        return None
+
+    if action == "clipboard.write":
+        text = _target_text(target, "text")
+        if not text:
+            return "clipboard.write requires non-empty text."
+        if "\x00" in text:
+            return "clipboard.write rejects text containing NUL bytes."
+        if len(text) > MAX_CLIPBOARD_LENGTH:
+            return f"clipboard.write text exceeds {MAX_CLIPBOARD_LENGTH} characters."
+        return None
+
+    return None
+
+
+def _target_text(target: dict[str, object], *keys: str) -> str:
+    for key in keys:
+        value = target.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            return ""
+        return value.strip()
+    return ""
+
+
+def _validate_short_text(value: str, label: str, max_length: int) -> str | None:
+    if "\x00" in value:
+        return f"{label} rejects NUL bytes."
+    if len(value) > max_length:
+        return f"{label} exceeds {max_length} characters."
+    return None

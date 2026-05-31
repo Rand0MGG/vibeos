@@ -1,0 +1,15 @@
+[Unit]
+Description=VibeOS user-session agent daemon
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env vibed --dbus
+Restart=on-failure
+RestartSec=2
+Environment=PYTHONUNBUFFERED=1
+# Prefer scripts/install_linux_session.sh for real installs; it writes
+# WorkingDirectory, VIBEOS_ENV_FILE, and EnvironmentFile for the active project.
+
+[Install]
+WantedBy=default.target
