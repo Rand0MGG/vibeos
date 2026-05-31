@@ -7,3 +7,12 @@ __pycache__/
 .vibeos-verify/
 .vibeos-vm-evidence/
 .env
+
+# Large OS images and VM disks should not be stored in Git.
+*.iso
+*.img
+*.qcow2
+*.vdi
+*.vmdk
+*.vhd
+*.vhdx
