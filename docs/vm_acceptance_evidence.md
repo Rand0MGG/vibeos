@@ -2,8 +2,12 @@
 
 Use this after installing VibeOS inside a Fedora Workstation or Ubuntu GNOME Wayland VM.
 
-The evidence collector runs the same acceptance path that matters for v0.1:
+The evidence collector runs the same acceptance path that matters for the current v0.2 runtime:
 
+- `systemctl --user is-active vibed.service`
+- D-Bus introspection for `org.vibeos.Agent`
+- D-Bus `org.vibeos.Agent.Status()`
+- HTTP `http://127.0.0.1:8765/v1/status`
 - session doctor
 - capability registry
 - deterministic app/window listing
@@ -62,6 +66,12 @@ The report is considered acceptable only when:
 ```
 
 In `--real` mode the doctor step is strict: platform, Wayland session, GNOME Shell, `gdbus`, XDG Desktop Portal, `systemd --user`, `vibed.service`, GNOME extension bridge, app registry, and action helpers must all report `ok`. Model configuration may still be `warn` if you intentionally run the local rule parser.
+
+`--real` also enables daemon-required mode. That means:
+
+- CLI commands may not silently fall back to the local broker
+- `runtime_entry` must report daemon transport
+- the evidence report must show working `systemd`, D-Bus, and HTTP daemon status checks
 
 Use `--session-state` only when you deliberately want the evidence run to use the normal VibeOS audit/review state:
 

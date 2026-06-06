@@ -10,6 +10,7 @@ from typing import Any
 
 from .audit import default_audit_path
 from .models import Intent, PermissionReview, ReviewRequest, utc_now_iso
+from .task_models import StepReviewRecord, TaskPlanReviewResult
 
 DEFAULT_REVIEW_TTL_SECONDS = 600
 
@@ -56,6 +57,37 @@ class ReviewStore:
         self._append({"event": "created", **review_to_payload(request)})
         return request
 
+    def create_plan_review(self, utterance: str, plan_payload: dict[str, Any], plan_review: TaskPlanReviewResult) -> ReviewRequest:
+        now = datetime.now(UTC)
+        created_at = isoformat_utc(now)
+        expires_at = isoformat_utc(now + timedelta(seconds=self.ttl_seconds))
+        placeholder_intent = Intent.unknown("stored task plan approval", {"plan_id": plan_review.plan_id})
+        review = PermissionReview(
+            risk_level=plan_review.max_risk_level,
+            review_required=True,
+            allowed=True,
+            reason="Stored task plan requires approval before execution.",
+            effects=("May execute one or more reviewed task plan steps.",),
+            reversible=False,
+        )
+        review_id = make_plan_review_id(plan_payload, created_at)
+        request = ReviewRequest(
+            review_id=review_id,
+            utterance=utterance,
+            intent=placeholder_intent,
+            review=review,
+            created_at=created_at,
+            status="pending",
+            expires_at=expires_at,
+            review_kind="plan",
+            plan_id=plan_review.plan_id,
+            plan_payload=plan_payload,
+            step_reviews=tuple(asdict(item) for item in plan_review.step_reviews),
+            layer="permission_review",
+        )
+        self._append({"event": "created", **review_to_payload(request)})
+        return request
+
     def approve(self, review_id: str) -> ReviewRequest | None:
         request = self.get(review_id)
         if not request or request.status != "pending":
@@ -69,6 +101,11 @@ class ReviewStore:
             created_at=request.created_at,
             status="approved",
             expires_at=request.expires_at,
+            review_kind=request.review_kind,
+            plan_id=request.plan_id,
+            plan_payload=request.plan_payload,
+            step_reviews=request.step_reviews,
+            layer=request.layer,
         )
 
     def reject(self, review_id: str) -> ReviewRequest | None:
@@ -84,6 +121,11 @@ class ReviewStore:
             created_at=request.created_at,
             status="rejected",
             expires_at=request.expires_at,
+            review_kind=request.review_kind,
+            plan_id=request.plan_id,
+            plan_payload=request.plan_payload,
+            step_reviews=request.step_reviews,
+            layer=request.layer,
         )
 
     def consume(self, review_id: str) -> ReviewRequest | None:
@@ -99,6 +141,11 @@ class ReviewStore:
             created_at=request.created_at,
             status="consumed",
             expires_at=request.expires_at,
+            review_kind=request.review_kind,
+            plan_id=request.plan_id,
+            plan_payload=request.plan_payload,
+            step_reviews=request.step_reviews,
+            layer=request.layer,
         )
 
     def get(self, review_id: str) -> ReviewRequest | None:
@@ -151,22 +198,44 @@ class ReviewStore:
         if not self.path.exists():
             return []
         entries = []
-        for line in self.path.read_text(encoding="utf-8").splitlines():
+        try:
+            lines = self.path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return []
+        for line in lines:
             if not line.strip():
                 continue
             entries.append(json.loads(line))
         return entries
 
     def _append(self, entry: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError:
+            fallback = Path.cwd() / ".vibeos" / "reviews.jsonl"
+            fallback.parent.mkdir(parents=True, exist_ok=True)
+            with fallback.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            self.path = fallback
 
 
 def make_review_id(utterance: str, intent: Intent, created_at: str) -> str:
     digest = hashlib.sha256(
         json.dumps(
             {"utterance": utterance, "intent": asdict(intent), "created_at": created_at},
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:12]
+    return f"rev_{digest}"
+
+
+def make_plan_review_id(plan_payload: dict[str, Any], created_at: str) -> str:
+    digest = hashlib.sha256(
+        json.dumps(
+            {"plan": plan_payload, "created_at": created_at},
             ensure_ascii=False,
             sort_keys=True,
         ).encode("utf-8")
@@ -183,6 +252,11 @@ def review_to_payload(request: ReviewRequest) -> dict[str, Any]:
         "created_at": request.created_at,
         "expires_at": request.expires_at,
         "status": request.status,
+        "review_kind": request.review_kind,
+        "plan_id": request.plan_id,
+        "plan_payload": request.plan_payload,
+        "step_reviews": list(request.step_reviews),
+        "layer": request.layer,
     }
 
 
@@ -209,6 +283,11 @@ def review_from_payload(payload: dict[str, Any], status: str) -> ReviewRequest:
         created_at=payload["created_at"],
         status=status,
         expires_at=payload.get("expires_at"),
+        review_kind=str(payload.get("review_kind", "intent")),
+        plan_id=str(payload["plan_id"]) if payload.get("plan_id") is not None else None,
+        plan_payload=payload.get("plan_payload") if isinstance(payload.get("plan_payload"), dict) else None,
+        step_reviews=tuple(payload.get("step_reviews", ())),
+        layer=str(payload["layer"]) if payload.get("layer") is not None else None,
     )
 
 

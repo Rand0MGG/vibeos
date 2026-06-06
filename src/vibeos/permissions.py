@@ -91,7 +91,7 @@ def validate_target(intent: Intent) -> str | None:
         return None
 
     if action == "portal.open_uri":
-        uri = _target_text(target, "uri", "url")
+        uri = _target_text(target, "uri", "url", "name")
         if not uri:
             return "portal.open_uri requires a URI target."
         if len(uri) > MAX_URI_LENGTH:
@@ -103,8 +103,47 @@ def validate_target(intent: Intent) -> str | None:
             return "portal.open_uri rejects URI targets containing credentials."
         return None
 
+    if action == "browser.open_url":
+        uri = _target_text(target, "uri", "url", "name")
+        if not uri:
+            return "browser.open_url requires a URI target."
+        if len(uri) > MAX_URI_LENGTH:
+            return f"URI target exceeds {MAX_URI_LENGTH} characters."
+        parsed = urlparse(uri)
+        if parsed.scheme != "https" or not parsed.netloc:
+            return "browser.open_url only allows https URI targets."
+        if parsed.username or parsed.password:
+            return "browser.open_url rejects URI targets containing credentials."
+        return None
+
+    if action == "browser.search_web":
+        query = _target_text(target, "query")
+        if not query:
+            return "browser.search_web requires a non-empty query."
+        return _validate_short_text(query, "search query", MAX_CLIPBOARD_LENGTH)
+
+    if action == "browser.open_site_search":
+        site = _target_text(target, "site")
+        query = _target_text(target, "query")
+        if not site:
+            return "browser.open_site_search requires a site."
+        site_error = _validate_short_text(site, "site", MAX_NAME_LENGTH)
+        if site_error:
+            return site_error
+        if not query:
+            return "browser.open_site_search requires a non-empty query."
+        return _validate_short_text(query, "search query", MAX_CLIPBOARD_LENGTH)
+
+    if action in {"media.search", "media.play", "media.pause"}:
+        query = _target_text(target, "query")
+        if action in {"media.search", "media.play"} and not query:
+            return f"{action} requires a non-empty query."
+        if query:
+            return _validate_short_text(query, "media query", MAX_CLIPBOARD_LENGTH)
+        return None
+
     if action == "clipboard.write":
-        text = _target_text(target, "text")
+        text = _target_text(target, "text", "content")
         if not text:
             return "clipboard.write requires non-empty text."
         if "\x00" in text:

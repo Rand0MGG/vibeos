@@ -36,6 +36,16 @@ def sample_target(action: str) -> dict[str, str]:
         return {"title": "VibeOS", "body": "hello"}
     if action == "portal.open_uri":
         return {"uri": "https://example.com"}
+    if action == "browser.open_url":
+        return {"uri": "https://example.com"}
+    if action == "browser.search_web":
+        return {"query": "hello"}
+    if action == "browser.open_site_search":
+        return {"site": "example.com", "query": "hello"}
+    if action in {"media.search", "media.play"}:
+        return {"query": "hello"}
+    if action == "media.pause":
+        return {"query": "hello"}
     if action == "clipboard.write":
         return {"text": "hello"}
     return {}

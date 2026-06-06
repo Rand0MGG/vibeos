@@ -42,3 +42,10 @@ def test_clipboard_write_requires_non_empty_text() -> None:
     assert review.risk_level == "L3"
     assert not review.allowed
     assert "non-empty" in review.reason
+
+
+def test_clipboard_write_accepts_content_alias() -> None:
+    review = PermissionPolicy().review(Intent(action="clipboard.write", target={"content": "hello"}))
+    assert review.risk_level == "L2"
+    assert review.allowed
+    assert review.review_required

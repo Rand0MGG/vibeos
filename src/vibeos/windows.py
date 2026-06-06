@@ -8,6 +8,14 @@ import subprocess
 from .models import WindowEntry
 
 
+WINDOW_ALIASES = {
+    "browser": ("firefox", "org.mozilla.firefox", "web browser"),
+    "浏览器": ("firefox", "org.mozilla.firefox", "browser"),
+    "terminal": ("terminal", "ptyxis", "gnome terminal", "console"),
+    "终端": ("terminal", "ptyxis", "gnome terminal", "console"),
+}
+
+
 class WindowRegistry:
     """Window registry using the VibeOS GNOME extension when available."""
 
@@ -38,17 +46,15 @@ class WindowRegistry:
             focused = [window for window in self.list_windows() if window.focused]
             return focused or self.list_windows()[:1]
         matches = []
+        terms = [query_norm, *WINDOW_ALIASES.get(query_norm, ())]
         for window in self.list_windows():
             haystack = f"{window.app_id} {window.title}".lower()
-            if query_norm and query_norm in haystack:
+            if any(term and term in haystack for term in terms):
                 matches.append(window)
         return matches
 
     def focus(self, window: WindowEntry) -> dict[str, str]:
-        raw = call_vibeos_shell("FocusWindow", window.window_id)
-        if raw is None:
-            return {"status": "failed", "error": "VibeOS GNOME Shell extension unavailable"}
-        return {"status": "focused", "window_id": window.window_id, "result": raw}
+        return shell_action("FocusWindow", window.window_id, "focused")
 
     def minimize(self, window: WindowEntry) -> dict[str, str]:
         return shell_action("MinimizeWindow", window.window_id, "minimized")
@@ -64,7 +70,7 @@ def shell_action(method: str, window_id: str, status: str) -> dict[str, str]:
     raw = call_vibeos_shell(method, window_id)
     if raw is None:
         return {"status": "failed", "error": "VibeOS GNOME Shell extension unavailable"}
-    return {"status": status, "window_id": window_id, "result": raw}
+    return parse_shell_action(raw, window_id, success_status=status)
 
 
 def call_vibeos_shell(method: str, *args: str) -> str | None:
@@ -98,3 +104,24 @@ def unwrap_gdbus_string(value: str) -> str:
     if value.startswith('("') and value.endswith('",)'):
         return value[2:-3].replace('\\"', '"')
     return value
+
+
+def parse_shell_action(raw: str, window_id: str, success_status: str) -> dict[str, str]:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"status": "failed", "window_id": window_id, "error": f"invalid shell response: {raw}"}
+    if not isinstance(payload, dict):
+        return {"status": "failed", "window_id": window_id, "error": f"unexpected shell response: {raw}"}
+
+    result = {str(key): str(value) for key, value in payload.items() if value is not None}
+    result.setdefault("window_id", window_id)
+
+    returned_status = result.get("status")
+    if returned_status == success_status:
+        return result
+    if not returned_status:
+        result["status"] = "failed"
+        result["error"] = f"missing status in shell response: {raw}"
+        return result
+    return result

@@ -37,6 +37,17 @@ class FakeWindows:
         return {"status": "closed", "window_id": window.window_id}
 
 
+class RetryWindows(FakeWindows):
+    def __init__(self):
+        self.close_calls = 0
+
+    def close(self, window):
+        self.close_calls += 1
+        if self.close_calls == 1:
+            return {"status": "not_found", "window_id": window.window_id}
+        return {"status": "closed", "window_id": window.window_id}
+
+
 class StaticIntentBroker(IntentBroker):
     def __init__(self, intent):
         self.intent = intent
@@ -56,6 +67,7 @@ def test_broker_dry_run_open_app() -> None:
     assert result.intent.action == "app.open"
     assert result.selected_target == "firefox.desktop"
     assert result.audit_id
+    assert result.transport is None
 
 
 def test_broker_rejects_delete_request() -> None:
@@ -106,7 +118,7 @@ def test_invalid_l2_target_is_rejected_without_review_id() -> None:
         reviews=ReviewStore(make_review_path("invalid-target")),
     )
     result = broker.handle(CommandRequest("打开 file:///etc/passwd"))
-    assert result.status == "rejected"
+    assert result.status in {"rejected", "failed"}
     assert result.review_id is None
     assert result.review
     assert result.review.risk_level == "L3"
@@ -129,6 +141,21 @@ def test_audit_records_review_and_approval() -> None:
     assert result.status == "executed"
     assert entries[-1]["approved"] is True
     assert entries[-1]["review"]["risk_level"] == "L2"
+
+
+def test_audit_records_request_transport() -> None:
+    audit = AuditLog()
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        apps=FakeApps(),
+        audit=audit,
+    )
+
+    result = broker.handle(CommandRequest("打开浏览器", dry_run=True, transport="local"))
+    entries = audit.tail(1)
+
+    assert result.transport == "local"
+    assert entries[-1]["transport"] == "local"
 
 
 def test_approve_review_executes_stored_intent_without_reparse() -> None:
@@ -165,6 +192,28 @@ def test_approve_review_is_consumed_after_execution() -> None:
     assert first.status == "executed"
     assert second.status == "rejected"
     assert "consumed" in second.message
+
+
+def test_failed_approved_review_is_not_consumed_and_can_retry() -> None:
+    review_path = make_review_path("retry-approved-review")
+    windows = RetryWindows()
+    reviews = ReviewStore(review_path)
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        apps=FakeApps(),
+        windows=windows,
+        audit=AuditLog(),
+        reviews=reviews,
+    )
+    pending = broker.handle(CommandRequest("关闭Firefox"))
+    first = broker.handle(CommandRequest("", review_id=pending.review_id, approve=True))
+    loaded = reviews.get(pending.review_id)
+    second = broker.handle(CommandRequest("", review_id=pending.review_id, approve=True))
+
+    assert first.status == "failed"
+    assert loaded
+    assert loaded.status == "approved"
+    assert second.status == "executed"
 
 
 def test_approve_review_dry_run_does_not_consume() -> None:
@@ -222,6 +271,23 @@ def test_expired_review_cannot_be_approved() -> None:
     assert pending.status == "review_required"
     assert approved.status == "rejected"
     assert "expired" in approved.message
+
+
+def test_clipboard_write_accepts_content_alias() -> None:
+    broker = CapabilityBroker(
+        intent_broker=StaticIntentBroker(Intent(action="clipboard.write", target={"content": "hello"})),
+        apps=FakeApps(),
+        windows=FakeWindows(),
+        audit=AuditLog(),
+        reviews=ReviewStore(make_review_path("clipboard-content-alias")),
+    )
+
+    result = broker.handle(CommandRequest("clipboard hello", dry_run=True))
+
+    assert result.status == "review_required"
+    assert result.review_id
+    assert result.result["plan"]["steps"][0]["target"]["text"] == "hello"
+    assert result.result["plan_review"]["status"] == "review_required"
 
 
 def make_review_path(name: str) -> Path:

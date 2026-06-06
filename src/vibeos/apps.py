@@ -70,18 +70,15 @@ class AppRegistry:
         if not gtk_launch:
             return {"status": "failed", "error": "gtk-launch not found"}
         try:
-            completed = subprocess.run(
+            subprocess.Popen(
                 [gtk_launch, app.desktop_id],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=20,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
             )
-        except subprocess.TimeoutExpired:
-            return {"status": "failed", "error": "gtk-launch timed out"}
-        if completed.returncode == 0:
             return {"status": "opened", "desktop_id": app.desktop_id}
-        return {"status": "failed", "error": completed.stderr.strip() or completed.stdout.strip()}
+        except OSError as exc:
+            return {"status": "failed", "error": str(exc)}
 
     def _parse_desktop_file(self, path: Path) -> AppEntry | None:
         parser = configparser.ConfigParser(interpolation=None, strict=False)

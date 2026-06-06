@@ -1,13 +1,27 @@
 # VibeOS Current Status
 
-Last updated: 2026-05-31
+Last updated: 2026-06-06
 
 ## Implemented
 
+- v0.5 planning architecture:
+  - typed goal synthesis layer
+  - explicit domain packs for `apps`, `window_management`, `clipboard`, `notification`, `system_observation`, `browser`, and `media`
+  - removal of the legacy single-intent main path for supported tasks
+  - explicit post-execution acceptance engine
+  - bounded `run -> attempt -> classify -> retry/replan -> exit` loop for supported tasks
+  - structured `debug_trace` with model/provider exchange visibility
+  - public `execution_status`, `acceptance_status`, and `overall_status`
+  - public `run` and `attempts` metadata for task-plan execution paths
 - Natural-language command path:
   - `vibe ask`
-  - local rule parser fallback
   - OpenAI-compatible model adapter
+  - configured broker on the normal planning path
+  - local rule parser for missing-model setups and `--offline` mode
+  - explicit provider-failure surfacing instead of silent rule-parser fallback
+  - web-like `open/打开` targets prefer browser semantics over eager `app.open`
+  - bounded semantic replanning for failed supported-task routes
+  - no raw keyword rejection for non-imperative mentions of words such as `delete`
   - DeepSeek `.env` configuration
 - Capability broker:
   - fixed action allowlist
@@ -29,6 +43,8 @@ Last updated: 2026-05-31
   - `.desktop` app registry
   - XDG portal status and URI open adapter
   - GNOME Shell extension bridge for window list/focus/minimize/maximize/close
+  - attempt-scoped browser postcondition context bound to `run_id` / `attempt_id`
+  - shared browser evidence for verifier and acceptance
   - GNOME Shell metadata declares versions 45-50
   - notification adapter
   - clipboard write adapter
@@ -37,6 +53,8 @@ Last updated: 2026-05-31
   - `vibe capabilities`
   - `vibe reviews pending`
   - `vibe reviews reject`
+  - daemon-required runtime selection for VM acceptance
+  - structured daemon transport failures instead of raw runtime exceptions
   - `scripts/install_linux_session.sh` with daemon `.env` wiring
   - `scripts/run_vm_smoke_tests.sh`
   - `scripts/collect_vm_evidence.py`
@@ -62,7 +80,7 @@ python scripts/verify_local.py
 
 The local verification checks:
 
-- unit tests
+- unit tests and deterministic v0.5 planner coverage
 - `vibe doctor --json`
 - `vibe capabilities --json`
 - `scripts/collect_vm_evidence.py` safe mode
@@ -86,7 +104,7 @@ Expected current result:
 
 ```text
 overall: ok
-pytest: 43 passed
+pytest: 177 passed
 doctor: overall warn on Windows
 capabilities: ok
 L1 dry-run: ok
@@ -97,6 +115,13 @@ one-time approval/reject tests: ok
 review expiration tests: ok
 L3 rejection: ok
 VM evidence safe mode: ok
+```
+
+Additional targeted suites run after the run-loop and transport changes:
+
+```powershell
+python -m pytest tests/test_runtime.py tests/test_broker_task_plans.py tests/test_v04_domain_architecture.py -q
+python -m pytest tests/test_broker.py tests/test_cli.py tests/test_daemon.py tests/test_v05_supported_task_migration.py tests/test_goal_synthesizer.py tests/test_debug_trace.py tests/test_task_plan_boundaries.py tests/test_vm_evidence.py tests/test_capabilities.py -q
 ```
 
 ## Still Requires Linux VM Verification
@@ -110,6 +135,14 @@ The following items cannot be proven from the current Windows host:
 - `notification.send` displays a real desktop notification
 - `portal.open_uri` opens a real browser/app through the session
 - `clipboard.write` writes to the real Linux desktop clipboard
+- browser window observation reflects the real focused browser title and any desktop-specific error pages
+
+The VM-side evidence path is now stricter than before:
+
+- `collect_vm_evidence.py --real` requires daemon transport instead of silently falling back to `local`
+- the report now captures `systemctl --user is-active vibed.service`
+- the report now captures D-Bus introspection and `org.vibeos.Agent.Status()`
+- the report now captures HTTP `/v1/status`
 
 Use:
 
@@ -136,3 +169,7 @@ This milestone should be treated as complete only after:
 9. Pending reviews are inspectable through CLI and service APIs.
 10. A real VM evidence report from `python scripts/collect_vm_evidence.py --real` has `overall: ok`.
 11. Audit log entries show utterance, intent, review id, risk level, decision, and result.
+12. Supported task plans do not select `legacy_*_route` or `legacy_intent_bridge` on the main path.
+13. Browser acceptance can fail even when launch/execution succeeded.
+14. Supported-task runs preserve bounded attempt history across retry/replan outcomes.
+15. Daemon transport failures return structured JSON results instead of raw Python tracebacks.

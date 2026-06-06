@@ -38,6 +38,7 @@ def test_summarize_warns_when_any_warning() -> None:
 
 def test_doctor_report_shape(monkeypatch) -> None:
     monkeypatch.setenv("VIBEOS_MODEL_PROVIDER", "local")
+    monkeypatch.setattr("vibeos.doctor.detect_runtime_entry", lambda: ("local", "warn", {"mode": "auto"}))
     doctor = SessionDoctor(runner=fake_runner, apps=FakeApps(), portal=FakePortal())
     report = doctor.run()
 
@@ -46,6 +47,7 @@ def test_doctor_report_shape(monkeypatch) -> None:
     assert any(check["name"] == "model_config" for check in report["checks"])
     assert any(check["name"] == "app_registry" for check in report["checks"])
     assert any(check["name"] == "action_helpers" for check in report["checks"])
+    assert any(check["name"] == "runtime_entry" for check in report["checks"])
 
 
 def test_missing_gdbus_is_warning_off_linux(monkeypatch) -> None:
@@ -62,3 +64,26 @@ def test_action_helpers_report_missing_tools(monkeypatch) -> None:
     assert check.status == "warn"
     assert "notify-send" in check.message
     assert "wl-copy/xclip/xsel" in check.message
+
+
+def test_runtime_entry_reports_dbus_path(monkeypatch) -> None:
+    monkeypatch.setattr("vibeos.doctor.detect_runtime_entry", lambda: ("dbus", "ok", {"mode": "auto"}))
+    doctor = SessionDoctor(runner=fake_runner, apps=FakeApps(), portal=FakePortal())
+
+    check = doctor.check_runtime_entry()
+
+    assert check.status == "ok"
+    assert "D-Bus daemon" in check.message
+
+
+def test_runtime_entry_reports_fail_when_daemon_required(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "vibeos.doctor.detect_runtime_entry",
+        lambda: ("local", "fail", {"mode": "auto", "require_daemon": True}),
+    )
+    doctor = SessionDoctor(runner=fake_runner, apps=FakeApps(), portal=FakePortal())
+
+    check = doctor.check_runtime_entry()
+
+    assert check.status == "fail"
+    assert "requires daemon transport" in check.message

@@ -40,6 +40,7 @@ cp -r "${ROOT_DIR}/gnome-extension/${EXTENSION_ID}/." "${EXTENSION_DEST}/"
 
 if command -v gnome-extensions >/dev/null 2>&1; then
   gnome-extensions enable "${EXTENSION_ID}" || true
+  gnome-extensions info "${EXTENSION_ID}" || true
 else
   echo "warning: gnome-extensions command not found; enable ${EXTENSION_ID} manually."
 fi
@@ -66,6 +67,13 @@ WantedBy=default.target
 UNIT
 systemctl --user daemon-reload
 systemctl --user enable --now vibed.service
+if systemctl --user is-active --quiet vibed.service; then
+  echo "vibed.service is active."
+else
+  echo "warning: vibed.service is not active after install." >&2
+  systemctl --user status vibed.service --no-pager -l || true
+  journalctl --user -u vibed.service -n 80 --no-pager || true
+fi
 
 echo "Running VibeOS doctor..."
 vibe doctor

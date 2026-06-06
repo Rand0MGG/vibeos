@@ -10,6 +10,7 @@ from typing import Callable
 from .apps import AppRegistry
 from .config import load_dotenv
 from .portal import PortalAdapter
+from .runtime import detect_runtime_entry
 from .windows import call_vibeos_shell
 
 CommandRunner = Callable[[list[str]], subprocess.CompletedProcess[str]]
@@ -44,6 +45,7 @@ class SessionDoctor:
             self.check_portal(),
             self.check_systemd_user(),
             self.check_vibed_service(),
+            self.check_runtime_entry(),
             self.check_gnome_extension_bridge(),
             self.check_app_registry(),
             self.check_action_helpers(),
@@ -77,10 +79,10 @@ class SessionDoctor:
         return DoctorCheck("gnome_shell", "warn", completed.stderr.strip() or "failed to query GNOME Shell version", {})
 
     def check_dbus_tools(self) -> DoctorCheck:
-        if shutil.which("gdbus"):
-            return DoctorCheck("gdbus", "ok", "gdbus is available", {})
         if platform.system() != "Linux":
             return DoctorCheck("gdbus", "warn", "gdbus is not available outside the target Linux session", {})
+        if shutil.which("gdbus"):
+            return DoctorCheck("gdbus", "ok", "gdbus is available", {})
         return DoctorCheck("gdbus", "fail", "gdbus is required for D-Bus and portal checks", {})
 
     def check_portal(self) -> DoctorCheck:
@@ -104,6 +106,20 @@ class SessionDoctor:
         if completed.stdout.strip() == "active":
             return DoctorCheck("vibed_service", "ok", "vibed.service is active", {})
         return DoctorCheck("vibed_service", "warn", "vibed.service is not active", {"systemctl": completed.stdout.strip() or completed.stderr.strip()})
+
+    def check_runtime_entry(self) -> DoctorCheck:
+        transport, status, detail = detect_runtime_entry()
+        if transport == "local" and status == "fail":
+            return DoctorCheck("runtime_entry", "fail", "CLI runtime requires daemon transport but would fall back to the local broker", detail)
+        if transport == "dbus":
+            if status == "fail":
+                return DoctorCheck("runtime_entry", "fail", "CLI runtime is configured for the D-Bus daemon, but that transport is unavailable", detail)
+            return DoctorCheck("runtime_entry", status, "CLI runtime will use the D-Bus daemon", detail)
+        if transport == "http":
+            if status == "fail":
+                return DoctorCheck("runtime_entry", "fail", "CLI runtime is configured for the HTTP daemon, but that transport is unavailable", detail)
+            return DoctorCheck("runtime_entry", status, "CLI runtime will use the HTTP daemon", detail)
+        return DoctorCheck("runtime_entry", status, "CLI runtime will fall back to the local broker", detail)
 
     def check_gnome_extension_bridge(self) -> DoctorCheck:
         raw = call_vibeos_shell("ListWindows")

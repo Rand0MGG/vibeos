@@ -5,10 +5,12 @@ import json
 import sys
 from dataclasses import asdict
 
-from .audit import AuditLog
 from .broker import CapabilityBroker
 from .doctor import SessionDoctor
+from .intent import RuleIntentBroker
 from .models import CommandRequest
+from .planner import plan_payload
+from .runtime import LocalRuntime, RuntimeSelectionError, build_runtime
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -19,11 +21,20 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("utterance")
     ask.add_argument("--dry-run", action="store_true", help="parse and resolve without executing capabilities")
     ask.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    ask.add_argument("--offline", action="store_true", help="force the deterministic local RuleIntentBroker path")
+    ask.add_argument("--debug", action="store_true", help="include raw provider payloads in debug_trace")
+
+    plan = subparsers.add_parser("plan", help="build a v0.3 task plan without executing it")
+    plan.add_argument("utterance")
+    plan.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    plan.add_argument("--offline", action="store_true", help="force the deterministic local RuleIntentBroker path")
+    plan.add_argument("--debug", action="store_true", help="include raw provider payloads in debug_trace")
 
     approve = subparsers.add_parser("approve", help="approve and execute a pending L2 review request")
     approve.add_argument("review_id")
     approve.add_argument("--dry-run", action="store_true", help="resolve the stored review without executing capabilities")
     approve.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    approve.add_argument("--debug", action="store_true", help="include raw provider payloads in debug_trace when available")
 
     subparsers.add_parser("repl", help="start an interactive natural-language REPL")
     subparsers.add_parser("apps", help="list applications")
@@ -52,49 +63,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    broker = CapabilityBroker()
-
-    if args.command == "ask":
-        result = broker.handle(CommandRequest(args.utterance, dry_run=args.dry_run))
-        print_result(result, json_output=args.json)
-        return 0 if result.status in {"executed", "dry_run"} else 1
-
-    if args.command == "approve":
-        result = broker.handle(CommandRequest("", review_id=args.review_id, dry_run=args.dry_run, approve=True))
-        print_result(result, json_output=args.json)
-        return 0 if result.status in {"executed", "dry_run"} else 1
-
-    if args.command == "repl":
-        return repl(broker)
-
-    if args.command == "apps":
-        print(json.dumps([asdict(app) for app in broker.apps.list_apps()], ensure_ascii=False, indent=2))
-        return 0
-
-    if args.command == "windows":
-        print(json.dumps([asdict(window) for window in broker.windows.list_windows()], ensure_ascii=False, indent=2))
-        return 0
-
-    if args.command == "capabilities":
-        payload = broker.capabilities()
-        if args.json:
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
-        else:
-            print_capabilities(payload)
-        return 0
-
-    if args.command == "reviews" and args.reviews_command == "pending":
-        payload = broker.pending_reviews()
-        if args.json:
-            print(json.dumps(payload, ensure_ascii=False, indent=2))
-        else:
-            print_pending_reviews(payload)
-        return 0
-
-    if args.command == "reviews" and args.reviews_command == "reject":
-        result = broker.reject_review(args.review_id)
-        print_result(result, json_output=args.json)
-        return 0 if result.message == "review request rejected by user" else 1
 
     if args.command == "doctor":
         report = SessionDoctor().run()
@@ -104,14 +72,69 @@ def main(argv: list[str] | None = None) -> int:
             print_doctor(report)
         return 0 if report["summary"]["overall"] in {"ok", "warn"} else 1
 
+    if args.command == "plan":
+        payload = plan_payload(args.utterance, intent_broker=RuleIntentBroker() if args.offline else None, debug=args.debug)
+        print_plan_payload(payload, json_output=args.json)
+        return 0 if payload["status"] == "validated" else 1
+
+    if args.command == "ask" and args.offline:
+        runtime = LocalRuntime(CapabilityBroker(intent_broker=RuleIntentBroker()))
+    else:
+        try:
+            runtime = build_runtime()
+        except RuntimeSelectionError as exc:
+            return print_runtime_error(args, exc)
+
     if args.command == "audit" and args.audit_command == "tail":
-        print(json.dumps(AuditLog().tail(args.count), ensure_ascii=False, indent=2))
+        print(json.dumps(runtime.audit_tail(args.count), ensure_ascii=False, indent=2))
         return 0
+
+    if args.command == "ask":
+        result = runtime.handle(CommandRequest(args.utterance, dry_run=args.dry_run, debug=args.debug))
+        print_result(result, json_output=args.json)
+        return 0 if result.overall_status in {"completed", "dry_run"} else 1
+
+    if args.command == "approve":
+        result = runtime.handle(CommandRequest("", review_id=args.review_id, dry_run=args.dry_run, approve=True, debug=args.debug))
+        print_result(result, json_output=args.json)
+        return 0 if result.overall_status in {"completed", "dry_run"} else 1
+
+    if args.command == "repl":
+        return repl(runtime)
+
+    if args.command == "apps":
+        print(json.dumps(runtime.list_apps(), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "windows":
+        print(json.dumps(runtime.list_windows(), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "capabilities":
+        payload = runtime.capabilities()
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print_capabilities(payload)
+        return 0
+
+    if args.command == "reviews" and args.reviews_command == "pending":
+        payload = runtime.pending_reviews()
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print_pending_reviews(payload)
+        return 0
+
+    if args.command == "reviews" and args.reviews_command == "reject":
+        result = runtime.reject_review(args.review_id)
+        print_result(result, json_output=args.json)
+        return 0 if result.message == "review request rejected by user" else 1
 
     return 2
 
 
-def repl(broker: CapabilityBroker) -> int:
+def repl(runtime) -> int:
     print("VibeOS REPL. Type 'exit' to quit.")
     while True:
         try:
@@ -123,12 +146,12 @@ def repl(broker: CapabilityBroker) -> int:
             return 0
         if not utterance:
             continue
-        result = broker.handle(CommandRequest(utterance))
+        result = runtime.handle(CommandRequest(utterance))
         if result.status == "review_required":
             print_result(result, json_output=False)
             answer = input("approve this L2 action? [y/N] ").strip().lower()
             if answer in {"y", "yes"}:
-                result = broker.handle(CommandRequest("", review_id=result.review_id, approve=True))
+                result = runtime.handle(CommandRequest("", review_id=result.review_id, approve=True))
         print_result(result, json_output=False)
 
 
@@ -142,6 +165,8 @@ def print_result(result, json_output: bool = False) -> None:
         print(f"target: {json.dumps(result.intent.target, ensure_ascii=False)}")
     if result.selected_target:
         print(f"selected: {result.selected_target}")
+    if result.transport:
+        print(f"transport: {result.transport}")
     if result.review_id:
         print(f"review_id: {result.review_id}")
     if result.review:
@@ -152,10 +177,56 @@ def print_result(result, json_output: bool = False) -> None:
             print(f"effects: {', '.join(result.review.effects)}")
     if result.message:
         print(f"message: {result.message}")
+    print(f"execution_status: {result.execution_status}")
+    print(f"acceptance_status: {result.acceptance_status}")
+    print(f"overall_status: {result.overall_status}")
     if result.result is not None:
         print(json.dumps(result.result, ensure_ascii=False, indent=2))
     if result.audit_id:
         print(f"audit: {result.audit_id}")
+
+
+def print_plan_payload(payload: dict[str, object], json_output: bool = False) -> None:
+    if json_output:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    print(f"status: {payload['status']}")
+    analysis = payload.get("analysis")
+    if isinstance(analysis, dict):
+        print(f"analysis_type: {analysis.get('type')}")
+        if analysis.get("domains"):
+            print(f"domains: {', '.join(str(item) for item in analysis['domains'])}")
+        if analysis.get("explanation"):
+            print(f"analysis: {analysis['explanation']}")
+    plan = payload.get("plan")
+    if isinstance(plan, dict):
+        print(f"plan_id: {plan.get('plan_id')}")
+        print(f"route: {plan.get('selected_route_id')}")
+        print(f"steps: {len(plan.get('steps', []))}")
+    validation = payload.get("validation")
+    if isinstance(validation, dict):
+        print(f"valid: {validation.get('ok')}")
+        for error in validation.get("errors", []):
+            print(f"error: {error}")
+
+
+def print_runtime_error(args, exc: RuntimeSelectionError) -> int:
+    payload = exc.to_payload()
+    if runtime_error_uses_json(args):
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(f"runtime error: {payload['message']}", file=sys.stderr)
+    return 1
+
+
+def runtime_error_uses_json(args) -> bool:
+    if args.command in {"apps", "windows"}:
+        return True
+    if args.command in {"ask", "approve", "capabilities", "doctor"}:
+        return bool(getattr(args, "json", False))
+    if args.command == "reviews":
+        return bool(getattr(args, "json", False))
+    return False
 
 
 def print_doctor(report: dict[str, object]) -> None:

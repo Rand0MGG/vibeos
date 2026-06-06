@@ -12,6 +12,7 @@ class CapabilitySpec:
     reason: str
     effects: tuple[str, ...]
     reversible: bool
+    parallel_safe: bool = False
     constraints: tuple[str, ...] = ()
 
 
@@ -125,6 +126,66 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
         effects=("May replace the user's clipboard contents.",),
         reversible=True,
         constraints=("Clipboard text must be non-empty and length-limited.",),
+    ),
+    "browser.open_url": CapabilitySpec(
+        action="browser.open_url",
+        risk_level="L1",
+        review_required=False,
+        allowed=True,
+        reason="Opening a normal browser URL is a bounded low-risk browsing action.",
+        effects=("May open an https URL in a browser.",),
+        reversible=True,
+        constraints=("Only vetted URL schemes are allowed; credentials and local data schemes are rejected.",),
+    ),
+    "browser.search_web": CapabilitySpec(
+        action="browser.search_web",
+        risk_level="L1",
+        review_required=False,
+        allowed=True,
+        reason="Searching the web with user-provided text is a bounded low-risk browsing action.",
+        effects=("May perform a web search in a browser.",),
+        reversible=True,
+        constraints=("Only user-provided query text may be used without additional review.",),
+    ),
+    "browser.open_site_search": CapabilitySpec(
+        action="browser.open_site_search",
+        risk_level="L1",
+        review_required=False,
+        allowed=True,
+        reason="Searching a site in the browser is a bounded low-risk browsing action.",
+        effects=("May perform a site-scoped search in a browser.",),
+        reversible=True,
+        constraints=("Only user-provided site and query text may be used without additional review.",),
+    ),
+    "media.search": CapabilitySpec(
+        action="media.search",
+        risk_level="L1",
+        review_required=False,
+        allowed=True,
+        reason="Media search is planner-visible but may be unavailable on the local host.",
+        effects=("May search media catalog state in a dedicated player.",),
+        reversible=True,
+        constraints=("Execution availability depends on a dedicated media adapter.",),
+    ),
+    "media.play": CapabilitySpec(
+        action="media.play",
+        risk_level="L1",
+        review_required=False,
+        allowed=True,
+        reason="Media play is planner-visible but may be unavailable on the local host.",
+        effects=("May start media playback in a dedicated player.",),
+        reversible=True,
+        constraints=("Execution availability depends on a dedicated media adapter.",),
+    ),
+    "media.pause": CapabilitySpec(
+        action="media.pause",
+        risk_level="L1",
+        review_required=False,
+        allowed=True,
+        reason="Media pause is planner-visible but may be unavailable on the local host.",
+        effects=("May pause media playback in a dedicated player.",),
+        reversible=True,
+        constraints=("Execution availability depends on a dedicated media adapter.",),
     ),
 }
 

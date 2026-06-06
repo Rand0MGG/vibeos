@@ -11,7 +11,13 @@ ALLOWED_ACTIONS = allowed_actions()
 Action = Literal[
     "app.list",
     "app.open",
+    "browser.open_site_search",
+    "browser.open_url",
+    "browser.search_web",
     "clipboard.write",
+    "media.pause",
+    "media.play",
+    "media.search",
     "notification.send",
     "portal.open_uri",
     "window.list",
@@ -45,6 +51,8 @@ class CommandRequest:
     dry_run: bool = False
     approve: bool = False
     review_id: str | None = None
+    transport: str | None = None
+    debug: bool = False
 
 
 @dataclass(frozen=True)
@@ -65,8 +73,12 @@ class CommandResult:
     selected_target: str | None = None
     audit_id: str | None = None
     review_id: str | None = None
+    transport: str | None = None
     message: str = ""
     review: PermissionReview | None = None
+    execution_status: str = "not_started"
+    acceptance_status: str = "skipped"
+    overall_status: str = "failed"
 
 
 @dataclass(frozen=True)
@@ -78,6 +90,11 @@ class ReviewRequest:
     created_at: str
     status: Literal["pending", "approved", "rejected", "consumed", "expired"] = "pending"
     expires_at: str | None = None
+    review_kind: Literal["intent", "plan"] = "intent"
+    plan_id: str | None = None
+    plan_payload: dict[str, Any] | None = None
+    step_reviews: tuple[dict[str, Any], ...] = ()
+    layer: str | None = None
 
 
 @dataclass(frozen=True)

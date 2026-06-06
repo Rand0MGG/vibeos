@@ -1,14 +1,14 @@
 # VibeOS
 
-VibeOS v0 is a modern Linux user-session agent runtime prototype. It turns natural-language requests into validated, auditable system capabilities for GNOME Wayland sessions.
+VibeOS v0 is a modern Linux user-session agent runtime prototype. It turns natural-language requests into synthesized goals, validated task plans, auditable capability execution, and explicit completion checks for GNOME Wayland sessions.
 
 The first target is intentionally small:
 
-- Parse user commands into structured intents.
-- Allow only registered capabilities.
-- Route execution through a capability broker.
+- Synthesize typed goals from user requests using only registered domains and capabilities.
+- Plan through explicit domain packs instead of a legacy direct-intent main path.
 - Review every capability through a risk policy before execution.
-- Record audit logs for every request.
+- Separate execution success from acceptance success.
+- Record run traces, debug traces, and audit logs for every request.
 - Prepare Linux session integration through D-Bus, XDG Desktop Portal, GNOME Shell Extension, and `systemd --user`.
 
 VibeOS v0 does not modify the Linux kernel and does not allow arbitrary shell execution.
@@ -77,7 +77,68 @@ export OPENAI_BASE_URL="https://api.openai.com/v1"
 export OPENAI_MODEL="..."
 ```
 
-Without an API key, VibeOS uses a conservative local rule parser for the v0 demo commands.
+Without an API key, VibeOS uses deterministic local rule-based synthesis and planning for the supported task surface.
+
+## v0.5 Architecture
+
+The primary supported-task path is now:
+
+```text
+utterance
+  -> utterance analysis
+  -> goal synthesis
+  -> domain routing
+  -> observation
+  -> capability exposure
+  -> candidate plans
+  -> validation
+  -> review
+  -> execution
+  -> post-execution observation
+  -> acceptance
+  -> bounded retry / bounded replan
+  -> run trace / debug trace / audit
+```
+
+Public command results expose:
+
+- `execution_status`
+- `acceptance_status`
+- `overall_status`
+
+Task-plan command results also expose:
+
+- `run`
+- `attempts`
+
+`--debug` on `vibe plan`, `vibe ask`, and `vibe approve` includes raw provider payloads in `debug_trace` with redaction and truncation safeguards.
+
+Normal `vibe ask` and `vibe plan` requests use the configured intent broker on the main path. The deterministic `RuleIntentBroker` is reserved for `--offline` and fallback behavior, and web-like targets such as `open baidu.com` or `打开百度官网` prefer browser semantics over eager `app.open` coercion.
+
+Configured model calls no longer silently collapse into rule parsing when the provider times out or returns an invalid payload. `RuleIntentBroker` remains available for `--offline` and missing-model setups, but provider-side failures now surface as explicit planning errors.
+
+Browser postcondition evidence is attempt-scoped:
+
+- every supported-task run produces a bounded `run` with typed `attempts`
+- browser navigation evidence is bound to the active `attempt_id`
+- verifier and acceptance now consume the same post-execution `browser_context`
+- daemon transport failures also return structured `run` and `attempts` payloads
+
+Runtime timeouts are layered and configurable:
+
+```env
+VIBEOS_PROVIDER_TIMEOUT_SECONDS=30
+VIBEOS_TRANSPORT_TIMEOUT_SECONDS=45
+VIBEOS_PORTAL_TIMEOUT_SECONDS=15
+```
+
+Browser search is configurable instead of being hardcoded to one engine:
+
+```env
+VIBEOS_DEFAULT_SEARCH_ENGINE=baidu
+# or:
+VIBEOS_SEARCH_ENGINE_URL_TEMPLATE=https://www.baidu.com/s?wd={query}
+```
 
 ## CLI Examples
 

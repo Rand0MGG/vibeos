@@ -39,6 +39,12 @@ class AuditLog:
         message: str = "",
         review: PermissionReview | None = None,
         review_id: str | None = None,
+        plan_id: str | None = None,
+        step_id: str | None = None,
+        layer: str | None = None,
+        execution_status: str | None = None,
+        acceptance_status: str | None = None,
+        overall_status: str | None = None,
     ) -> str:
         timestamp = utc_now_iso()
         audit_id = f"{timestamp}-{os.getpid()}"
@@ -47,6 +53,7 @@ class AuditLog:
             "timestamp": timestamp,
             "utterance": request.utterance,
             "mode": request.mode,
+            "transport": request.transport,
             "dry_run": request.dry_run,
             "approved": request.approve,
             "review_id": review_id or request.review_id,
@@ -58,6 +65,12 @@ class AuditLog:
             },
             "review": asdict(review) if review else None,
             "status": status,
+            "execution_status": execution_status,
+            "acceptance_status": acceptance_status,
+            "overall_status": overall_status,
+            "plan_id": plan_id,
+            "step_id": step_id,
+            "layer": layer,
             "selected_target": selected_target,
             "result": result,
             "message": message,
