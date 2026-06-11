@@ -147,6 +147,16 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
         reversible=True,
         constraints=("Only user-provided query text may be used without additional review.",),
     ),
+    "browser.open_named_target": CapabilitySpec(
+        action="browser.open_named_target",
+        risk_level="L1",
+        review_required=False,
+        allowed=True,
+        reason="Opening a named website target remains a bounded browser action while local resolution stays host-owned.",
+        effects=("May resolve a named site target and open it in a browser.",),
+        reversible=True,
+        constraints=("Only host-owned local resolution may transform a named target into a URL.",),
+    ),
     "browser.open_site_search": CapabilitySpec(
         action="browser.open_site_search",
         risk_level="L1",
@@ -186,6 +196,16 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
         effects=("May pause media playback in a dedicated player.",),
         reversible=True,
         constraints=("Execution availability depends on a dedicated media adapter.",),
+    ),
+    "app.search_history": CapabilitySpec(
+        action="app.search_history",
+        risk_level="L1",
+        review_required=False,
+        allowed=True,
+        reason="Searching inside an application remains a bounded user-session action when executed through typed fixtures or controlled UI surfaces.",
+        effects=("May search in-app content such as chat history.",),
+        reversible=True,
+        constraints=("Execution must remain within host-owned structured or computer-use fixture surfaces.",),
     ),
 }
 

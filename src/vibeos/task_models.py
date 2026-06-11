@@ -262,6 +262,10 @@ def canonicalize_target_for_action(action: str, target: dict[str, Any]) -> dict[
         uri = _first_text(target, "uri", "url", "name")
         return {"uri": uri} if uri else {}
 
+    if action == "browser.open_named_target":
+        name = _first_text(target, "name", "target_name")
+        return {"name": name} if name else {}
+
     if action == "browser.search_web":
         query = _first_text(target, "query", "text")
         return {"query": query} if query else {}
@@ -285,6 +289,16 @@ def canonicalize_target_for_action(action: str, target: dict[str, Any]) -> dict[
         if isinstance(selection, str) and selection.strip():
             canonical["selection"] = selection.strip()
         return canonical or dict(target)
+
+    if action == "app.search_history":
+        app = _first_text(target, "app", "name")
+        query = _first_text(target, "query", "text")
+        canonical: dict[str, Any] = {}
+        if app:
+            canonical["app"] = app
+        if query:
+            canonical["query"] = query
+        return canonical
 
     if action == "app.open":
         name = _first_text(target, "name", "app")

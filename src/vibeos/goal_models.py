@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from .assistant_semantics import AssistantIntent
+
 
 GoalSynthesisStatus = Literal["ready", "clarification_needed", "missing_capability", "unsupported"]
 
@@ -39,6 +41,7 @@ class GoalSpec:
     constraints: tuple[str, ...] = ()
     fallback_hints: tuple[str, ...] = ()
     assumptions: tuple[str, ...] = ()
+    assistant_intent: AssistantIntent | None = None
     synthesis_provenance: GoalSynthesisProvenance = field(
         default_factory=lambda: GoalSynthesisProvenance(provider_name="unknown", provider_version="unknown")
     )

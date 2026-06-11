@@ -18,6 +18,7 @@ EXPECTED_STATE_REGISTRY: dict[str, ExpectedStateSpec] = {
     "system_status_requested": ExpectedStateSpec("system_status_requested", ()),
     "clipboard_content_requested": ExpectedStateSpec("clipboard_content_requested", ("text",)),
     "uri_open_requested": ExpectedStateSpec("uri_open_requested", ("uri",)),
+    "named_site_open_requested": ExpectedStateSpec("named_site_open_requested", ("name",)),
     "notification_requested": ExpectedStateSpec("notification_requested", ("title",)),
     "search_results_available": ExpectedStateSpec("search_results_available", ("query",)),
     "media_playing": ExpectedStateSpec("media_playing", ("query",)),

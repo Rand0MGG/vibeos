@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable
+from urllib.parse import parse_qs, urlparse
 
 from .domain_models import VerifierResult
 from .task_models import PlanExecutionResult, TaskPlan
@@ -74,7 +75,6 @@ def browser_url_opened_verifier(plan: TaskPlan, execution: PlanExecutionResult, 
     opened_url = str(
         observation.get("opened_url")
         or browser_context.get("active_url")
-        or browser_context.get("requested_url")
         or ""
     )
     expected_url = ""
@@ -118,7 +118,12 @@ def browser_url_opened_verifier(plan: TaskPlan, execution: PlanExecutionResult, 
 def browser_search_route_completed_verifier(plan: TaskPlan, execution: PlanExecutionResult, harness: VerifierHarness) -> VerifierResult:
     observation = harness.observation_for("browser_search_route_completed")
     browser_context = harness.context_package_for("browser_context")
-    observed_query = str(observation.get("query") or browser_context.get("query") or "")
+    observed_query = str(
+        observation.get("query")
+        or browser_context.get("query")
+        or _query_from_url(str(browser_context.get("active_url") or ""))
+        or ""
+    )
     expected_query = ""
     for step in plan.steps:
         if step.action in {"browser.search_web", "browser.open_site_search"}:
@@ -155,6 +160,18 @@ def browser_search_route_completed_verifier(plan: TaskPlan, execution: PlanExecu
         observation_package_ids=("browser_context",),
         details={"query": observed_query},
     )
+
+
+def _query_from_url(url: str) -> str:
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    query_map = parse_qs(parsed.query)
+    for key in ("q", "query", "wd", "p", "text", "search_query"):
+        values = query_map.get(key)
+        if values:
+            return str(values[0])
+    return ""
 
 
 def media_playback_state_available_verifier(plan: TaskPlan, execution: PlanExecutionResult, harness: VerifierHarness) -> VerifierResult:

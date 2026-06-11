@@ -144,7 +144,7 @@ def test_audit_records_review_and_approval() -> None:
 
 
 def test_audit_records_request_transport() -> None:
-    audit = AuditLog()
+    audit = AuditLog(make_review_path("audit-transport"))
     broker = CapabilityBroker(
         intent_broker=RuleIntentBroker(),
         apps=FakeApps(),

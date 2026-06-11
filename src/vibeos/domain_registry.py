@@ -72,8 +72,8 @@ def default_browser_context() -> dict[str, Any]:
         record_browser_window_observation(page_title=browser_window.title, app_id=browser_window.app_id)
         snapshot["page_title"] = browser_window.title
         snapshot["app_id"] = browser_window.app_id
-    active_url = snapshot.get("active_url") or snapshot.get("requested_url")
-    known_sites = _known_sites(active_url, snapshot.get("site"))
+    active_url = snapshot.get("active_url")
+    known_sites = _known_sites(active_url, None)
     error_state = snapshot.get("error_state") or _infer_browser_error_state(str(snapshot.get("page_title") or ""))
     status = str(snapshot.get("status") or "unavailable")
     return {
@@ -83,6 +83,7 @@ def default_browser_context() -> dict[str, Any]:
         "status": status,
         "active_url": active_url,
         "requested_url": snapshot.get("requested_url"),
+        "requested_query": snapshot.get("requested_query"),
         "page_title": snapshot.get("page_title"),
         "app_id": snapshot.get("app_id"),
         "known_sites": known_sites,
@@ -248,7 +249,7 @@ def default_context_registry() -> ContextPackageRegistry:
         ContextPackageDefinition(
             package_id="browser_context",
             producer=default_browser_context,
-            budget=ContextBudget(max_items=8, max_bytes=3072, ttl_ms=10_000, redaction_policy="urls_redacted", sensitive_fields=("active_url",)),
+            budget=ContextBudget(max_items=8, max_bytes=3072, ttl_ms=10_000, redaction_policy="urls_redacted", sensitive_fields=("active_url", "requested_url")),
             schema_name="browser_context_v1",
             redaction_policy="urls_redacted",
         ),

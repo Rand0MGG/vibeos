@@ -1,6 +1,6 @@
 from dataclasses import asdict
 
-from vibeos.browser_state import browser_attempt_scope, record_browser_navigation
+from vibeos.browser_state import browser_attempt_scope, record_browser_navigation, record_browser_observation
 from vibeos.domain_models import ContextBudget, DomainPack, ObservationRequest
 from vibeos.domain_registry import ContextPackageDefinition, ContextPackageRegistry, DomainRegistry, RouteDefinition, default_domain_registry
 from vibeos.observation import resolve_observation_request, validate_observation_request
@@ -145,6 +145,7 @@ def test_default_browser_context_uses_recent_navigation_and_window_observation(m
     from vibeos.models import WindowEntry
 
     record_browser_navigation(uri="https://example.com/search?q=hello", adapter="xdg-open", status="opened")
+    record_browser_observation(active_url="https://example.com/search?q=hello", adapter="xdg-open")
 
     class StubWindows:
         def list_windows(self):
@@ -172,6 +173,7 @@ def test_default_browser_context_does_not_inherit_previous_attempt_navigation(mo
 
     with browser_attempt_scope(run_id="run_one", attempt_id="attempt_one", route_id="browser_open_url_route"):
         record_browser_navigation(uri="https://example.com", adapter="xdg-open", status="opened")
+        record_browser_observation(active_url="https://example.com", adapter="xdg-open")
         first = domain_registry.default_browser_context()
 
     with browser_attempt_scope(run_id="run_two", attempt_id="attempt_two", route_id="browser_open_url_route"):

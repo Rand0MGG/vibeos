@@ -945,6 +945,8 @@ def make_plan_id(utterance: str, route_id: str) -> str:
 def display_goal_for_intent(intent: Intent) -> str:
     if intent.action == "clipboard.write":
         return "write text to the clipboard"
+    if intent.action == "browser.open_named_target":
+        return "open a named website target"
     if intent.action in {"portal.open_uri", "browser.open_url"}:
         return "open a URL"
     if intent.action in {"browser.search_web", "browser.open_site_search"}:
@@ -953,6 +955,8 @@ def display_goal_for_intent(intent: Intent) -> str:
         return "show a notification"
     if intent.action == "app.open":
         return "open an application"
+    if intent.action == "app.search_history":
+        return "search within an application"
     if intent.action == "window.list":
         return "list current windows"
     if intent.action == "window.focus":
@@ -990,8 +994,12 @@ def expected_state_for_intent(intent: Intent) -> ExpectedState:
         return ExpectedState(kind="window_state_requested", fields={"window": str(target.get("name") or "current"), "requested_state": requested_state})
     if intent.action == "clipboard.write":
         return ExpectedState(kind="clipboard_content_requested", fields={"text": str(target.get("text") or "")})
+    if intent.action == "browser.open_named_target":
+        return ExpectedState(kind="named_site_open_requested", fields={"name": str(target.get("name") or "")})
     if intent.action in {"portal.open_uri", "browser.open_url"}:
         return ExpectedState(kind="uri_open_requested", fields={"uri": str(target.get("uri") or "")})
+    if intent.action == "app.search_history":
+        return ExpectedState(kind="search_results_available", fields={"query": str(intent.target.get("query") or "")})
     if intent.action in {"browser.search_web", "browser.open_site_search", "media.search"}:
         return ExpectedState(kind="search_results_available", fields={"query": str(intent.target.get("query") or "")})
     if intent.action == "notification.send":

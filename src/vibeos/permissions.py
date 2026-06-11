@@ -122,6 +122,12 @@ def validate_target(intent: Intent) -> str | None:
             return "browser.search_web requires a non-empty query."
         return _validate_short_text(query, "search query", MAX_CLIPBOARD_LENGTH)
 
+    if action == "browser.open_named_target":
+        name = _target_text(target, "name", "target_name")
+        if not name:
+            return "browser.open_named_target requires a named target."
+        return _validate_short_text(name, "named browser target", MAX_NAME_LENGTH)
+
     if action == "browser.open_site_search":
         site = _target_text(target, "site")
         query = _target_text(target, "query")
@@ -141,6 +147,18 @@ def validate_target(intent: Intent) -> str | None:
         if query:
             return _validate_short_text(query, "media query", MAX_CLIPBOARD_LENGTH)
         return None
+
+    if action == "app.search_history":
+        app = _target_text(target, "app", "name")
+        query = _target_text(target, "query")
+        if not app:
+            return "app.search_history requires an app name."
+        app_error = _validate_short_text(app, "application name", MAX_NAME_LENGTH)
+        if app_error:
+            return app_error
+        if not query:
+            return "app.search_history requires a non-empty query."
+        return _validate_short_text(query, "in-app search query", MAX_CLIPBOARD_LENGTH)
 
     if action == "clipboard.write":
         text = _target_text(target, "text", "content")

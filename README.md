@@ -200,3 +200,6 @@ VMware is recommended for early testing. Use NAT networking and snapshots before
 
 See [docs/current_status.md](docs/current_status.md) for implemented scope, verification commands, and remaining Linux VM acceptance criteria.
 See [docs/vm_acceptance_evidence.md](docs/vm_acceptance_evidence.md) for the VM evidence workflow.
+See [docs/linux_vm_install_upgrade_test_runbook.md](docs/linux_vm_install_upgrade_test_runbook.md) for environment setup, uninstall/reinstall steps, and the complete VM test flow.
+See [docs/zh_cn/README.md](docs/zh_cn/README.md) for the Chinese module-oriented documentation set.
+See [docs/zh_cn/07_wsl_test_standard.md](docs/zh_cn/07_wsl_test_standard.md) for the WSL-specific test scope and workflow.

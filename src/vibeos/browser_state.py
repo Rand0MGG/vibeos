@@ -22,6 +22,7 @@ def _blank_browser_event(*, run_id: str | None = None, attempt_id: str | None = 
         "status": "unavailable",
         "active_url": None,
         "requested_url": None,
+        "requested_query": None,
         "query": None,
         "site": None,
         "page_title": None,
@@ -73,18 +74,48 @@ def record_browser_navigation(
     error_state: str | None = None,
 ) -> None:
     event = _event_for_attempt(_current_attempt_key())
+    next_status = "requested" if status == "opened" else status
+    if str(event.get("status") or "") == "loaded" and next_status == "requested":
+        next_status = "loaded"
     event.update(
         {
             "run_id": event.get("run_id") or _CURRENT_RUN_ID.get(),
             "attempt_id": event.get("attempt_id") or _CURRENT_ATTEMPT_ID.get(),
             "route_id": event.get("route_id") or _CURRENT_ROUTE_ID.get(),
-            "status": "loaded" if status == "opened" else status,
-            "active_url": uri,
+            "status": next_status,
             "requested_url": uri,
-            "query": query,
+            "requested_query": query,
             "site": site,
             "adapter": adapter,
             "error_state": error_state,
+            "captured_at": utc_now_iso(),
+        }
+    )
+
+
+def record_browser_observation(
+    *,
+    active_url: str | None = None,
+    query: str | None = None,
+    page_title: str | None = None,
+    app_id: str | None = None,
+    adapter: str | None = None,
+    error_state: str | None = None,
+    status: str = "loaded",
+) -> None:
+    event = _event_for_attempt(_current_attempt_key())
+    event.update(
+        {
+            "run_id": event.get("run_id") or _CURRENT_RUN_ID.get(),
+            "attempt_id": event.get("attempt_id") or _CURRENT_ATTEMPT_ID.get(),
+            "route_id": event.get("route_id") or _CURRENT_ROUTE_ID.get(),
+            "status": status,
+            "active_url": active_url if active_url is not None else event.get("active_url"),
+            "query": query if query is not None else event.get("query"),
+            "page_title": page_title if page_title is not None else event.get("page_title"),
+            "app_id": app_id if app_id is not None else event.get("app_id"),
+            "adapter": adapter if adapter is not None else event.get("adapter"),
+            "error_state": error_state if error_state is not None else event.get("error_state"),
             "captured_at": utc_now_iso(),
         }
     )

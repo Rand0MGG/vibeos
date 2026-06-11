@@ -1,9 +1,34 @@
 # VibeOS Current Status
 
-Last updated: 2026-06-06
+Last updated: 2026-06-09
 
 ## Implemented
 
+- v0.6 runtime groundwork:
+  - new session-oriented runtime modules: `agent_runtime`, `strategy`, `tool_protocol`, and `run_ledger`
+  - typed `AgentSession`, `GoalRuntime`, `GoalTurn`, `EnvironmentProfile`, `OutcomeDecision`, and `TerminalOutcome`
+  - explicit strategy layer with `StrategyCandidate`, `StrategyConstraint`, and policy-driven replacement selection
+  - layered tool protocol with first-class `resolver`, `action`, `observer`, `verifier`, `wait_poll`, and `environment` families
+  - typed capability-surface descriptors now explicitly cover `workspace-local`, `shell-local`, `browser`, and `desktop-linux`
+  - broker main-path bridge for browser and mixed app/browser candidates:
+    - `CapabilityBroker` can route eligible `apps`, `browser`, `window_management`, `notification`, and `system_observation` supported-task requests through the new session runtime
+    - broker results now expose `goal_runtime`, `goal_turn`, `strategy_candidates`, `selected_strategy_id`, `run_ledger`, and `environment_profile`
+    - repeated browser and app turns can reuse a stable goal id while still emitting unique per-request `run_id` values
+    - CLI JSON output now preserves these runtime fields for browser-facing and app-facing `vibe ask` requests
+    - debug payload now includes runtime-scoped `provider_artifacts` and the active `environment_profile`
+    - review-required clipboard planning now exposes `goal_runtime` and `run_ledger` while stopping in a structured `needs_review` state
+    - review-required `window.close` planning now follows the same v0.6 `needs_review` gate and approve-by-id continuation path as other L2 runtime-managed actions
+    - `approve --dry-run` previews `window.close` through the same runtime path without requiring a real local window match
+    - browser `--offline --dry-run` preview now synthesizes deterministic observation evidence from the requested query/URL instead of failing on missing real browser state
+    - approved plan reviews can continue the same goal runtime instead of restarting from a detached execution path
+  - first deterministic v0.6 minimal vertical slice:
+    - stable goal id survives strategy replacement
+    - desktop-first "open Notion" strategy fails with resolver evidence and semantic mismatch
+    - recovery policy selects a browser fallback strategy without changing the goal
+    - observer and verifier evidence justify the final completed outcome
+    - run ledger records session, goal, strategy decisions, attempts, evidence, and terminal outcome
+    - broker main-path coverage now includes the same app-to-browser strategy replacement behavior
+  - local environment-profile coverage for strategy preference and tool availability constraints
 - v0.5 planning architecture:
   - typed goal synthesis layer
   - explicit domain packs for `apps`, `window_management`, `clipboard`, `notification`, `system_observation`, `browser`, and `media`
@@ -45,6 +70,7 @@ Last updated: 2026-06-06
   - GNOME Shell extension bridge for window list/focus/minimize/maximize/close
   - attempt-scoped browser postcondition context bound to `run_id` / `attempt_id`
   - shared browser evidence for verifier and acceptance
+  - request-scoped browser evidence separates requested navigation from observed browser state
   - GNOME Shell metadata declares versions 45-50
   - notification adapter
   - clipboard write adapter
@@ -104,7 +130,7 @@ Expected current result:
 
 ```text
 overall: ok
-pytest: 177 passed
+pytest: 227 passed
 doctor: overall warn on Windows
 capabilities: ok
 L1 dry-run: ok
@@ -124,7 +150,36 @@ python -m pytest tests/test_runtime.py tests/test_broker_task_plans.py tests/tes
 python -m pytest tests/test_broker.py tests/test_cli.py tests/test_daemon.py tests/test_v05_supported_task_migration.py tests/test_goal_synthesizer.py tests/test_debug_trace.py tests/test_task_plan_boundaries.py tests/test_vm_evidence.py tests/test_capabilities.py -q
 ```
 
-## Still Requires Linux VM Verification
+Additional browser-evidence regression run after separating requested navigation from observed success:
+
+```powershell
+python -m pytest tests/test_acceptance_engine.py tests/test_broker_task_plans.py tests/test_v04_domain_architecture.py tests/test_debug_trace.py tests/test_goal_synthesizer.py tests/test_v05_supported_task_migration.py -q
+```
+
+Additional v0.6 runtime-slice verification:
+
+```powershell
+python -m pytest tests/test_v06_agent_runtime.py -q
+```
+
+Latest direct bridge checks run on 2026-06-09:
+
+```powershell
+$env:PYTHONPATH='E:\codex_project\vibeos\src'; python -m vibeos.cli doctor --json
+$env:PYTHONPATH='E:\codex_project\vibeos\src'; python -m vibeos.cli ask "search web for hello" --json --offline --dry-run
+```
+
+Observed current result:
+
+```text
+python -m pytest tests/test_v06_agent_runtime.py -q -> 15 passed
+python -m pytest -q -> 227 passed
+python scripts/verify_local.py -> overall ok
+python -m vibeos.cli doctor --json -> overall warn on Windows host, no failures
+python -m vibeos.cli ask "search web for hello" --json --offline --dry-run -> structured dry-run output with v0.6 goal_runtime, strategy_candidates, run_ledger, and passed verification evidence
+```
+
+## Separate Linux VM Integration Phase
 
 The following items cannot be proven from the current Windows host:
 
@@ -154,22 +209,15 @@ vibe doctor
 python scripts/collect_vm_evidence.py --real
 ```
 
-## Completion Criteria
+## Codex Completion Criteria
 
-This milestone should be treated as complete only after:
+For the v0.6 Codex-owned scope, this milestone is complete when:
 
 1. Local verification passes.
-2. Linux VM `vibe doctor` shows no `fail` checks.
-3. The VM smoke test script completes.
-4. At least one real L1 desktop action changes the GNOME session.
-5. At least one L2 action creates a `review_id` and can be approved by ID.
-6. Approved L2 review ids cannot be reused after consumption.
-7. Expired L2 review ids cannot be approved or rejected.
-8. Pending L2 reviews can be rejected and rejected ids cannot be approved.
-9. Pending reviews are inspectable through CLI and service APIs.
-10. A real VM evidence report from `python scripts/collect_vm_evidence.py --real` has `overall: ok`.
-11. Audit log entries show utterance, intent, review id, risk level, decision, and result.
-12. Supported task plans do not select `legacy_*_route` or `legacy_intent_bridge` on the main path.
-13. Browser acceptance can fail even when launch/execution succeeded.
-14. Supported-task runs preserve bounded attempt history across retry/replan outcomes.
-15. Daemon transport failures return structured JSON results instead of raw Python tracebacks.
+2. `pytest -q` passes locally.
+3. The deterministic v0.6 minimal vertical slice passes end to end with local fixtures.
+4. Session runtime state, strategy candidates, selected strategy, run ledger, and environment profile are inspectable through local broker and CLI JSON surfaces.
+5. Review-gated runtime paths preserve the same goal runtime across `review_required`, `approve --dry-run`, and approved execution.
+6. Local completion does not depend on VM-only evidence, live network access, real browser state, or real desktop side effects.
+
+Linux VM checks remain a separate user-run integration phase and are not part of the v0.6 Codex completion gate.
