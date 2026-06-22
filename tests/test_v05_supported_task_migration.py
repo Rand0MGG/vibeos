@@ -19,6 +19,7 @@ from vibeos.planner import plan_payload
         ("open https://example.com", "browser", "browser_open_url_route"),
         ("search web for hello", "browser", "browser_search_web_route"),
         ("search github.com for issue", "browser", "browser_site_search_route"),
+        ("search chat history in WeChat for Alice", "app_interaction", "app_structured_search_route"),
         ("play baby", "browser", "browser_music_search_route"),
     ],
 )
@@ -47,7 +48,8 @@ def test_supported_task_matrix_uses_explicit_domains_without_legacy_routes(
 def test_media_surface_returns_explicit_non_legacy_unavailable_outcome_when_capability_is_not_local(utterance: str) -> None:
     payload = plan_payload(utterance)
 
-    assert payload["status"] == "rejected"
+    assert payload["status"] == "blocked"
     assert payload["plan"] is None
     assert payload["candidates"]
+    assert payload["overall_status"] == "blocked"
     assert all(not item["route_id"].startswith("legacy_") for item in payload["candidates"])

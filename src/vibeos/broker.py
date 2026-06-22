@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import nullcontext
 from dataclasses import replace
 from dataclasses import asdict
 from hashlib import sha256
@@ -13,7 +14,9 @@ from .apps import AppRegistry
 from .assistant_semantics import AssistantIntent, InteractionSurface, assistant_intent_to_payload
 from .audit import AuditLog
 from .browser_state import browser_attempt_scope, browser_context_snapshot, record_browser_navigation
+from .candidate_selection import CandidateSelectionProvider
 from .capabilities import capability_payload, executable_actions, permission_summary
+from .clarification import ClarificationProvider
 from .clipboard import ClipboardAdapter
 from .domain_models import ObservationRequest
 from .domain_registry import default_domain_registry
@@ -29,7 +32,7 @@ from .permissions import PermissionPolicy
 from .portal import PortalAdapter
 from .replanner import EvidenceDrivenReplanner, Replanner
 from .reviews import ReviewStore, review_to_payload
-from .strategy import StrategyCandidate, StrategyConstraint, StrategyStep
+from .strategy import RecoveryPolicy, StrategyCandidate, StrategyConstraint, StrategySelectionProvider, StrategyStep
 from .task_models import (
     AgentRun,
     DisplayFields,
@@ -49,8 +52,17 @@ from .task_models import (
     canonicalize_target_for_action,
     task_plan_from_payload,
 )
+from .task_trace import TaskTraceStore, bind_trace_session, current_trace_session, record_model_io, record_trace_event
 from .task_validation import validate_plan
 from .tool_protocol import ToolRegistry, ToolResult, ToolSpec
+from .understanding import (
+    OpenAICompatibleUnderstandingTransitionProvider,
+    UnderstandingAnalysisDecision,
+    UnderstandingAnalysisProvider,
+    UnderstandingTransitionProvider,
+    reconcile_understanding_transition,
+    root_understanding_id,
+)
 from .verifiers import VerifierHarness, VerifierRegistry, default_verifier_registry
 from .windows import WindowRegistry
 
@@ -67,6 +79,14 @@ class CapabilityBroker:
         policy: PermissionPolicy | None = None,
         audit: AuditLog | None = None,
         reviews: ReviewStore | None = None,
+        trace_store: TaskTraceStore | None = None,
+        clarification_provider: ClarificationProvider | None = None,
+        understanding_analysis_provider: UnderstandingAnalysisProvider | None = None,
+        goal_synthesis_provider: GoalSynthesisProvider | None = None,
+        route_selection_provider: CandidateSelectionProvider | None = None,
+        strategy_selection_provider: StrategySelectionProvider | None = None,
+        understanding_transition_provider: UnderstandingTransitionProvider | None = None,
+        semantic_acceptance_provider: SemanticAcceptanceProvider | None = None,
         verifier_registry: VerifierRegistry | None = None,
         verifier_harness: VerifierHarness | None = None,
         failure_classifier: FailureClassifier | None = None,
@@ -84,15 +104,25 @@ class CapabilityBroker:
         self.policy = policy or PermissionPolicy()
         self.audit = audit or AuditLog()
         self.reviews = reviews or ReviewStore()
+        self.trace_store = trace_store or TaskTraceStore()
+        self.clarification_provider = clarification_provider
+        self.understanding_analysis_provider = understanding_analysis_provider
+        self.goal_synthesis_provider = goal_synthesis_provider
+        self.route_selection_provider = route_selection_provider
+        self.strategy_selection_provider = strategy_selection_provider
+        self.understanding_transition_provider = understanding_transition_provider or (
+            OpenAICompatibleUnderstandingTransitionProvider()
+        )
         self.verifier_registry = verifier_registry or default_verifier_registry()
         self.verifier_harness = verifier_harness or VerifierHarness()
-        self.acceptance_engine = AcceptanceEngine()
+        self.acceptance_engine = AcceptanceEngine(provider=semantic_acceptance_provider)
         self.failure_classifier = failure_classifier or FailureClassifier()
         self.replanner = replanner or EvidenceDrivenReplanner()
         self.browser_site_catalog = browser_site_catalog or {}
         self.browser_search_catalog = browser_search_catalog or {}
         self.app_fixture_catalog = app_fixture_catalog or {}
-        self.agent_runtime = AgentRuntime(self._build_v06_tool_registry())
+        recovery_policy = RecoveryPolicy(provider=strategy_selection_provider) if strategy_selection_provider is not None else None
+        self.agent_runtime = AgentRuntime(self._build_v06_tool_registry(), recovery_policy=recovery_policy)
         self.agent_session = self.agent_runtime.create_session("broker_session")
 
     def capabilities(self) -> dict[str, object]:
@@ -109,12 +139,21 @@ class CapabilityBroker:
         self._ensure_task_plan(plan)
         validation = validate_plan(plan)
         if not validation.ok:
-            return TaskPlanReviewResult(
+            result = TaskPlanReviewResult(
                 plan_id=plan.plan_id,
                 status="rejected",
                 max_risk_level="L3",
                 message="task plan failed validation before permission review",
             )
+            record_trace_event(
+                phase="review",
+                event_type="review_decided",
+                status=result.status,
+                actor="broker",
+                plan_id=plan.plan_id,
+                data=asdict(result),
+            )
+            return result
 
         step_reviews: list[StepReviewRecord] = []
         review_required = False
@@ -123,16 +162,25 @@ class CapabilityBroker:
         rejection_reason = ""
 
         for step in plan.steps:
-            review = self.policy.review(self._intent_from_task_step(step))
-            step_reviews.append(
-                StepReviewRecord(
-                    step_id=step.id,
-                    action=step.action,
-                    risk_level=review.risk_level,
-                    review_required=review.review_required,
-                    allowed=review.allowed,
-                    reason=review.reason,
-                )
+            review, step_review = self._step_safety_review_record(plan.plan_id, step, phase="review")
+            step_reviews.append(step_review)
+            record_trace_event(
+                phase="review",
+                event_type="step_safety_review_recorded",
+                status="allowed" if review.allowed else "rejected",
+                actor="broker",
+                plan_id=plan.plan_id,
+                step_id=step.id,
+                data={
+                    "artifact_type": "step_safety_review",
+                    "artifact_id": step_review.step_safety_review_id,
+                    "step_id": step.id,
+                    "action": step.action,
+                    "risk_level": review.risk_level,
+                    "review_required": review.review_required,
+                    "allowed": review.allowed,
+                    "reason": review.reason,
+                },
             )
             max_risk = max_risk_level(max_risk, review.risk_level)
             review_required = review_required or review.review_required
@@ -141,13 +189,22 @@ class CapabilityBroker:
                 rejection_reason = review.reason
 
         if not allowed:
-            return TaskPlanReviewResult(
+            result = TaskPlanReviewResult(
                 plan_id=plan.plan_id,
                 status="rejected",
                 max_risk_level=max_risk,
                 step_reviews=tuple(step_reviews),
                 message=rejection_reason or "task plan contains a rejected step",
             )
+            record_trace_event(
+                phase="review",
+                event_type="review_decided",
+                status=result.status,
+                actor="broker",
+                plan_id=plan.plan_id,
+                data=asdict(result),
+            )
+            return result
 
         if review_required:
             review_request = self.reviews.create_plan_review(
@@ -155,7 +212,7 @@ class CapabilityBroker:
                 stored_payload if stored_payload is not None else asdict(plan),
                 TaskPlanReviewResult(plan_id=plan.plan_id, status="review_required", max_risk_level=max_risk, step_reviews=tuple(step_reviews)),
             )
-            return TaskPlanReviewResult(
+            result = TaskPlanReviewResult(
                 plan_id=plan.plan_id,
                 status="review_required",
                 max_risk_level=max_risk,
@@ -163,14 +220,33 @@ class CapabilityBroker:
                 step_reviews=tuple(step_reviews),
                 message=f"explicit approval is required; run `vibe approve {review_request.review_id}` after reviewing the request",
             )
+            record_trace_event(
+                phase="review",
+                event_type="review_decided",
+                status=result.status,
+                actor="broker",
+                plan_id=plan.plan_id,
+                review_id=result.review_id,
+                data=asdict(result),
+            )
+            return result
 
-        return TaskPlanReviewResult(
+        result = TaskPlanReviewResult(
             plan_id=plan.plan_id,
             status="allowed",
             max_risk_level=max_risk,
             step_reviews=tuple(step_reviews),
             message="task plan is allowed without additional review",
         )
+        record_trace_event(
+            phase="review",
+            event_type="review_decided",
+            status=result.status,
+            actor="broker",
+            plan_id=plan.plan_id,
+            data=asdict(result),
+        )
+        return result
 
     def execute_task_plan(
         self,
@@ -180,6 +256,9 @@ class CapabilityBroker:
         review_id: str | None = None,
         run_id: str | None = None,
         attempt_id: str | None = None,
+        understanding_id: str | None = None,
+        candidate_set_id: str | None = None,
+        route_decision_id: str | None = None,
     ) -> PlanExecutionResult:
         self._ensure_task_plan(plan)
         validation = validate_plan(plan)
@@ -188,7 +267,7 @@ class CapabilityBroker:
 
         def execute_step(step) -> StepExecutionResult:
             intent = self._intent_from_task_step(step)
-            review = self.policy.review(intent)
+            review, step_review = self._step_safety_review_record(plan.plan_id, step, phase="execute")
             request = CommandRequest(
                 utterance=plan.utterance,
                 dry_run=dry_run,
@@ -214,12 +293,28 @@ class CapabilityBroker:
                 review_id=review_id,
                 plan_id=plan.plan_id,
                 step_id=step.id,
+                step_safety_review_id=step_review.step_safety_review_id,
                 layer=layer,
+            )
+            record_trace_event(
+                phase="execution",
+                event_type="step_safety_review_consumed",
+                status="allowed" if review.allowed else "rejected",
+                actor="broker",
+                plan_id=plan.plan_id,
+                step_id=step.id,
+                data={
+                    "artifact_type": "step_safety_review",
+                    "artifact_id": step_review.step_safety_review_id,
+                    "review_required": review.review_required,
+                    "allowed": review.allowed,
+                },
             )
             return StepExecutionResult(
                 step_id=step.id,
                 layer=layer,
                 status=step_status,
+                step_safety_review_id=step_review.step_safety_review_id,
                 adapter=adapter_name_for_step(step, command),
                 capability_id=step.capability_id,
                 attempt=1,
@@ -259,6 +354,9 @@ class CapabilityBroker:
             observation_request=post_request,
             observation_receipt=post_receipt,
             dry_run=dry_run,
+            understanding_id=understanding_id,
+            candidate_set_id=candidate_set_id,
+            route_decision_id=route_decision_id,
         )
         execution_status = "dry_run" if dry_run else ("succeeded" if execution.status == "succeeded" else "failed")
         overall_status = overall_status_for_outcome(
@@ -280,120 +378,130 @@ class CapabilityBroker:
         )
 
     def handle(self, request: CommandRequest) -> CommandResult:
-        if request.review_id:
-            return self.approve_review(request.review_id, dry_run=request.dry_run, transport=request.transport)
-        if request.approve:
-            fallback = Intent.unknown("approval requires a stored review id")
-            result = self._with_transport(
-                CommandResult(
-                    status="rejected",
-                    intent=fallback,
-                    message="L2 approval must use a stored review id; run without approval first, then `vibe approve <review_id>`",
-                ),
-                request.transport,
+        trace_session = current_trace_session()
+        created_trace = False
+        if trace_session is None:
+            run_seed = request.utterance or request.review_id or "command"
+            trace_session = self.trace_store.start_run(
+                run_id=self._make_run_id(run_seed),
+                command_name="approve" if request.review_id else "ask",
+                utterance=request.utterance,
+                mode=request.mode,
+                transport=request.transport,
+                dry_run=request.dry_run,
+                debug=request.debug,
+                review_id=request.review_id,
             )
-            audit_id = self.audit.record(
-                request=request,
-                intent=result.intent,
-                status=result.status,
-                result=result.result,
-                selected_target=result.selected_target,
-                message=result.message,
-                review=result.review,
-                review_id=result.review_id,
-                execution_status=result.execution_status,
-                acceptance_status=result.acceptance_status,
-                overall_status=result.overall_status,
+            created_trace = True
+        scope = bind_trace_session(trace_session) if created_trace else nullcontext(trace_session)
+        with scope:
+            record_trace_event(
+                phase="ingress",
+                event_type="request_received",
+                status="ok",
+                actor="broker",
+                review_id=request.review_id,
+                data={
+                    "utterance": request.utterance,
+                    "mode": request.mode,
+                    "dry_run": request.dry_run,
+                    "approve": request.approve,
+                    "transport": request.transport,
+                    "debug": request.debug,
+                },
             )
-            return CommandResult(
-                status=result.status,
-                intent=result.intent,
-                result=result.result,
-                selected_target=result.selected_target,
-                audit_id=audit_id,
-                review_id=result.review_id,
-                transport=result.transport,
-                message=result.message,
-                review=result.review,
-                execution_status=result.execution_status,
-                acceptance_status=result.acceptance_status,
-                overall_status=result.overall_status,
-            )
-
-        planned = self._handle_task_plan_request(request)
-        if planned is not None:
-            result = self._with_transport(planned, request.transport)
-            audit_id = self.audit.record(
-                request=request,
-                intent=result.intent,
-                status=result.status,
-                result=result.result,
-                selected_target=result.selected_target,
-                message=result.message,
-                review=result.review,
-                review_id=result.review_id,
-                execution_status=result.execution_status,
-                acceptance_status=result.acceptance_status,
-                overall_status=result.overall_status,
-            )
-            return CommandResult(
-                status=result.status,
-                intent=result.intent,
-                result=result.result,
-                selected_target=result.selected_target,
-                audit_id=audit_id,
-                review_id=result.review_id,
-                transport=result.transport,
-                message=result.message,
-                review=result.review,
-                execution_status=result.execution_status,
-                acceptance_status=result.acceptance_status,
-                overall_status=result.overall_status,
-            )
-
-        intent = self.intent_broker.parse(request.utterance)
-        review = self.policy.review(intent)
-        if not review.allowed:
-            result = CommandResult(status="rejected", intent=intent, message=review.reason, review=review)
-        elif review.review_required and not request.dry_run:
-            if request.approve:
-                result = CommandResult(
-                    status="rejected",
-                    intent=intent,
-                    message="L2 approval must use a stored review id; run without approval first, then `vibe approve <review_id>`",
-                    review=review,
+            if request.review_id:
+                result = self.approve_review(request.review_id, dry_run=request.dry_run, transport=request.transport)
+            elif request.approve:
+                fallback = Intent.unknown("approval requires a stored review id")
+                result = self._with_transport(
+                    CommandResult(
+                        status="rejected",
+                        intent=fallback,
+                        message="L2 approval must use a stored review id; run without approval first, then `vibe approve <review_id>`",
+                    ),
+                    request.transport,
                 )
             else:
-                review_request = self.reviews.create(request.utterance, intent, review)
-                result = CommandResult(
-                    status="review_required",
-                    intent=intent,
-                    result={"review_id": review_request.review_id, "review": asdict(review)},
-                    review_id=review_request.review_id,
-                    message=f"explicit approval is required; run `vibe approve {review_request.review_id}` after reviewing the request",
-                    review=review,
+                planned = self._handle_task_plan_request(request)
+                if planned is not None:
+                    result = self._with_transport(planned, request.transport)
+                else:
+                    intent = self.intent_broker.parse(request.utterance)
+                    review = self.policy.review(intent)
+                    if not review.allowed:
+                        result = CommandResult(status="rejected", intent=intent, message=review.reason, review=review)
+                    elif review.review_required and not request.dry_run:
+                        review_request = self.reviews.create(request.utterance, intent, review)
+                        result = CommandResult(
+                            status="review_required",
+                            intent=intent,
+                            result={"review_id": review_request.review_id, "review": asdict(review)},
+                            review_id=review_request.review_id,
+                            message=f"explicit approval is required; run `vibe approve {review_request.review_id}` after reviewing the request",
+                            review=review,
+                        )
+                    else:
+                        result = self._execute(request, intent, review)
+                    result = self._with_transport(result, request.transport)
+            final_result = self._record_command_result(request, result, trace_session.run_id)
+            record_trace_event(
+                phase="completion",
+                event_type="command_result_emitted",
+                status=final_result.status,
+                actor="broker",
+                goal_id=self._result_goal_id(final_result),
+                plan_id=self._result_plan_id(final_result),
+                review_id=final_result.review_id,
+                selected_strategy_id=self._result_selected_strategy_id(final_result),
+                data={
+                    "overall_status": final_result.overall_status,
+                    "execution_status": final_result.execution_status,
+                    "acceptance_status": final_result.acceptance_status,
+                    "message": final_result.message,
+                },
+            )
+            if created_trace:
+                trace_session.finalize(
+                    status=final_result.status,
+                    goal_id=self._result_goal_id(final_result),
+                    review_id=final_result.review_id,
+                    message=final_result.message,
+                    overall_status=final_result.overall_status,
+                    selected_strategy_id=self._result_selected_strategy_id(final_result),
+                    selected_target=final_result.selected_target,
+                    plan_id=self._result_plan_id(final_result),
                 )
-        else:
-            result = self._execute(request, intent, review)
-        result = self._with_transport(result, request.transport)
-        audit_id = self.audit.record(
-            request=request,
-            intent=intent,
-            status=result.status,
-            result=result.result,
-            selected_target=result.selected_target,
-            message=result.message,
-            review=result.review,
-            review_id=result.review_id,
-            execution_status=result.execution_status,
-            acceptance_status=result.acceptance_status,
-            overall_status=result.overall_status,
-        )
+            return final_result
+
+    def _record_command_result(self, request: CommandRequest, result: CommandResult, trace_run_id: str) -> CommandResult:
+        audit_id = result.audit_id
+        if audit_id is None:
+            audit_id = self.audit.record(
+                request=request,
+                intent=result.intent,
+                status=result.status,
+                result=result.result,
+                selected_target=result.selected_target,
+                message=result.message,
+                review=result.review,
+                review_id=result.review_id,
+                plan_id=self._result_plan_id(result),
+                execution_status=result.execution_status,
+                acceptance_status=result.acceptance_status,
+                overall_status=result.overall_status,
+                understanding_id=self._result_understanding_id(result),
+                candidate_set_id=self._result_candidate_set_id(result),
+                selected_route_decision_id=self._result_route_decision_id(result),
+                selected_strategy_decision_id=self._result_selected_strategy_decision_id(result),
+                semantic_acceptance_decision_id=self._result_semantic_acceptance_decision_id(result),
+            )
         return CommandResult(
             status=result.status,
             intent=result.intent,
             result=result.result,
             selected_target=result.selected_target,
+            trace_run_id=trace_run_id,
             audit_id=audit_id,
             review_id=result.review_id,
             transport=result.transport,
@@ -404,29 +512,262 @@ class CapabilityBroker:
             overall_status=result.overall_status,
         )
 
+    def _result_goal_id(self, result: CommandResult) -> str | None:
+        if not isinstance(result.result, dict):
+            return None
+        run_payload = result.result.get("run")
+        if isinstance(run_payload, dict) and run_payload.get("goal_id") is not None:
+            return str(run_payload.get("goal_id"))
+        goal_runtime = result.result.get("goal_runtime")
+        if isinstance(goal_runtime, dict) and goal_runtime.get("goal_id") is not None:
+            return str(goal_runtime.get("goal_id"))
+        return None
+
+    def _result_plan_id(self, result: CommandResult) -> str | None:
+        if not isinstance(result.result, dict):
+            return None
+        if result.result.get("plan_id") is not None:
+            return str(result.result.get("plan_id"))
+        plan_payload = result.result.get("plan")
+        if isinstance(plan_payload, dict) and plan_payload.get("plan_id") is not None:
+            return str(plan_payload.get("plan_id"))
+        return None
+
+    def _result_selected_strategy_id(self, result: CommandResult) -> str | None:
+        if not isinstance(result.result, dict):
+            return None
+        if result.result.get("selected_strategy_id") is not None:
+            return str(result.result.get("selected_strategy_id"))
+        return None
+
+    def _result_selected_strategy_decision_id(self, result: CommandResult) -> str | None:
+        if not isinstance(result.result, dict):
+            return None
+        run_ledger = result.result.get("run_ledger")
+        if isinstance(run_ledger, dict):
+            strategy_history = run_ledger.get("strategy_history")
+            if isinstance(strategy_history, list) and strategy_history:
+                last = strategy_history[-1]
+                if isinstance(last, dict) and last.get("strategy_decision_id") is not None:
+                    return str(last.get("strategy_decision_id"))
+        return None
+
+    def _result_understanding_id(self, result: CommandResult) -> str | None:
+        if not isinstance(result.result, dict):
+            return None
+        understanding = result.result.get("understanding")
+        if isinstance(understanding, dict):
+            if understanding.get("primary_understanding_id") is not None:
+                return str(understanding.get("primary_understanding_id"))
+            if understanding.get("understanding_id") is not None:
+                return str(understanding.get("understanding_id"))
+        return None
+
+    def _result_candidate_set_id(self, result: CommandResult) -> str | None:
+        if not isinstance(result.result, dict):
+            return None
+        candidate_set = result.result.get("candidate_set")
+        if isinstance(candidate_set, dict) and candidate_set.get("candidate_set_id") is not None:
+            return str(candidate_set.get("candidate_set_id"))
+        return None
+
+    def _result_route_decision_id(self, result: CommandResult) -> str | None:
+        if not isinstance(result.result, dict):
+            return None
+        route_decision = result.result.get("route_decision")
+        if isinstance(route_decision, dict) and route_decision.get("route_decision_id") is not None:
+            return str(route_decision.get("route_decision_id"))
+        return None
+
+    def _result_semantic_acceptance_decision_id(self, result: CommandResult) -> str | None:
+        if not isinstance(result.result, dict):
+            return None
+        execution = result.result.get("execution")
+        if isinstance(execution, dict):
+            acceptance_result = execution.get("acceptance_result")
+            if isinstance(acceptance_result, dict) and acceptance_result.get("semantic_acceptance_decision_id") is not None:
+                return str(acceptance_result.get("semantic_acceptance_decision_id"))
+        preview = result.result.get("preview")
+        if isinstance(preview, dict):
+            acceptance_result = preview.get("acceptance_result")
+            if isinstance(acceptance_result, dict) and acceptance_result.get("semantic_acceptance_decision_id") is not None:
+                return str(acceptance_result.get("semantic_acceptance_decision_id"))
+        return None
+
+    def _record_v06_trace(self, result, *, overall_status: str) -> None:
+        goal_id = result.goal_runtime.goal_id
+        turn_id = result.turn.turn_id
+        current_strategy_history = [item for item in result.ledger.strategy_history if item.turn_id == turn_id]
+        for entry in current_strategy_history:
+            record_trace_event(
+                phase="routing",
+                event_type="strategy_selected",
+                status=entry.action,
+                actor="agent_runtime",
+                goal_id=goal_id,
+                turn_id=entry.turn_id,
+                attempt_id=entry.attempt_id,
+                selected_strategy_id=entry.strategy_id,
+                data={
+                    "strategy_decision_id": entry.strategy_decision_id,
+                    "reason": entry.reason,
+                    "failure_class": entry.failure_class,
+                    "provider_name": entry.provider_name,
+                    "model_name": entry.model_name,
+                    "parse_valid": entry.parse_valid,
+                    "fallback_used": entry.fallback_used,
+                    "error": entry.error,
+                    "constraints": asdict(entry.constraints),
+                },
+            )
+        current_attempts = [item for item in result.ledger.attempts if item.turn_id == turn_id]
+        for attempt in current_attempts:
+            record_trace_event(
+                phase="execution",
+                event_type="attempt_completed",
+                status=attempt.outcome_status,
+                actor="agent_runtime",
+                goal_id=goal_id,
+                turn_id=attempt.turn_id,
+                attempt_id=attempt.attempt_id,
+                plan_id=attempt.task_plan_id,
+                selected_strategy_id=attempt.strategy_id,
+                data={
+                    "route_id": attempt.route_id,
+                    "capability_surface": attempt.capability_surface,
+                    "interaction_surface": attempt.interaction_surface,
+                    "failure_class": attempt.failure_class,
+                    "message": attempt.message,
+                },
+            )
+            for envelope in attempt.tool_invocations:
+                phase = "execution"
+                event_type = "tool_completed"
+                if envelope.family == "observer":
+                    phase = "observation"
+                    event_type = "observation_captured"
+                elif envelope.family == "verifier":
+                    phase = "verification"
+                    event_type = "verifier_completed"
+                record_trace_event(
+                    phase=phase,
+                    event_type=event_type,
+                    status=envelope.status,
+                    actor="tool_registry",
+                    goal_id=goal_id,
+                    turn_id=attempt.turn_id,
+                    attempt_id=attempt.attempt_id,
+                    plan_id=attempt.task_plan_id,
+                    step_id=str(envelope.input_payload.get("task_step_id") or ""),
+                    selected_strategy_id=attempt.strategy_id,
+                    data={
+                        "tool_id": envelope.tool_id,
+                        "family": envelope.family,
+                        "capability_surface": envelope.capability_surface,
+                        "message": envelope.message,
+                        "failure_class": envelope.failure_class,
+                        "input_payload": envelope.input_payload,
+                        "output_payload": envelope.output_payload,
+                        "evidence": envelope.evidence,
+                    },
+                )
+        record_trace_event(
+            phase="acceptance",
+            event_type="run_outcome_recorded",
+            status=result.terminal_outcome.status,
+            actor="agent_runtime",
+            goal_id=goal_id,
+            turn_id=turn_id,
+            selected_strategy_id=result.selected_strategy_id,
+            data={
+                "reason": result.terminal_outcome.reason,
+                "failure_class": result.terminal_outcome.failure_class,
+                "verifier_confirmed": result.terminal_outcome.verifier_confirmed,
+                "overall_status": overall_status,
+            },
+        )
+
+    def _record_legacy_execution_trace(self, plan: TaskPlan, execution: PlanExecutionResult) -> None:
+        record_trace_event(
+            phase="execution",
+            event_type="plan_execution_completed",
+            status=execution.status,
+            actor="broker",
+            plan_id=plan.plan_id,
+            data={
+                "execution_status": execution.execution_status,
+                "acceptance_status": execution.acceptance_status,
+                "overall_status": execution.overall_status,
+                "error": execution.error,
+            },
+        )
+        for step_result in execution.step_results:
+            record_trace_event(
+                phase="execution",
+                event_type="step_completed",
+                status=step_result.status,
+                actor="broker",
+                plan_id=plan.plan_id,
+                step_id=step_result.step_id,
+                data=asdict(step_result),
+            )
+        for verification in execution.verification_results:
+            record_trace_event(
+                phase="verification",
+                event_type="verifier_completed",
+                status=str(verification.get("status", "unknown")),
+                actor="broker",
+                plan_id=plan.plan_id,
+                data=verification,
+            )
+        record_trace_event(
+            phase="acceptance",
+            event_type="acceptance_decided",
+            status=execution.acceptance_status,
+            actor="broker",
+            plan_id=plan.plan_id,
+            data=execution.acceptance_result or {},
+        )
+
     def _handle_task_plan_request(self, request: CommandRequest) -> CommandResult | None:
-        planning = plan_turn(request.utterance, self.intent_broker, debug=request.debug)
-        if planning.analysis.type not in {"task", "mixed", "clarification", "rejected"}:
-            return None
-        compatibility_intent = self.intent_broker.parse(request.utterance) if request.utterance else Intent.unknown("missing utterance")
-        if planning.plan is None and not planning.candidates and compatibility_intent.action != "unknown":
-            return None
-        v06_result = self._run_v06_runtime_bridge(request, planning)
-        if v06_result is not None:
-            return v06_result
+        planning = plan_turn(
+            request.utterance,
+            self.intent_broker,
+            selection_provider=self.route_selection_provider,
+            clarification_provider=self.clarification_provider,
+            analysis_provider=self.understanding_analysis_provider,
+            goal_synthesis_provider=self.goal_synthesis_provider,
+            debug=request.debug,
+        )
+        if planning.analysis.type == "chat":
+            compatibility_intent = Intent.unknown("planning classified the utterance as chat rather than an executable task")
+        elif planning.analysis.type in {"clarification", "rejected"}:
+            compatibility_intent = Intent.unknown("planning retained the host-owned clarification or rejection outcome")
+        else:
+            compatibility_intent = self._compatibility_intent_from_planning(planning)
+        if planning.analysis.type in {"task", "mixed"}:
+            v06_result = self._run_v06_runtime_bridge(request, planning)
+            if v06_result is not None:
+                return v06_result
         return self._run_task_plan_loop(request, planning)
 
     def _run_v06_runtime_bridge(self, request: CommandRequest, planning) -> CommandResult | None:
         if planning.goal_synthesis is None or planning.goal_synthesis.goal_spec is None:
             return None
+        if planning.plan is None:
+            return None
+        if planning.route_decision is not None and planning.route_decision.action != "select":
+            return None
         goal_spec = planning.goal_synthesis.goal_spec
-        strategies = self._build_v06_strategy_candidates(tuple(planning.candidates), goal_spec)
+        semantic_metadata = self._semantic_strategy_metadata(planning)
+        strategies = self._build_v06_strategy_candidates((planning.plan,), goal_spec, semantic_metadata=semantic_metadata)
         if not strategies:
             return None
         environment = self._build_v06_environment_profile(request, planning)
         if goal_spec.goal_id not in self.agent_session.goals:
             self.agent_runtime.start_goal(self.agent_session.session_id, goal_spec)
         selection = self.agent_runtime.recovery_policy.select_strategy(
+            utterance=request.utterance,
             strategies=strategies,
             constraints=StrategyConstraint(),
             environment=environment,
@@ -443,6 +784,7 @@ class CapabilityBroker:
             strategies=strategies,
             selected_strategy_id=selected_strategy.strategy_id if selected_strategy is not None else "",
             environment=environment,
+            semantic_metadata=semantic_metadata,
         )
         plan_review = self.review_task_plan(selected_plan, stored_payload=stored_review_payload)
         if plan_review.status in {"review_required", "rejected"}:
@@ -483,6 +825,18 @@ class CapabilityBroker:
             payload["attempts"] = []
             review_request = self.reviews.get(plan_review.review_id or "") if plan_review.status == "review_required" else None
             intent = self._intent_from_task_step(selected_plan.steps[0]) if selected_plan.steps else Intent.unknown("task plan contains no executable steps")
+            record_trace_event(
+                phase="completion",
+                event_type="goal_gated",
+                status=plan_review.status,
+                actor="broker",
+                goal_id=gate_result.goal_runtime.goal_id,
+                turn_id=gate_result.turn.turn_id,
+                plan_id=selected_plan.plan_id,
+                review_id=plan_review.review_id,
+                selected_strategy_id=gate_result.selected_strategy_id,
+                data={"reason": plan_review.message, "terminal_status": gate_result.goal_runtime.status},
+            )
             return self._with_transport(
                 CommandResult(
                     status="review_required" if plan_review.status == "review_required" else "rejected",
@@ -524,6 +878,7 @@ class CapabilityBroker:
         execution_payload, selected_target = self._v06_execution_payload(result, selected_strategy)
         payload["preview" if request.dry_run else "execution"] = execution_payload
         overall_status = self._v06_overall_status(request, result)
+        self._record_v06_trace(result, overall_status=overall_status)
         execution_status = "dry_run" if request.dry_run else execution_payload["execution_status"]
         acceptance_status = str(execution_payload.get("acceptance_status", "skipped"))
         status = self._v06_command_status(request, overall_status)
@@ -579,28 +934,45 @@ class CapabilityBroker:
             app_fixture_catalog=dict(self.app_fixture_catalog),
         )
 
-    def _build_v06_strategy_candidates(self, candidates: tuple[TaskPlan, ...], goal_spec: GoalSpec) -> tuple[StrategyCandidate, ...]:
+    def _build_v06_strategy_candidates(
+        self,
+        candidates: tuple[TaskPlan, ...],
+        goal_spec: GoalSpec,
+        semantic_metadata: dict[str, object] | None = None,
+    ) -> tuple[StrategyCandidate, ...]:
         strategies: list[StrategyCandidate] = []
         for index, candidate in enumerate(candidates):
-            strategy = self._task_plan_to_v06_strategy(candidate, goal_spec, index)
+            strategy = self._task_plan_to_v06_strategy(candidate, goal_spec, index, semantic_metadata=semantic_metadata)
             if strategy is None:
                 continue
             strategies.append(strategy)
         strategies.extend(self._synthetic_v07_strategies(goal_spec, strategies))
+        if semantic_metadata:
+            strategies = [replace(item, metadata={**dict(semantic_metadata), **dict(item.metadata)}) for item in strategies]
         return tuple(strategies)
 
-    def _task_plan_to_v06_strategy(self, plan: TaskPlan, goal_spec: GoalSpec | str, index: int) -> StrategyCandidate | None:
+    def _task_plan_to_v06_strategy(
+        self,
+        plan: TaskPlan,
+        goal_spec: GoalSpec | str,
+        index: int,
+        semantic_metadata: dict[str, object] | None = None,
+    ) -> StrategyCandidate | None:
         if not plan.routes or not plan.steps:
             return None
-        reviews = tuple(self.policy.review(self._intent_from_task_step(step)) for step in plan.steps)
+        review_records = tuple(self._step_safety_review_record(plan.plan_id, step) for step in plan.steps)
+        reviews = tuple(review for review, _ in review_records)
         if any(not review.allowed for review in reviews):
             return None
         review_required = any(review.review_required for review in reviews)
+        step_safety_review_ids = tuple(step_review.step_safety_review_id for _, step_review in review_records)
         route = plan.routes[0]
         first_step = plan.steps[0]
         priority = float(route.score or max(1, len(plan.routes) - index))
         resolved_goal_id = goal_spec.goal_id if isinstance(goal_spec, GoalSpec) else goal_spec
         assistant_intent = goal_spec.assistant_intent if isinstance(goal_spec, GoalSpec) else None
+        base_metadata = dict(semantic_metadata or {})
+        base_metadata.setdefault("step_safety_review_ids", step_safety_review_ids)
         if route.domain_id == "apps" and first_step.action == "app.open":
             name = str(first_step.target.get("name") or first_step.target.get("app") or "")
             if not name:
@@ -619,8 +991,52 @@ class CapabilityBroker:
                 interaction_surface="native_action",
                 priority=priority,
                 requires_desktop_integration=True,
-                metadata={"acceptance_mode": "action_only", "review_required": review_required},
+                metadata={**base_metadata, "acceptance_mode": "action_only", "review_required": review_required},
             )
+        if route.domain_id == "app_interaction" and first_step.action == "app.search_history":
+            app_name = str(first_step.target.get("app") or first_step.target.get("name") or "")
+            query = str(first_step.target.get("query") or "")
+            if not app_name or not query:
+                return None
+            if route.id == "app_structured_search_route":
+                return StrategyCandidate(
+                    strategy_id=f"strategy_{route.id}",
+                    goal_id=resolved_goal_id,
+                    title=plan.display.goal or route.id,
+                    route_id=route.id,
+                    capability_surface="desktop-linux",
+                    task_plan=plan,
+                    steps=(
+                        StrategyStep(tool_id="app.fixture.locate_search_control", input_payload={"app": app_name, "task_step_id": first_step.id}, task_step_id=first_step.id),
+                        StrategyStep(tool_id="app.fixture.enter_search_query", input_payload={"app": app_name, "query": query, "task_step_id": first_step.id}, task_step_id=first_step.id),
+                        StrategyStep(tool_id="app.fixture.observe_results", input_payload={"app": app_name, "task_step_id": first_step.id}, task_step_id=first_step.id),
+                        StrategyStep(tool_id="app.fixture.verify_target_presence", input_payload={"app": app_name, "query": query, "task_step_id": first_step.id}, task_step_id=first_step.id),
+                    ),
+                    interaction_surface="structured_ui_action",
+                    priority=max(priority, 10.0),
+                    requires_desktop_integration=True,
+                    metadata={**base_metadata, "acceptance_mode": "verification_required", "review_required": review_required, "enable_surface_downgrade": True},
+                )
+            if route.id == "app_shortcut_search_route":
+                return StrategyCandidate(
+                    strategy_id=f"strategy_{route.id}",
+                    goal_id=resolved_goal_id,
+                    title=plan.display.goal or route.id,
+                    route_id=route.id,
+                    capability_surface="desktop-linux",
+                    task_plan=plan,
+                    steps=(
+                        StrategyStep(tool_id="app.fixture.activate_search_shortcut", input_payload={"app": app_name, "task_step_id": first_step.id}, task_step_id=first_step.id),
+                        StrategyStep(tool_id="app.fixture.enter_search_query", input_payload={"app": app_name, "query": query, "task_step_id": first_step.id}, task_step_id=first_step.id),
+                        StrategyStep(tool_id="app.fixture.observe_results", input_payload={"app": app_name, "task_step_id": first_step.id}, task_step_id=first_step.id),
+                        StrategyStep(tool_id="app.fixture.verify_target_presence", input_payload={"app": app_name, "query": query, "task_step_id": first_step.id}, task_step_id=first_step.id),
+                    ),
+                    interaction_surface="computer_use_action",
+                    priority=max(priority, 7.0),
+                    requires_desktop_integration=True,
+                    metadata={**base_metadata, "acceptance_mode": "verification_required", "review_required": review_required, "enable_surface_downgrade": True},
+                )
+            return None
         if route.domain_id == "browser" and first_step.action in {"browser.open_url", "browser.search_web", "browser.open_site_search"}:
             tool_id = first_step.action
             steps = [
@@ -645,7 +1061,7 @@ class CapabilityBroker:
                 steps=tuple(steps),
                 interaction_surface=interaction_surface,
                 priority=priority + 1.0,
-                metadata={"acceptance_mode": "verification_required", "review_required": review_required},
+                metadata={**base_metadata, "acceptance_mode": "verification_required", "review_required": review_required},
             )
         if route.domain_id == "window_management" and first_step.action == "window.list":
             return StrategyCandidate(
@@ -658,7 +1074,7 @@ class CapabilityBroker:
                 steps=(StrategyStep(tool_id="window.list", input_payload={"task_step_id": first_step.id}, task_step_id=first_step.id),),
                 interaction_surface="native_action",
                 priority=priority,
-                metadata={"acceptance_mode": "action_only", "review_required": review_required},
+                metadata={**base_metadata, "acceptance_mode": "action_only", "review_required": review_required},
             )
         if route.domain_id == "window_management" and first_step.action in {"window.focus", "window.minimize", "window.maximize", "window.close"}:
             name = str(first_step.target.get("name") or first_step.target.get("window") or "current")
@@ -676,7 +1092,7 @@ class CapabilityBroker:
                 interaction_surface="native_action",
                 priority=priority,
                 requires_desktop_integration=True,
-                metadata={"acceptance_mode": "action_only", "review_required": review_required},
+                metadata={**base_metadata, "acceptance_mode": "action_only", "review_required": review_required},
             )
         if route.domain_id == "notification" and first_step.action == "notification.send":
             return StrategyCandidate(
@@ -689,7 +1105,7 @@ class CapabilityBroker:
                 steps=(StrategyStep(tool_id="notification.send", input_payload={**dict(first_step.target), "task_step_id": first_step.id}, task_step_id=first_step.id),),
                 interaction_surface="native_action",
                 priority=priority,
-                metadata={"acceptance_mode": "action_only", "review_required": review_required},
+                metadata={**base_metadata, "acceptance_mode": "action_only", "review_required": review_required},
             )
         if route.domain_id == "system_observation" and first_step.action == "system.status":
             return StrategyCandidate(
@@ -702,7 +1118,7 @@ class CapabilityBroker:
                 steps=(StrategyStep(tool_id="system.status", input_payload={"task_step_id": first_step.id}, task_step_id=first_step.id),),
                 interaction_surface="native_action",
                 priority=priority,
-                metadata={"acceptance_mode": "action_only", "review_required": review_required},
+                metadata={**base_metadata, "acceptance_mode": "action_only", "review_required": review_required},
             )
         if route.domain_id == "clipboard" and first_step.action == "clipboard.write":
             return StrategyCandidate(
@@ -715,7 +1131,7 @@ class CapabilityBroker:
                 steps=(StrategyStep(tool_id="clipboard.write", input_payload={**dict(first_step.target), "task_step_id": first_step.id}, task_step_id=first_step.id),),
                 interaction_surface="native_action",
                 priority=priority,
-                metadata={"acceptance_mode": "action_only", "review_required": review_required},
+                metadata={**base_metadata, "acceptance_mode": "action_only", "review_required": review_required},
             )
         return None
 
@@ -926,6 +1342,14 @@ class CapabilityBroker:
             "priority": strategy.priority,
         }
 
+    @staticmethod
+    def _semantic_strategy_metadata(planning) -> dict[str, object]:
+        return {
+            "understanding_id": root_understanding_id(planning.understanding) if getattr(planning, "understanding", None) is not None else None,
+            "candidate_set_id": planning.candidate_set.candidate_set_id if getattr(planning, "candidate_set", None) is not None else None,
+            "route_decision_id": planning.route_decision.route_decision_id if getattr(planning, "route_decision", None) is not None else None,
+        }
+
     def _v06_stored_review_payload(
         self,
         *,
@@ -934,6 +1358,7 @@ class CapabilityBroker:
         strategies: tuple[StrategyCandidate, ...],
         selected_strategy_id: str,
         environment: EnvironmentProfile,
+        semantic_metadata: dict[str, object] | None = None,
     ) -> dict[str, object]:
         payload = asdict(plan)
         payload["v0_6_runtime"] = {
@@ -941,6 +1366,7 @@ class CapabilityBroker:
             "selected_strategy_id": selected_strategy_id,
             "strategy_candidates": [self._strategy_payload(item) for item in strategies],
             "environment_profile": asdict(environment),
+            "semantic_metadata": dict(semantic_metadata or {}),
         }
         return payload
 
@@ -1062,6 +1488,10 @@ class CapabilityBroker:
             "run_id": attempt.turn_id,
             "attempt_index": 1,
             "trigger": attempt.trigger,
+            "understanding_id": attempt.understanding_id,
+            "candidate_set_id": attempt.candidate_set_id,
+            "route_decision_id": attempt.route_decision_id,
+            "step_safety_review_ids": list(attempt.step_safety_review_ids),
             "selected_route_id": attempt.route_id,
             "plan_id": attempt.task_plan_id,
             "capability_surface": attempt.capability_surface,
@@ -1596,14 +2026,98 @@ class CapabilityBroker:
         trigger = "initial_plan"
 
         while True:
+            planning = self._resolve_planning_understanding_transition(planning, trigger=trigger)
             payload = self._planning_payload(planning)
             analysis = planning.analysis
             plan = planning.plan
             candidates = planning.candidates
 
             if plan is None:
-                compatibility_intent = self.intent_broker.parse(request.utterance) if request.utterance else Intent.unknown("missing utterance")
-                if not attempts and not candidates and compatibility_intent.action != "unknown":
+                route_action = planning.route_decision.action if planning.route_decision is not None else None
+                route_reason = planning.route_decision.reason if planning.route_decision is not None else ""
+                if analysis.type == "chat":
+                    intent = Intent.unknown(analysis.explanation or "understanding classified the utterance as chat")
+                    return self._finalize_task_plan_result(
+                        request=request,
+                        run_id=run_id,
+                        goal_id=goal_id,
+                        attempts=tuple(attempts),
+                        payload=payload,
+                        intent=intent,
+                        status="rejected",
+                        message=analysis.chat_response or analysis.explanation or "no executable task was requested",
+                        execution_status="not_started",
+                        acceptance_status="skipped",
+                        overall_status="failed",
+                        selected_target=None,
+                    )
+                if analysis.type == "clarification":
+                    intent = Intent.unknown(route_reason or analysis.chat_response or analysis.explanation or "clarification required")
+                    return self._finalize_task_plan_result(
+                        request=request,
+                        run_id=run_id,
+                        goal_id=goal_id,
+                        attempts=tuple(attempts),
+                        payload=payload,
+                        intent=intent,
+                        status="ambiguous",
+                        message=intent.reason,
+                        execution_status="not_started",
+                        acceptance_status="skipped",
+                        overall_status="needs_user_input",
+                        selected_target=None,
+                    )
+                if route_action == "clarify":
+                    intent = Intent.unknown(route_reason or analysis.chat_response or analysis.explanation or "clarification required")
+                    return self._finalize_task_plan_result(
+                        request=request,
+                        run_id=run_id,
+                        goal_id=goal_id,
+                        attempts=tuple(attempts),
+                        payload=payload,
+                        intent=intent,
+                        status="ambiguous",
+                        message=intent.reason,
+                        execution_status="not_started",
+                        acceptance_status="skipped",
+                        overall_status="needs_user_input",
+                        selected_target=None,
+                    )
+                if route_action == "blocked":
+                    intent = Intent.unknown(route_reason or "no route satisfies required capabilities")
+                    return self._finalize_task_plan_result(
+                        request=request,
+                        run_id=run_id,
+                        goal_id=goal_id,
+                        attempts=tuple(attempts),
+                        payload=payload,
+                        intent=intent,
+                        status="failed",
+                        message=intent.reason,
+                        execution_status="not_started",
+                        acceptance_status="skipped",
+                        overall_status="blocked",
+                        selected_target=None,
+                    )
+                compatibility_intent = self._compatibility_intent_from_planning(planning)
+                if analysis.type in {"task", "mixed"} and not attempts and not candidates and compatibility_intent.action != "unknown":
+                    compatibility_review = self.policy.review(compatibility_intent)
+                    if not compatibility_review.allowed:
+                        return self._finalize_task_plan_result(
+                            request=request,
+                            run_id=run_id,
+                            goal_id=goal_id,
+                            attempts=tuple(attempts),
+                            payload=payload,
+                            intent=compatibility_intent,
+                            status="rejected",
+                            message=compatibility_review.reason,
+                            execution_status="not_started",
+                            acceptance_status="skipped",
+                            overall_status="failed",
+                            selected_target=None,
+                            review=compatibility_review,
+                        )
                     return self._with_transport(
                         CommandResult(
                             status="failed",
@@ -1616,7 +2130,7 @@ class CapabilityBroker:
                         ),
                         request.transport,
                     )
-                intent = Intent.unknown("no route satisfies required capabilities" if candidates else (analysis.explanation or "no executable task plan was produced"))
+                intent = Intent.unknown(route_reason or ("no route satisfies required capabilities" if candidates else (analysis.explanation or "no executable task plan was produced")))
                 return self._finalize_task_plan_result(
                     request=request,
                     run_id=run_id,
@@ -1624,7 +2138,7 @@ class CapabilityBroker:
                     attempts=tuple(attempts),
                     payload=payload,
                     intent=intent,
-                    status="rejected" if candidates or analysis.type == "rejected" else "failed",
+                    status="rejected" if route_action == "unsupported" or candidates or analysis.type == "rejected" else "failed",
                     message=intent.reason,
                     execution_status="not_started",
                     acceptance_status="skipped",
@@ -1691,12 +2205,16 @@ class CapabilityBroker:
                 )
 
             next_attempt_id = self._make_attempt_id(run_id, len(attempts) + 1, plan.selected_route_id)
+            primary_understanding_id = root_understanding_id(planning.understanding)
             execution = self.execute_task_plan(
                 plan,
                 dry_run=request.dry_run,
                 transport=request.transport,
                 run_id=run_id,
                 attempt_id=next_attempt_id,
+                understanding_id=primary_understanding_id,
+                candidate_set_id=planning.candidate_set.candidate_set_id if planning.candidate_set else None,
+                route_decision_id=planning.route_decision.route_decision_id if planning.route_decision else None,
             )
             payload["preview" if request.dry_run else "execution"] = asdict(execution)
             payload["trace"]["execution"] = asdict(execution)
@@ -1708,6 +2226,7 @@ class CapabilityBroker:
             payload["debug_trace"]["review"] = asdict(plan_review)
             payload["debug_trace"]["execution"] = asdict(execution)
             payload["debug_trace"]["acceptance"] = execution.acceptance_result or {}
+            self._record_legacy_execution_trace(plan, execution)
 
             failure = self.failure_classifier.classify(plan, execution)
             decision = self.replanner.decide(
@@ -1731,12 +2250,57 @@ class CapabilityBroker:
                     ]
                 ),
                 failure=failure,
+                understanding_id=primary_understanding_id,
+                candidate_set_id=planning.candidate_set.candidate_set_id if planning.candidate_set else None,
+                available_domain_ids=self._replan_available_domain_ids(planning),
+            )
+            record_model_io(
+                phase="replanning",
+                provider=decision.provider_name or "rule_replanner",
+                model=decision.model_name or "deterministic-local",
+                request_payload={
+                    "understanding_id": primary_understanding_id,
+                    "active_understanding_id": planning.understanding.understanding_id,
+                    "candidate_set_id": planning.candidate_set.candidate_set_id if planning.candidate_set else None,
+                    "failure_class": failure.failure_class,
+                    "current_route_id": plan.selected_route_id,
+                },
+                response_payload=None,
+                normalized_output=asdict(decision),
+                parse_valid=decision.parse_valid,
+                fallback_used=decision.fallback_used,
+                error=decision.error,
+                actor="replanner",
+                call_kind="structured_followup",
+                consumed_artifacts={
+                    "understanding_id": primary_understanding_id,
+                    "active_understanding_id": planning.understanding.understanding_id,
+                    "candidate_set_id": planning.candidate_set.candidate_set_id if planning.candidate_set else None,
+                    "route_decision_id": planning.route_decision.route_decision_id if planning.route_decision else None,
+                },
+            )
+            record_trace_event(
+                phase="replanning",
+                event_type="replan_decided",
+                status=decision.action,
+                actor="broker",
+                goal_id=goal_id,
+                attempt_id=next_attempt_id,
+                plan_id=plan.plan_id,
+                data=asdict(decision),
             )
             attempt = PlanAttempt(
                 attempt_id=next_attempt_id,
                 run_id=run_id,
                 attempt_index=len(attempts) + 1,
                 trigger=trigger,
+                understanding_id=primary_understanding_id,
+                candidate_set_id=planning.candidate_set.candidate_set_id if planning.candidate_set else None,
+                route_decision_id=planning.route_decision.route_decision_id if planning.route_decision else None,
+                replan_decision_id=decision.replan_decision_id,
+                semantic_summary_id=execution.acceptance_result.get("semantic_summary_id") if isinstance(execution.acceptance_result, dict) else None,
+                semantic_acceptance_decision_id=execution.acceptance_result.get("semantic_acceptance_decision_id") if isinstance(execution.acceptance_result, dict) else None,
+                step_safety_review_ids=tuple(item.step_safety_review_id for item in plan_review.step_reviews),
                 selected_route_id=plan.selected_route_id,
                 task_plan=plan,
                 execution_result=execution,
@@ -1747,6 +2311,13 @@ class CapabilityBroker:
             )
             attempts.append(attempt)
             selected_target = self._selected_target_from_execution(execution)
+            transitioned_planning = self._planning_from_replan_decision(planning, decision=decision, failure=failure)
+            if transitioned_planning is not planning:
+                planning = transitioned_planning
+                payload["understanding"] = asdict(planning.understanding)
+                payload["analysis"] = asdict(planning.analysis)
+                payload["understanding_refinement"] = asdict(planning.understanding_refinement) if planning.understanding_refinement else None
+                payload["understanding_supersession"] = asdict(planning.understanding_supersession) if planning.understanding_supersession else None
             if request.dry_run or failure.failure_class == "none" or decision.action in {"stop", "ask_user"}:
                 overall_status = execution.overall_status
                 if decision.action == "ask_user":
@@ -1780,18 +2351,134 @@ class CapabilityBroker:
             planning = plan_turn(
                 request.utterance,
                 self.intent_broker,
+                selection_provider=self.route_selection_provider,
+                clarification_provider=self.clarification_provider,
+                analysis_provider=self.understanding_analysis_provider,
+                goal_synthesis_provider=self.goal_synthesis_provider,
+                understanding=planning.understanding,
                 debug=request.debug,
                 candidate_domain_ids_override=candidate_domain_ids_override,
                 excluded_route_ids=excluded_route_ids,
                 excluded_capability_ids=excluded_capability_ids,
             )
 
+    def _resolve_planning_understanding_transition(self, planning, *, trigger: str):
+        understanding = getattr(planning, "understanding", None)
+        analysis = getattr(planning, "analysis", None)
+        if understanding is None or analysis is None:
+            return planning
+        decision = UnderstandingAnalysisDecision(
+            analysis=analysis,
+            provider_name="planning_understanding_sync",
+            model_name="deterministic-local",
+            request_payload={
+                "trigger": trigger,
+                "understanding_id": root_understanding_id(understanding),
+                "active_understanding_id": understanding.understanding_id,
+            },
+        )
+        return self._apply_understanding_transition(
+            planning,
+            analysis_decision=decision,
+            reason=f"planning trigger {trigger} changed the active understanding basis",
+        )
+
+    def _planning_from_replan_decision(self, planning, *, decision: ReplanDecision, failure: FailureClassification):
+        understanding = getattr(planning, "understanding", None)
+        analysis = getattr(planning, "analysis", None)
+        if understanding is None or analysis is None:
+            return planning
+        transition = self.understanding_transition_provider.transition(
+            understanding=understanding,
+            current_analysis=analysis,
+            decision=decision,
+            failure=failure,
+        )
+        return self._apply_understanding_transition(
+            planning,
+            analysis_decision=transition,
+            reason=f"replanning action {decision.action} updated the understanding basis",
+        )
+
+    def _apply_understanding_transition(
+        self,
+        planning,
+        *,
+        analysis_decision: UnderstandingAnalysisDecision,
+        reason: str,
+    ):
+        understanding = planning.understanding
+        analysis = analysis_decision.analysis
+        updated_understanding, refinement, supersession = reconcile_understanding_transition(
+            understanding,
+            analysis,
+            reason=reason,
+        )
+        if refinement is None and supersession is None:
+            return planning
+        artifact_id = refinement.refinement_id if refinement is not None else supersession.supersession_id
+        artifact_role = "refinement" if refinement is not None else "supersession"
+        changed_fields = refinement.changed_fields if refinement is not None else supersession.changed_fields
+        reason = refinement.reason if refinement is not None else supersession.reason
+        primary_understanding_id = root_understanding_id(updated_understanding)
+        source_artifact_ids = [understanding.understanding_id]
+        if understanding.source_understanding_id is not None:
+            source_artifact_ids.append(understanding.source_understanding_id)
+        record_model_io(
+            phase="analysis",
+            provider=analysis_decision.provider_name,
+            model=analysis_decision.model_name,
+            request_payload=analysis_decision.request_payload,
+            response_payload=analysis_decision.response_payload,
+            normalized_output=asdict(updated_understanding),
+            parse_valid=analysis_decision.parse_valid,
+            fallback_used=analysis_decision.fallback_used,
+            error=analysis_decision.error,
+            actor="understanding_refiner",
+            call_kind="structured_followup",
+            consumed_artifacts={
+                "understanding_id": primary_understanding_id,
+                "active_understanding_id": understanding.understanding_id,
+                "candidate_set_id": planning.candidate_set.candidate_set_id if planning.candidate_set else None,
+                "route_decision_id": planning.route_decision.route_decision_id if planning.route_decision else None,
+            },
+        )
+        record_trace_event(
+            phase="analysis",
+            event_type="understanding_refined" if refinement is not None else "understanding_superseded",
+            status=analysis.type,
+            actor="broker",
+            data={
+                "artifact_type": "understanding_transition",
+                "artifact_id": artifact_id,
+                "source_artifact_ids": source_artifact_ids,
+                "artifact_role": artifact_role,
+                "primary_understanding_id": updated_understanding.primary_understanding_id,
+                "previous_understanding_id": understanding.understanding_id,
+                "active_understanding_id": updated_understanding.understanding_id,
+                "changed_fields": list(changed_fields),
+                "reason": reason,
+            },
+        )
+        return replace(
+            planning,
+            understanding=updated_understanding,
+            analysis=updated_understanding.analysis,
+            understanding_refinement=refinement,
+            understanding_supersession=supersession,
+        )
+
     def _planning_payload(self, planning) -> dict[str, object]:
         return {
+            "understanding": asdict(planning.understanding),
             "analysis": asdict(planning.analysis),
+            "understanding_refinement": asdict(planning.understanding_refinement) if planning.understanding_refinement else None,
+            "understanding_supersession": asdict(planning.understanding_supersession) if planning.understanding_supersession else None,
             "goal_synthesis": asdict(planning.goal_synthesis) if planning.goal_synthesis else None,
             "assistant_intent": assistant_intent_to_payload(planning.goal_synthesis.goal_spec.assistant_intent) if planning.goal_synthesis and planning.goal_synthesis.goal_spec else None,
             "plan": asdict(planning.plan) if planning.plan else None,
+            "candidate_set": asdict(planning.candidate_set) if planning.candidate_set else None,
+            "route_decision": asdict(planning.route_decision) if planning.route_decision else None,
             "candidates": [asdict(candidate) for candidate in planning.candidates],
             "domain_routing": asdict(planning.domain_routing) if planning.domain_routing else None,
             "observation_request": asdict(planning.observation_request) if planning.observation_request else None,
@@ -1800,6 +2487,31 @@ class CapabilityBroker:
             "trace": asdict(planning.trace) if planning.trace is not None else {},
             "debug_trace": asdict(planning.debug_trace) if planning.debug_trace is not None else {},
         }
+
+    @staticmethod
+    def _replan_available_domain_ids(planning) -> tuple[str, ...]:
+        goal_synthesis = getattr(planning, "goal_synthesis", None)
+        goal_spec = getattr(goal_synthesis, "goal_spec", None)
+        if goal_spec is not None and getattr(goal_spec, "candidate_domain_ids", ()):
+            return tuple(str(item) for item in goal_spec.candidate_domain_ids if str(item))
+        candidate_set = getattr(planning, "candidate_set", None)
+        if candidate_set is not None and getattr(candidate_set, "candidates", ()):
+            return tuple(
+                dict.fromkeys(
+                    str(candidate.domain_id)
+                    for candidate in candidate_set.candidates
+                    if getattr(candidate, "domain_id", None)
+                )
+            )
+        candidates = getattr(planning, "candidates", ())
+        return tuple(
+            dict.fromkeys(
+                route.domain_id
+                for candidate in candidates
+                for route in getattr(candidate, "routes", ())
+                if route.domain_id
+            )
+        )
 
     def _verification_harness_for_receipt(self, receipt) -> VerifierHarness:
         if receipt is None:
@@ -1908,6 +2620,13 @@ class CapabilityBroker:
             "run_id": attempt.run_id,
             "attempt_index": attempt.attempt_index,
             "trigger": attempt.trigger,
+            "understanding_id": attempt.understanding_id,
+            "candidate_set_id": attempt.candidate_set_id,
+            "route_decision_id": attempt.route_decision_id,
+            "replan_decision_id": attempt.replan_decision_id,
+            "semantic_summary_id": attempt.semantic_summary_id,
+            "semantic_acceptance_decision_id": attempt.semantic_acceptance_decision_id,
+            "step_safety_review_ids": list(attempt.step_safety_review_ids),
             "selected_route_id": attempt.selected_route_id,
         }
         if attempt.task_plan is not None:
@@ -1957,7 +2676,8 @@ class CapabilityBroker:
         runtime_payload = plan_payload.get("v0_6_runtime") if isinstance(plan_payload.get("v0_6_runtime"), dict) else {}
         goal_id = str(runtime_payload.get("goal_id") or f"goal_review_{plan.plan_id}")
         selected_strategy_id = str(runtime_payload.get("selected_strategy_id") or f"strategy_{plan.selected_route_id}")
-        strategy = self._task_plan_to_v06_strategy(plan, goal_id, 0)
+        semantic_metadata = runtime_payload.get("semantic_metadata") if isinstance(runtime_payload.get("semantic_metadata"), dict) else {}
+        strategy = self._task_plan_to_v06_strategy(plan, goal_id, 0, semantic_metadata=semantic_metadata)
         if strategy is not None and strategy.strategy_id != selected_strategy_id:
             strategy = StrategyCandidate(
                 strategy_id=selected_strategy_id,
@@ -2013,6 +2733,7 @@ class CapabilityBroker:
         }
         intent = self._intent_from_task_step(plan.steps[0]) if plan.steps else review_request.intent
         overall_status = self._v06_overall_status(CommandRequest("", dry_run=dry_run), result)
+        self._record_v06_trace(result, overall_status=overall_status)
         return self._with_transport(
             CommandResult(
                 status=self._v06_command_status(CommandRequest("", dry_run=dry_run), overall_status),
@@ -2048,6 +2769,7 @@ class CapabilityBroker:
             run_id=approved_run_id,
             attempt_id=self._make_attempt_id(approved_run_id, 1, plan.selected_route_id or "approved_plan"),
         )
+        self._record_legacy_execution_trace(plan, execution)
         return self._with_transport(
             CommandResult(
                 status=execution_state_to_command_status(execution.status, dry_run=dry_run),
@@ -2233,52 +2955,78 @@ class CapabilityBroker:
         )
 
     def reject_review(self, review_id: str, transport: str | None = None) -> CommandResult:
-        review_request = self.reviews.reject(review_id)
-        if not review_request:
-            fallback = Intent.unknown("review request not found", {"review_id": review_id})
-            return self._with_transport(
-                CommandResult(status="rejected", intent=fallback, review_id=review_id, message="review request not found"),
-                transport,
+        trace_session = current_trace_session()
+        created_trace = False
+        if trace_session is None:
+            trace_session = self.trace_store.start_run(
+                run_id=self._make_run_id(review_id),
+                command_name="reject",
+                utterance="",
+                mode="auto_low_risk",
+                transport=transport,
+                dry_run=False,
+                debug=False,
+                review_id=review_id,
             )
-        if review_request.status != "rejected":
-            return self._with_transport(
-                CommandResult(
-                    status="rejected",
+            created_trace = True
+        scope = bind_trace_session(trace_session) if created_trace else nullcontext(trace_session)
+        with scope:
+            review_request = self.reviews.reject(review_id)
+            if not review_request:
+                fallback = Intent.unknown("review request not found", {"review_id": review_id})
+                result = self._with_transport(
+                    CommandResult(status="rejected", intent=fallback, review_id=review_id, message="review request not found"),
+                    transport,
+                )
+            elif review_request.status != "rejected":
+                result = self._with_transport(
+                    CommandResult(
+                        status="rejected",
+                        intent=review_request.intent,
+                        review=review_request.review,
+                        review_id=review_id,
+                        message=f"review request is not pending; current status is {review_request.status}",
+                    ),
+                    transport,
+                )
+            else:
+                request = CommandRequest(
+                    utterance=review_request.utterance,
+                    approve=False,
+                    review_id=review_id,
+                    transport=transport,
+                )
+                audited = self.audit.record(
+                    request=request,
                     intent=review_request.intent,
+                    status="rejected",
+                    result={"review_id": review_id, "review_status": "rejected"},
+                    selected_target=None,
+                    message="review request rejected by user",
                     review=review_request.review,
                     review_id=review_id,
-                    message=f"review request is not pending; current status is {review_request.status}",
-                ),
-                transport,
-            )
-        request = CommandRequest(
-            utterance=review_request.utterance,
-            approve=False,
-            review_id=review_id,
-            transport=transport,
-        )
-        audit_id = self.audit.record(
-            request=request,
-            intent=review_request.intent,
-            status="rejected",
-            result={"review_id": review_id, "review_status": "rejected"},
-            selected_target=None,
-            message="review request rejected by user",
-            review=review_request.review,
-            review_id=review_id,
-        )
-        return self._with_transport(
-            CommandResult(
-                status="rejected",
-                intent=review_request.intent,
-                result={"review_id": review_id, "review_status": "rejected"},
-                audit_id=audit_id,
-                review_id=review_id,
-                message="review request rejected by user",
-                review=review_request.review,
-            ),
-            transport,
-        )
+                )
+                result = self._with_transport(
+                    CommandResult(
+                        status="rejected",
+                        intent=review_request.intent,
+                        result={"review_id": review_id, "review_status": "rejected"},
+                        trace_run_id=trace_session.run_id,
+                        audit_id=audited,
+                        review_id=review_id,
+                        message="review request rejected by user",
+                        review=review_request.review,
+                    ),
+                    transport,
+                )
+            if created_trace:
+                trace_session.finalize(
+                    status=result.status,
+                    review_id=review_id,
+                    message=result.message,
+                    overall_status=result.overall_status,
+                )
+            return result
 
     def _execute(self, request: CommandRequest, intent: Intent, review) -> CommandResult:
         if intent.action == "unknown":
@@ -2304,7 +3052,7 @@ class CapabilityBroker:
                         review=review,
                     )
                 return CommandResult(status="failed", intent=intent, message=f"no application matched {name!r}", review=review)
-            if len(candidates) > 1 and not decisive_v2(candidates[0].name, name):
+            if len(candidates) > 1 and not decisive(candidates[0].name, name):
                 return CommandResult(
                     status="ambiguous",
                     intent=intent,
@@ -2449,6 +3197,59 @@ class CapabilityBroker:
             reason=f"task step {step.id}",
             requires_confirmation=False,
         )
+
+    def _compatibility_intent_from_planning(self, planning) -> Intent:
+        understanding = getattr(planning, "understanding", None)
+        if understanding is not None and getattr(understanding, "provider_intent", None) is not None:
+            return understanding.provider_intent
+        plan = getattr(planning, "plan", None)
+        if plan is not None and getattr(plan, "steps", ()):
+            return self._intent_from_task_step(plan.steps[0])
+        candidates = getattr(planning, "candidates", ())
+        for candidate in candidates:
+            if getattr(candidate, "steps", ()):
+                return self._intent_from_task_step(candidate.steps[0])
+        return Intent.unknown("planning did not yield a compatibility intent")
+
+    def _step_safety_review_record(self, plan_id: str, step: TaskStep, phase: str | None = None) -> tuple[object, StepReviewRecord]:
+        del phase
+        review = self.policy.review(self._intent_from_task_step(step))
+        review_id = self._make_step_safety_review_id(
+            plan_id=plan_id,
+            step_id=step.id,
+            action=step.action,
+            risk_level=review.risk_level,
+            review_required=review.review_required,
+            allowed=review.allowed,
+            reason=review.reason,
+        )
+        return review, StepReviewRecord(
+            step_safety_review_id=review_id,
+            step_id=step.id,
+            action=step.action,
+            risk_level=review.risk_level,
+            review_required=review.review_required,
+            allowed=review.allowed,
+            reason=review.reason,
+            effects=review.effects,
+            reversible=review.reversible,
+        )
+
+    @staticmethod
+    def _make_step_safety_review_id(
+        *,
+        plan_id: str,
+        step_id: str,
+        action: str,
+        risk_level: str,
+        review_required: bool,
+        allowed: bool,
+        reason: str,
+    ) -> str:
+        digest = sha256(
+            f"{plan_id}:{step_id}:{action}:{risk_level}:{review_required}:{allowed}:{reason}".encode("utf-8")
+        ).hexdigest()[:12]
+        return f"srev_{digest}"
 
     def _ensure_task_plan(self, plan: TaskPlan) -> None:
         if not isinstance(plan, TaskPlan):
@@ -2623,15 +3424,5 @@ def summarize_verification_status(results) -> str | None:
     if "skipped" in statuses:
         return "skipped"
     return "passed"
-
-
-def decisive_v2(candidate_name: str, query: str) -> bool:
-    candidate = candidate_name.strip().lower()
-    query_norm = query.strip().lower()
-    return candidate == query_norm or query_norm in {"browser", "\u6d4f\u89c8\u5668", "terminal", "\u7ec8\u7aef"}
-
-
-def decisive(candidate_name: str, query: str) -> bool:
-    candidate = candidate_name.strip().lower()
-    query_norm = query.strip().lower()
-    return candidate == query_norm or query_norm in {"browser", "浏览器", "terminal", "终端"}
+from .semantic_acceptance import SemanticAcceptanceProvider
+from .goal_synthesizer import GoalSynthesisProvider

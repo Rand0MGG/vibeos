@@ -28,6 +28,7 @@ FailureClass = Literal[
 ]
 ReplanAction = Literal["stop", "retry_same_attempt", "replan_with_constraints", "ask_user"]
 RunStatus = Literal["running", "completed", "failed", "incomplete", "blocked", "needs_review", "needs_user_input", "dry_run"]
+SemanticDecision = Literal["complete", "incomplete", "semantic_failure", "clarification_needed", "skipped"]
 
 
 @dataclass(frozen=True)
@@ -138,12 +139,15 @@ class TaskPlan:
 
 @dataclass(frozen=True)
 class StepReviewRecord:
+    step_safety_review_id: str
     step_id: str
     action: str
     risk_level: RiskLevel
     review_required: bool
     allowed: bool
     reason: str
+    effects: tuple[str, ...] = ()
+    reversible: bool = False
 
 
 @dataclass(frozen=True)
@@ -169,6 +173,7 @@ class StepExecutionResult:
     step_id: str
     layer: str
     status: ExecutionState
+    step_safety_review_id: str | None = None
     adapter: str | None = None
     capability_id: str | None = None
     attempt: int = 1
@@ -208,6 +213,14 @@ class FailureClassification:
 class ReplanDecision:
     action: ReplanAction
     reason: str = ""
+    replan_decision_id: str | None = None
+    understanding_id: str | None = None
+    candidate_set_id: str | None = None
+    provider_name: str | None = None
+    model_name: str | None = None
+    parse_valid: bool = True
+    fallback_used: bool = False
+    error: str | None = None
     do_not_repeat_route_ids: tuple[str, ...] = ()
     do_not_repeat_capability_ids: tuple[str, ...] = ()
     candidate_domain_ids: tuple[str, ...] = ()
@@ -220,6 +233,13 @@ class PlanAttempt:
     run_id: str
     attempt_index: int
     trigger: str
+    understanding_id: str | None = None
+    candidate_set_id: str | None = None
+    route_decision_id: str | None = None
+    replan_decision_id: str | None = None
+    semantic_summary_id: str | None = None
+    semantic_acceptance_decision_id: str | None = None
+    step_safety_review_ids: tuple[str, ...] = ()
     selected_route_id: str = ""
     task_plan: TaskPlan | None = None
     execution_result: PlanExecutionResult | None = None

@@ -87,6 +87,12 @@ def risk_rank(risk_level: str) -> int:
 def route_preference_bonus(plan: TaskPlan) -> float:
     if str(plan.provenance.get("fallback_from_domain") or ""):
         return -1.0
+    if str(plan.provenance.get("domain_id") or "") == "app_interaction":
+        interaction_surface = str(plan.provenance.get("interaction_surface") or "")
+        if interaction_surface == "structured":
+            return 1.0
+        if interaction_surface == "shortcut":
+            return 0.5
     if str(plan.provenance.get("domain_id") or "") == "media":
         return 1.0
     return 0.0

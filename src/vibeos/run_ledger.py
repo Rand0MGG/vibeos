@@ -12,8 +12,14 @@ class StrategyLedgerEntry:
     turn_id: str
     attempt_id: str | None
     strategy_id: str | None
+    strategy_decision_id: str
     action: str
     reason: str
+    provider_name: str
+    model_name: str
+    parse_valid: bool = True
+    fallback_used: bool = False
+    error: str | None = None
     constraints: StrategyConstraint = field(default_factory=StrategyConstraint)
     failure_class: str = "none"
 
@@ -29,6 +35,13 @@ class AttemptLedgerEntry:
     task_plan_id: str
     capability_surface: str
     interaction_surface: str
+    understanding_id: str | None = None
+    candidate_set_id: str | None = None
+    route_decision_id: str | None = None
+    replan_decision_id: str | None = None
+    semantic_summary_id: str | None = None
+    semantic_acceptance_decision_id: str | None = None
+    step_safety_review_ids: tuple[str, ...] = ()
     tool_invocations: tuple[ToolInvocationEnvelope, ...] = ()
     evidence: tuple[dict[str, Any], ...] = ()
     outcome_status: str = "incomplete"
@@ -49,8 +62,14 @@ class RunLedger:
             turn_id=turn_id,
             attempt_id=attempt_id,
             strategy_id=decision.selected_strategy_id,
+            strategy_decision_id=decision.strategy_decision_id,
             action=decision.action,
             reason=decision.reason,
+            provider_name=decision.provider_name,
+            model_name=decision.model_name,
+            parse_valid=decision.parse_valid,
+            fallback_used=decision.fallback_used,
+            error=decision.error,
             constraints=decision.constraints,
             failure_class=decision.failure_class,
         )

@@ -290,6 +290,24 @@ def default_domain_registry(known_verifier_ids: tuple[str, ...]) -> DomainRegist
             default_verifier_ids=(),
         ),
     )
+    app_interaction_routes = (
+        RouteDefinition(
+            route_id="app_structured_search_route",
+            domain_id="app_interaction",
+            builder_name="build_app_structured_search_plan",
+            required_capability_ids=("app.search_history",),
+            required_context_package_ids=("session_context",),
+            default_verifier_ids=(),
+        ),
+        RouteDefinition(
+            route_id="app_shortcut_search_route",
+            domain_id="app_interaction",
+            builder_name="build_app_shortcut_search_plan",
+            required_capability_ids=("app.search_history",),
+            required_context_package_ids=("session_context",),
+            default_verifier_ids=(),
+        ),
+    )
     window_routes = (
         RouteDefinition(
             route_id="window_list_route",
@@ -434,6 +452,16 @@ def default_domain_registry(known_verifier_ids: tuple[str, ...]) -> DomainRegist
             optional_fallback_domain_ids=(),
         ),
         DomainPack(
+            domain_id="app_interaction",
+            label="App Interaction",
+            route_ids=tuple(route.route_id for route in app_interaction_routes),
+            allowed_context_package_ids=("session_context",),
+            capability_families=("apps", "app_interaction"),
+            policy_defaults={"search_history": "L1"},
+            default_verifier_ids=(),
+            optional_fallback_domain_ids=(),
+        ),
+        DomainPack(
             domain_id="window_management",
             label="Window Management",
             route_ids=tuple(route.route_id for route in window_routes),
@@ -496,7 +524,7 @@ def default_domain_registry(known_verifier_ids: tuple[str, ...]) -> DomainRegist
     )
     registry = DomainRegistry(
         packs=packs,
-        routes=apps_routes + window_routes + clipboard_routes + notification_routes + system_routes + browser_routes + media_routes,
+        routes=apps_routes + app_interaction_routes + window_routes + clipboard_routes + notification_routes + system_routes + browser_routes + media_routes,
         context_registry=default_context_registry(),
         known_verifier_ids=known_verifier_ids,
     )

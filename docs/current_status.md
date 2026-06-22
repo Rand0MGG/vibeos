@@ -1,6 +1,30 @@
 # VibeOS Current Status
 
-Last updated: 2026-06-09
+Last updated: 2026-06-21
+
+## In Progress
+
+- v0.8 foundation work has started:
+  - typed primary-understanding artifacts are now emitted on the planning path
+  - primary understanding now supports a bounded provider layer for first-pass task/chat/mixed/clarification/rejection analysis, while still preserving host-owned normalization and uncertainty metadata
+  - clarification generation now supports a bounded provider layer and persists clarification question metadata on the primary understanding artifact
+  - host-generated candidate sets and bounded route-decision artifacts are now emitted on the planning path, and route selection now supports bounded provider-driven choice among host-generated candidates
+  - goal synthesis now supports bounded provider-driven synthesis on top of host-owned analysis and capability/domain hints, while preserving `source_understanding_id` traceability
+  - host-owned goal-synthesis normalization now accepts compact provider shapes such as `type/domain_id/capability_id` and maps them back into bounded `goal_type/candidate_domain_ids/required_capability_ids`
+  - v0.6/v0.7 runtime strategy selection now emits structured `strategy_decision_id` artifacts with provider/model/fallback metadata
+  - the runtime now supports bounded strategy-selection providers so host-owned eligible candidates can be ranked or selected by a constrained provider instead of a hard-coded scorer only
+  - planning payloads, trace bundles, and audit records can now carry `understanding_id`, `candidate_set_id`, and `selected_route_decision_id`
+  - task-plan replanning now emits structured `replan_decision_id` artifacts, preserves `understanding_id` continuity on the real replanning path, and supports bounded provider-driven selection among host-generated replanning options
+  - when later planning analysis diverges from the earlier primary understanding, the runtime now emits explicit `UnderstandingRefinement` / `UnderstandingSupersession` artifacts instead of silently replacing the prior understanding basis
+  - run-scoped traces now record structured understanding-transition events with artifact ids, source artifact ids, primary-understanding linkage, and changed semantic fields
+  - task-plan acceptance now emits structured `semantic_summary_id` and `semantic_acceptance_decision_id` artifacts and supports bounded provider-driven semantic summary / decision stages on top of host-owned hard facts
+  - ambiguous deictic site requests such as `open that site we discussed yesterday` now stop in clarification instead of attempting execution
+  - the test harness now forces deterministic local providers by default so host-specific `.env` model configuration does not make WSL and Windows test results diverge
+  - run-scoped trace summaries now expose explicit model-usage accounting fields including `full_context_call_count`, `model_reparse_count`, `artifact_reuse_count`, `semantic_summary_cache_hit_count`, `escalation_count`, and `model_call_kinds`
+- v0.8 is not complete yet:
+  - goal synthesis, route selection, strategy selection, replanning, and semantic acceptance now have bounded provider hooks, but the default shipped behavior still runs on deterministic fallback in local tests rather than real model-backed providers
+  - clarification generation now has a bounded provider hook, but the default shipped behavior still runs on deterministic fallback in local tests rather than a real model-backed clarification provider
+  - primary understanding now has a bounded provider hook, but the default shipped behavior still runs on deterministic fallback in local tests rather than a real model-backed understanding provider
 
 ## Implemented
 
@@ -130,7 +154,7 @@ Expected current result:
 
 ```text
 overall: ok
-pytest: 227 passed
+pytest: 276 passed
 doctor: overall warn on Windows
 capabilities: ok
 L1 dry-run: ok
@@ -173,7 +197,7 @@ Observed current result:
 
 ```text
 python -m pytest tests/test_v06_agent_runtime.py -q -> 15 passed
-python -m pytest -q -> 227 passed
+python -m pytest -q -> 276 passed
 python scripts/verify_local.py -> overall ok
 python -m vibeos.cli doctor --json -> overall warn on Windows host, no failures
 python -m vibeos.cli ask "search web for hello" --json --offline --dry-run -> structured dry-run output with v0.6 goal_runtime, strategy_candidates, run_ledger, and passed verification evidence

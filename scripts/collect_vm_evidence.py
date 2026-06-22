@@ -168,6 +168,7 @@ def main() -> int:
     steps.append(run_json_step("audit_tail", cli("audit", "tail", "-n", "20"), env, validator=audit_tail_ok, category="audit"))
 
     summary = build_summary(steps)
+    diagnostics = collect_report_diagnostics(env, state_dir, include_extended=args.real or bool(summary["failed_steps"]) or bool(summary["blocked_steps"]))
 
     report = {
         "generated_at": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
@@ -176,6 +177,7 @@ def main() -> int:
         "overall": "ok" if not summary["failed_steps"] and not summary["blocked_steps"] else "fail",
         "summary": summary,
         "steps": steps,
+        "diagnostics": diagnostics,
     }
     path = out_dir / f"vibeos_vm_evidence_{run_slug}.json"
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -261,8 +263,21 @@ def collect_real_action_evidence(steps: list[dict[str, Any]], env: dict[str, str
                 depends_on=["real_clipboard_review_required"],
             )
         )
+        steps.append(
+            run_json_step(
+                "real_clipboard_reapprove_rejected",
+                cli("approve", clipboard_review_id, "--json"),
+                env,
+                expected_status="rejected",
+                expected_returncodes={1},
+                validator=command_transport_ok,
+                category="real_action",
+                depends_on=["real_clipboard_approve"],
+            )
+        )
     else:
         steps.append(blocked_step("real_clipboard_approve", "missing review_id from real_clipboard_review_required", depends_on=["real_clipboard_review_required"], category="real_action"))
+        steps.append(blocked_step("real_clipboard_reapprove_rejected", "missing review_id from real_clipboard_review_required", depends_on=["real_clipboard_approve"], category="real_action"))
 
     uri_review = run_json_step(
         "real_open_uri_review_required",
@@ -287,8 +302,21 @@ def collect_real_action_evidence(steps: list[dict[str, Any]], env: dict[str, str
                 depends_on=["real_open_uri_review_required"],
             )
         )
+        steps.append(
+            run_json_step(
+                "real_open_uri_reapprove_rejected",
+                cli("approve", uri_review_id, "--json"),
+                env,
+                expected_status="rejected",
+                expected_returncodes={1},
+                validator=command_transport_ok,
+                category="real_action",
+                depends_on=["real_open_uri_approve"],
+            )
+        )
     else:
         steps.append(blocked_step("real_open_uri_approve", "missing review_id from real_open_uri_review_required", depends_on=["real_open_uri_review_required"], category="real_action"))
+        steps.append(blocked_step("real_open_uri_reapprove_rejected", "missing review_id from real_open_uri_review_required", depends_on=["real_open_uri_approve"], category="real_action"))
 
 
 def collect_real_daemon_evidence(env: dict[str, str]) -> list[dict[str, Any]]:
@@ -361,7 +389,8 @@ def run_json_step(
         ok = ok and isinstance(parsed, dict) and parsed.get("status") == expected_status
     if validator is not None:
         ok = ok and bool(validator(parsed))
-    return annotate_step(
+    return enrich_step_context(
+        annotate_step(
         {
         "name": name,
         "ok": ok,
@@ -373,6 +402,8 @@ def run_json_step(
         },
         category=category,
         depends_on=depends_on,
+        ),
+        env,
     )
 
 
@@ -391,7 +422,8 @@ def run_text_step(
     ok = completed.returncode in expected_returncodes
     if validator is not None:
         ok = ok and bool(validator(stdout))
-    return annotate_step(
+    return enrich_step_context(
+        annotate_step(
         {
         "name": name,
         "ok": ok,
@@ -403,6 +435,8 @@ def run_text_step(
         },
         category=category,
         depends_on=depends_on,
+        ),
+        env,
     )
 
 
@@ -426,7 +460,8 @@ def run_json_text_step(
     ok = completed.returncode in expected_returncodes and parsed is not None
     if validator is not None:
         ok = ok and bool(validator(parsed))
-    return annotate_step(
+    return enrich_step_context(
+        annotate_step(
         {
         "name": name,
         "ok": ok,
@@ -438,6 +473,8 @@ def run_json_text_step(
         },
         category=category,
         depends_on=depends_on,
+        ),
+        env,
     )
 
 
@@ -452,7 +489,8 @@ def run_value_step(
     try:
         parsed = producer()
     except Exception as exc:
-        return annotate_step(
+        return enrich_step_context(
+            annotate_step(
             {
                 "name": name,
                 "ok": False,
@@ -465,9 +503,12 @@ def run_value_step(
             },
             category=category,
             depends_on=depends_on,
+            ),
+            None,
         )
     ok = validator(parsed) if validator is not None else True
-    return annotate_step(
+    return enrich_step_context(
+        annotate_step(
         {
             "name": name,
             "ok": bool(ok),
@@ -480,6 +521,8 @@ def run_value_step(
         },
         category=category,
         depends_on=depends_on,
+        ),
+        None,
     )
 
 
@@ -543,6 +586,12 @@ def parse_gdbus_json(value: str) -> Any:
 def extract_review_id(value: Any) -> str | None:
     if isinstance(value, dict) and value.get("review_id"):
         return str(value["review_id"])
+    return None
+
+
+def extract_trace_run_id(value: Any) -> str | None:
+    if isinstance(value, dict) and value.get("trace_run_id"):
+        return str(value["trace_run_id"])
     return None
 
 
@@ -659,6 +708,246 @@ def blocked_step(name: str, message: str, *, depends_on: list[str] | None = None
         category=category,
         depends_on=depends_on,
     )
+
+
+def enrich_step_context(step: dict[str, Any], env: dict[str, str] | None) -> dict[str, Any]:
+    parsed = step.get("parsed")
+    if isinstance(parsed, dict):
+        summary = compact_command_result(parsed)
+        if summary:
+            step["result_summary"] = summary
+        trace_run_id = extract_trace_run_id(parsed)
+        if trace_run_id and env is not None:
+            step["trace"] = collect_trace_artifacts(trace_run_id, env)
+        review_id = extract_review_id(parsed)
+        if review_id:
+            step["review_id"] = review_id
+        if trace_run_id:
+            step["trace_run_id"] = trace_run_id
+    return step
+
+
+def compact_command_result(value: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    for key in (
+        "status",
+        "transport",
+        "review_id",
+        "trace_run_id",
+        "audit_id",
+        "execution_status",
+        "acceptance_status",
+        "overall_status",
+        "message",
+        "selected_target",
+    ):
+        if key in value and value.get(key) is not None:
+            summary[key] = value.get(key)
+    result = value.get("result")
+    if isinstance(result, dict):
+        run_payload = result.get("run")
+        if isinstance(run_payload, dict):
+            summary["run"] = {
+                key: run_payload.get(key)
+                for key in ("run_id", "goal_id", "status", "final_outcome")
+                if run_payload.get(key) is not None
+            }
+        plan_review = result.get("plan_review")
+        if isinstance(plan_review, dict):
+            summary["plan_review"] = {
+                key: plan_review.get(key)
+                for key in ("status", "review_id", "message")
+                if plan_review.get(key) is not None
+            }
+    return summary
+
+
+def collect_trace_artifacts(run_id: str, env: dict[str, str]) -> dict[str, Any]:
+    show = capture_json_command(cli("trace", "show", run_id, "--json"), env)
+    events = capture_json_command(cli("trace", "events", run_id, "--json"), env)
+    model = capture_json_command(cli("trace", "model", run_id, "--json"), env)
+    payload: dict[str, Any] = {"run_id": run_id}
+    if show.get("parsed") is not None:
+        payload["summary"] = trim_trace_summary(show["parsed"])
+    if isinstance(events.get("parsed"), list):
+        payload["events_tail"] = events["parsed"][-12:]
+    if isinstance(model.get("parsed"), list):
+        payload["model_io_tail"] = model["parsed"][-8:]
+    return payload
+
+
+def collect_report_diagnostics(env: dict[str, str], state_dir: Path | None, *, include_extended: bool) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {
+        "state_files": collect_state_diagnostics(state_dir),
+        "trace_latest": capture_json_command(cli("trace", "latest", "--json"), env),
+    }
+    if not include_extended:
+        return diagnostics
+    diagnostics.update(
+        {
+            "doctor": capture_json_command(cli("doctor", "--json"), env),
+            "session_status_script": capture_text_command(status_script_command(), env),
+            "systemd_vibed_cat": capture_text_command(["systemctl", "--user", "cat", "vibed.service", "--no-pager"], env),
+            "systemd_vibed_status": capture_text_command(["systemctl", "--user", "status", "vibed.service", "--no-pager", "-l"], env),
+            "journal_vibed_tail": capture_text_command(["journalctl", "--user", "-u", "vibed.service", "-n", "120", "--no-pager"], env),
+            "dbus_agent_status": capture_json_text_command(
+                [
+                    "gdbus",
+                    "call",
+                    "--session",
+                    "--dest",
+                    "org.vibeos.Agent",
+                    "--object-path",
+                    "/org/vibeos/Agent",
+                    "--method",
+                    "org.vibeos.Agent.Status",
+                ],
+                env,
+                parser=parse_gdbus_json,
+            ),
+            "http_daemon_status": capture_value(fetch_http_json, "http://127.0.0.1:8765/v1/status"),
+            "gnome_extension_info": capture_text_command(["gnome-extensions", "info", "vibeos@local"], env),
+            "shell_bridge_windows": capture_text_command(
+                [
+                    "gdbus",
+                    "call",
+                    "--session",
+                    "--dest",
+                    "org.vibeos.Shell",
+                    "--object-path",
+                    "/org/vibeos/Shell",
+                    "--method",
+                    "org.vibeos.Shell.ListWindows",
+                ],
+                env,
+            ),
+        }
+    )
+    return diagnostics
+
+
+def collect_state_diagnostics(state_dir: Path | None) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {}
+    if state_dir is None:
+        return diagnostics
+    diagnostics["state_dir"] = str(state_dir)
+    diagnostics["audit_tail"] = read_jsonl_tail(state_dir / "audit.jsonl", count=20)
+    diagnostics["reviews_tail"] = read_jsonl_tail(state_dir / "reviews.jsonl", count=20)
+    diagnostics["run_summaries"] = collect_run_summaries(state_dir / "runs")
+    return diagnostics
+
+
+def collect_run_summaries(runs_root: Path) -> list[dict[str, Any]]:
+    if not runs_root.exists():
+        return []
+    summaries: list[dict[str, Any]] = []
+    for path in sorted(runs_root.rglob("summary.json"), key=lambda item: item.stat().st_mtime, reverse=True)[:10]:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        payload["path"] = str(path)
+        summaries.append(trim_trace_summary(payload))
+    return summaries
+
+
+def trim_trace_summary(payload: Any) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    summary = payload.get("summary")
+    if isinstance(summary, dict):
+        payload = summary
+    return {
+        key: payload.get(key)
+        for key in (
+            "run_id",
+            "goal_id",
+            "review_id",
+            "plan_id",
+            "status",
+            "overall_status",
+            "message",
+            "selected_strategy_id",
+            "selected_target",
+            "started_at",
+            "ended_at",
+            "event_count",
+            "model_io_count",
+            "run_dir",
+            "path",
+        )
+        if payload.get(key) is not None
+    }
+
+
+def capture_json_command(command: list[str], env: dict[str, str]) -> dict[str, Any]:
+    completed = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+    return {
+        "command": command,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "parsed": parse_json(completed.stdout),
+    }
+
+
+def capture_text_command(command: list[str], env: dict[str, str]) -> dict[str, Any]:
+    try:
+        completed = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+        return {
+            "command": command,
+            "returncode": completed.returncode,
+            "stdout": completed.stdout,
+            "stderr": completed.stderr,
+        }
+    except OSError as exc:
+        return {"command": command, "returncode": None, "stdout": "", "stderr": str(exc)}
+
+
+def capture_json_text_command(command: list[str], env: dict[str, str], parser) -> dict[str, Any]:
+    try:
+        completed = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+    except OSError as exc:
+        return {"command": command, "returncode": None, "stdout": "", "stderr": str(exc), "parsed": None}
+    try:
+        parsed = parser(completed.stdout)
+    except ValueError:
+        parsed = None
+    return {
+        "command": command,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "parsed": parsed,
+    }
+
+
+def capture_value(producer, *args) -> dict[str, Any]:
+    try:
+        parsed = producer(*args)
+        return {"parsed": parsed, "stdout": json.dumps(parsed, ensure_ascii=False), "stderr": "", "returncode": 0}
+    except Exception as exc:
+        return {"parsed": None, "stdout": "", "stderr": str(exc), "returncode": None}
+
+
+def read_jsonl_tail(path: Path, *, count: int) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except OSError:
+        return []
+    tail: list[dict[str, Any]] = []
+    for line in lines[-count:]:
+        try:
+            tail.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return tail
+
+
+def status_script_command() -> list[str]:
+    return ["bash", str(ROOT / "scripts" / "status_linux_session.sh")]
 
 
 def annotate_step(step: dict[str, Any], *, category: str, depends_on: list[str] | None = None) -> dict[str, Any]:

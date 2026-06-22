@@ -10,6 +10,7 @@ from typing import Any
 
 from .audit import default_audit_path
 from .models import Intent, PermissionReview, ReviewRequest, utc_now_iso
+from .task_trace import record_trace_event
 from .task_models import StepReviewRecord, TaskPlanReviewResult
 
 DEFAULT_REVIEW_TTL_SECONDS = 600
@@ -55,6 +56,14 @@ class ReviewStore:
             expires_at=expires_at,
         )
         self._append({"event": "created", **review_to_payload(request)})
+        record_trace_event(
+            phase="review",
+            event_type="review_created",
+            status="pending",
+            actor="review_store",
+            review_id=review_id,
+            data=review_to_payload(request),
+        )
         return request
 
     def create_plan_review(self, utterance: str, plan_payload: dict[str, Any], plan_review: TaskPlanReviewResult) -> ReviewRequest:
@@ -86,6 +95,15 @@ class ReviewStore:
             layer="permission_review",
         )
         self._append({"event": "created", **review_to_payload(request)})
+        record_trace_event(
+            phase="review",
+            event_type="review_created",
+            status="pending",
+            actor="review_store",
+            plan_id=plan_review.plan_id,
+            review_id=review_id,
+            data=review_to_payload(request),
+        )
         return request
 
     def approve(self, review_id: str) -> ReviewRequest | None:
@@ -93,6 +111,15 @@ class ReviewStore:
         if not request or request.status != "pending":
             return request
         self._append({"event": "approved", "review_id": review_id, "timestamp": utc_now_iso()})
+        record_trace_event(
+            phase="review",
+            event_type="review_approved",
+            status="approved",
+            actor="review_store",
+            plan_id=request.plan_id,
+            review_id=review_id,
+            data={"utterance": request.utterance, "review_kind": request.review_kind},
+        )
         return ReviewRequest(
             review_id=request.review_id,
             utterance=request.utterance,
@@ -113,6 +140,15 @@ class ReviewStore:
         if not request or request.status != "pending":
             return request
         self._append({"event": "rejected", "review_id": review_id, "timestamp": utc_now_iso()})
+        record_trace_event(
+            phase="review",
+            event_type="review_rejected",
+            status="rejected",
+            actor="review_store",
+            plan_id=request.plan_id,
+            review_id=review_id,
+            data={"utterance": request.utterance, "review_kind": request.review_kind},
+        )
         return ReviewRequest(
             review_id=request.review_id,
             utterance=request.utterance,
@@ -133,6 +169,15 @@ class ReviewStore:
         if not request or request.status != "approved":
             return request
         self._append({"event": "consumed", "review_id": review_id, "timestamp": utc_now_iso()})
+        record_trace_event(
+            phase="review",
+            event_type="review_consumed",
+            status="consumed",
+            actor="review_store",
+            plan_id=request.plan_id,
+            review_id=review_id,
+            data={"utterance": request.utterance, "review_kind": request.review_kind},
+        )
         return ReviewRequest(
             review_id=request.review_id,
             utterance=request.utterance,

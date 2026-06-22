@@ -13,7 +13,12 @@ def route_domains(
     if analysis.type not in {"task", "mixed", "clarification"}:
         return None
 
-    active_candidates = candidate_domain_ids or tuple(domain_id for domain_id in analysis.domains if registry.get_pack(domain_id) is not None)
+    raw_candidates = candidate_domain_ids or analysis.domains
+    active_candidates = tuple(
+        domain_id
+        for domain_id in raw_candidates
+        if registry.get_pack(domain_id) is not None
+    )
     if not active_candidates and analysis.type == "clarification":
         active_candidates = ("media",)
     if not active_candidates:

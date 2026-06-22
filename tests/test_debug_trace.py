@@ -14,4 +14,5 @@ def test_debug_trace_exposes_raw_provider_output_only_with_debug_flag() -> None:
     exchange = payload["debug_trace"]["model_exchange"][0]
 
     assert exchange["raw_output"]
-    assert exchange["provider_name"] == "rule_goal_synthesizer"
+    assert exchange["provider_name"] == "local"
+    assert exchange["fallback_used"] is True

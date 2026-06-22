@@ -71,6 +71,7 @@ class CommandResult:
     intent: Intent
     result: Any = None
     selected_target: str | None = None
+    trace_run_id: str | None = None
     audit_id: str | None = None
     review_id: str | None = None
     transport: str | None = None

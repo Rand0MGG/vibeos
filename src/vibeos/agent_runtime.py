@@ -7,7 +7,7 @@ from typing import Any, Literal
 from .assistant_semantics import INTERACTION_SURFACES, InteractionSurface, assistant_intent_to_payload
 from .goal_models import GoalSpec
 from .run_ledger import AttemptLedgerEntry, RunLedger
-from .strategy import RecoveryPolicy, StrategyCandidate, StrategyConstraint
+from .strategy import RecoveryPolicy, StrategyCandidate, StrategyConstraint, make_strategy_decision_id
 from .tool_protocol import ToolExecutionContext, ToolInvocationEnvelope, ToolRegistry, ToolResult
 
 
@@ -167,6 +167,7 @@ class AgentRuntime:
             prior_attempts = tuple(item for item in ledger.attempts if item.turn_id == turn_id)
             previous_failure = prior_attempts[-1].failure_class if prior_attempts else "none"
             decision = self.recovery_policy.select_strategy(
+                utterance=utterance,
                 strategies=strategies,
                 constraints=constraints,
                 environment=environment,
@@ -300,6 +301,7 @@ class AgentRuntime:
         goal_runtime = replace(goal_runtime, turn_ids=(*goal_runtime.turn_ids, turn_id), current_strategy_id=selected_strategy_id)
         session.goals[goal_id] = goal_runtime
         selected_decision = self.recovery_policy.select_strategy(
+            utterance=utterance,
             strategies=strategies,
             constraints=StrategyConstraint(),
             environment=EnvironmentProfile(
@@ -316,7 +318,18 @@ class AgentRuntime:
             last_failure_class="none",
         )
         if selected_decision.selected_strategy_id != selected_strategy_id:
-            selected_decision = replace(selected_decision, selected_strategy_id=selected_strategy_id, reason=reason)
+            selected_decision = replace(
+                selected_decision,
+                selected_strategy_id=selected_strategy_id,
+                reason=reason,
+                strategy_decision_id=make_strategy_decision_id(
+                    selected_decision.action,
+                    selected_strategy_id,
+                    reason,
+                    provider_name=selected_decision.provider_name,
+                    model_name=selected_decision.model_name,
+                ),
+            )
         ledger = ledger.append_strategy_decision(selected_decision, turn_id=turn_id)
         terminal = TerminalOutcome(status=terminal_status, reason=reason, failure_class="permission_blocked" if terminal_status == "needs_review" else "unsupported_request", verifier_confirmed=False)
         goal_runtime = replace(goal_runtime, status=terminal.status, terminal_outcome=terminal)
@@ -350,6 +363,12 @@ class AgentRuntime:
         verification_records: list[VerificationEvidence] = []
         saw_observer = False
         saw_verifier = False
+        semantic_refs = {
+            "understanding_id": _metadata_string(strategy.metadata, "understanding_id"),
+            "candidate_set_id": _metadata_string(strategy.metadata, "candidate_set_id"),
+            "route_decision_id": _metadata_string(strategy.metadata, "route_decision_id"),
+        }
+        step_safety_review_ids = _metadata_tuple_strings(strategy.metadata, "step_safety_review_ids")
 
         for step in strategy.steps:
             context = ToolExecutionContext(
@@ -411,6 +430,10 @@ class AgentRuntime:
                     task_plan_id=strategy.task_plan.plan_id,
                     capability_surface=strategy.capability_surface,
                     interaction_surface=strategy.interaction_surface,
+                    understanding_id=semantic_refs["understanding_id"],
+                    candidate_set_id=semantic_refs["candidate_set_id"],
+                    route_decision_id=semantic_refs["route_decision_id"],
+                    step_safety_review_ids=step_safety_review_ids,
                     tool_invocations=tuple(envelopes),
                     evidence=tuple(evidence),
                     outcome_status=outcome_status,
@@ -430,6 +453,10 @@ class AgentRuntime:
                 task_plan_id=strategy.task_plan.plan_id,
                 capability_surface=strategy.capability_surface,
                 interaction_surface=strategy.interaction_surface,
+                understanding_id=semantic_refs["understanding_id"],
+                candidate_set_id=semantic_refs["candidate_set_id"],
+                route_decision_id=semantic_refs["route_decision_id"],
+                step_safety_review_ids=step_safety_review_ids,
                 tool_invocations=tuple(envelopes),
                 evidence=tuple(evidence),
                 outcome_status="completed",
@@ -448,6 +475,10 @@ class AgentRuntime:
                 task_plan_id=strategy.task_plan.plan_id,
                 capability_surface=strategy.capability_surface,
                 interaction_surface=strategy.interaction_surface,
+                understanding_id=semantic_refs["understanding_id"],
+                candidate_set_id=semantic_refs["candidate_set_id"],
+                route_decision_id=semantic_refs["route_decision_id"],
+                step_safety_review_ids=step_safety_review_ids,
                 tool_invocations=tuple(envelopes),
                 evidence=tuple(evidence),
                 outcome_status="completed",
@@ -466,6 +497,10 @@ class AgentRuntime:
                 task_plan_id=strategy.task_plan.plan_id,
                 capability_surface=strategy.capability_surface,
                 interaction_surface=strategy.interaction_surface,
+                understanding_id=semantic_refs["understanding_id"],
+                candidate_set_id=semantic_refs["candidate_set_id"],
+                route_decision_id=semantic_refs["route_decision_id"],
+                step_safety_review_ids=step_safety_review_ids,
                 tool_invocations=tuple(envelopes),
                 evidence=tuple(evidence),
                 outcome_status="incomplete",
@@ -483,6 +518,10 @@ class AgentRuntime:
             task_plan_id=strategy.task_plan.plan_id,
             capability_surface=strategy.capability_surface,
             interaction_surface=strategy.interaction_surface,
+            understanding_id=semantic_refs["understanding_id"],
+            candidate_set_id=semantic_refs["candidate_set_id"],
+            route_decision_id=semantic_refs["route_decision_id"],
+            step_safety_review_ids=step_safety_review_ids,
             tool_invocations=tuple(envelopes),
             evidence=tuple(evidence),
             outcome_status="failed",
@@ -529,15 +568,31 @@ class AgentRuntime:
             ],
             "recovery_decisions": [
                 {
+                    "strategy_decision_id": entry.strategy_decision_id,
                     "action": entry.action,
                     "strategy_id": entry.strategy_id,
                     "reason": entry.reason,
                     "failure_class": entry.failure_class,
+                    "provider_name": entry.provider_name,
+                    "model_name": entry.model_name,
+                    "fallback_used": entry.fallback_used,
+                    "error": entry.error,
                 }
                 for entry in ledger.strategy_history
                 if entry.turn_id == turn.turn_id
             ],
-            "provider_artifacts": [],
+            "provider_artifacts": [
+                {
+                    "strategy_decision_id": entry.strategy_decision_id,
+                    "provider_name": entry.provider_name,
+                    "model_name": entry.model_name,
+                    "parse_valid": entry.parse_valid,
+                    "fallback_used": entry.fallback_used,
+                    "error": entry.error,
+                }
+                for entry in ledger.strategy_history
+                if entry.turn_id == turn.turn_id
+            ],
             "assistant_intent": assistant_intent_to_payload(goal_runtime.goal_spec.assistant_intent),
         }
 
@@ -554,3 +609,17 @@ def _terminal_payload(outcome: TerminalOutcome) -> dict[str, Any]:
         "failure_class": outcome.failure_class,
         "verifier_confirmed": outcome.verifier_confirmed,
     }
+
+
+def _metadata_string(metadata: dict[str, object], key: str) -> str | None:
+    value = metadata.get(key)
+    if value is None:
+        return None
+    return str(value)
+
+
+def _metadata_tuple_strings(metadata: dict[str, object], key: str) -> tuple[str, ...]:
+    value = metadata.get(key)
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item) for item in value if item is not None)

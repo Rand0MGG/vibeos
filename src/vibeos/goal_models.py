@@ -33,6 +33,7 @@ class GoalSpec:
     goal_id: str
     goal_text: str
     goal_type: str
+    source_understanding_id: str | None = None
     subgoals: tuple[GoalSubgoal, ...] = ()
     candidate_domain_ids: tuple[str, ...] = ()
     required_capability_ids: tuple[str, ...] = ()

@@ -15,14 +15,14 @@ class FailureClassifier:
                 return FailureClassification(
                     failure_class="acceptance_unverified",
                     message=self._acceptance_message(execution) or "execution succeeded but acceptance evidence is incomplete",
-                    replannable=False,
+                    replannable=True,
                     details={"acceptance_status": execution.acceptance_status},
                 )
             if execution.acceptance_status == "failed":
                 return FailureClassification(
                     failure_class="acceptance_failed",
                     message=self._acceptance_message(execution) or "execution succeeded but acceptance failed",
-                    replannable=False,
+                    replannable=True,
                     details={"acceptance_status": execution.acceptance_status},
                 )
             return FailureClassification(failure_class="none", message="execution completed")

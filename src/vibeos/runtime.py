@@ -466,6 +466,7 @@ def command_result_from_payload(payload: dict[str, Any]) -> CommandResult:
         ),
         result=payload.get("result"),
         selected_target=str(payload["selected_target"]) if payload.get("selected_target") is not None else None,
+        trace_run_id=str(payload["trace_run_id"]) if payload.get("trace_run_id") is not None else None,
         audit_id=str(payload["audit_id"]) if payload.get("audit_id") is not None else None,
         review_id=str(payload["review_id"]) if payload.get("review_id") is not None else None,
         transport=str(payload["transport"]) if payload.get("transport") is not None else None,

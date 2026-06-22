@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from hashlib import sha256
-import re
+import json
+import urllib.error
+from typing import Any
 
 from .assistant_semantics import (
     AssistantCompletionSemantics,
@@ -13,24 +15,47 @@ from .assistant_semantics import (
 )
 from .capabilities import CAPABILITIES
 from .goal_models import GoalSpec, GoalSubgoal, GoalSynthesisProvenance, GoalSynthesisResult, ProviderExchange
-from .intent import IntentBroker, RuleIntentBroker, extract_open_target, infer_browser_intent_from_open_request, normalize_bare_domain_uri
+from .intent import (
+    WEB_NAMED_TARGET_HINTS,
+    IntentBroker,
+    RuleIntentBroker,
+    extract_app_history_search_target,
+    extract_open_target,
+    infer_browser_intent_from_open_request,
+    normalize_bare_domain_uri,
+)
+from .provider_client import env_flag_enabled, load_openai_compatible_provider_config, request_json_object
+from .task_trace import record_model_io
 from .nlu import domain_for_action
 from .task_models import TaskSpan, UtteranceAnalysis
 
 
-APP_HISTORY_SEARCH_RE = re.compile(
-    r"^search\s+(?:(?P<scope>chat history)\s+)?in\s+(?P<app>.+?)\s+for\s+(?P<query>.+)$",
-    re.IGNORECASE,
-)
+GOAL_SYNTHESIS_SYSTEM_PROMPT = """You are VibeOS's bounded goal synthesizer.
+Synthesize one structured goal object from the provided utterance, analysis, and host hints.
+You must stay within host-owned candidate domains and capability boundaries.
+Do not invent a new capability, route, tool, or authority outside the provided host hints.
+Return JSON only."""
 
 
 class GoalSynthesisProvider:
     provider_name = "provider"
     provider_version = "v0"
     model_name = "structured"
+    _last_parse_valid = True
+    _last_fallback_used = False
+    _last_error: str | None = None
+    _last_raw_output = ""
 
     def synthesize(self, utterance: str, analysis: UtteranceAnalysis) -> dict[str, object]:
         raise NotImplementedError
+
+    def response_metadata(self) -> dict[str, object]:
+        return {
+            "parse_valid": self._last_parse_valid,
+            "fallback_used": self._last_fallback_used,
+            "error": self._last_error,
+            "raw_output": self._last_raw_output,
+        }
 
 
 class RuleBasedGoalSynthesisProvider(GoalSynthesisProvider):
@@ -42,9 +67,12 @@ class RuleBasedGoalSynthesisProvider(GoalSynthesisProvider):
         self.intent_broker = intent_broker or RuleIntentBroker()
 
     def synthesize(self, utterance: str, analysis: UtteranceAnalysis) -> dict[str, object]:
-        synthesized_assistant_intent = synthesize_assistant_intent(utterance, analysis)
+        self._last_parse_valid = True
+        self._last_fallback_used = False
+        self._last_error = None
+        synthesized_assistant_intent = synthesize_assistant_intent(utterance, analysis, self.intent_broker)
         if synthesized_assistant_intent is not None and synthesized_assistant_intent.objective_kind == "in_app_search":
-            return {
+            output = {
                 "status": "ready",
                 "goal_type": "app_search_history",
                 "candidate_domain_ids": ["app_interaction"],
@@ -66,9 +94,11 @@ class RuleBasedGoalSynthesisProvider(GoalSynthesisProvider):
                 ],
                 "message": "goal synthesis completed",
             }
+            self._last_raw_output = str(output)
+            return output
 
         if analysis.type == "clarification":
-            return {
+            output = {
                 "status": "clarification_needed",
                 "goal_type": "clarification",
                 "candidate_domain_ids": list(analysis.domains),
@@ -82,11 +112,13 @@ class RuleBasedGoalSynthesisProvider(GoalSynthesisProvider):
                 "subgoals": [],
                 "message": analysis.explanation or "clarification required",
             }
+            self._last_raw_output = str(output)
+            return output
 
         if analysis.type == "rejected":
             missing_capabilities = infer_missing_capabilities(utterance)
             status = "missing_capability" if missing_capabilities else "unsupported"
-            return {
+            output = {
                 "status": status,
                 "goal_type": "unsupported",
                 "candidate_domain_ids": [],
@@ -100,6 +132,8 @@ class RuleBasedGoalSynthesisProvider(GoalSynthesisProvider):
                 "subgoals": [],
                 "message": analysis.explanation or "request is outside the registered capability surface",
             }
+            self._last_raw_output = str(output)
+            return output
 
         spans = analysis.task_spans or (
             TaskSpan(
@@ -137,7 +171,7 @@ class RuleBasedGoalSynthesisProvider(GoalSynthesisProvider):
 
         if not candidate_domain_ids:
             missing_capabilities = infer_missing_capabilities(utterance)
-            return {
+            output = {
                 "status": "missing_capability" if missing_capabilities else "unsupported",
                 "goal_type": "unsupported",
                 "candidate_domain_ids": [],
@@ -150,13 +184,15 @@ class RuleBasedGoalSynthesisProvider(GoalSynthesisProvider):
                 "subgoals": subgoals,
                 "message": "no registered domain can satisfy the request",
             }
+            self._last_raw_output = str(output)
+            return output
 
         if analysis.type == "mixed":
             assumptions.append("Conversational context was separated from the executable subgoal.")
         if analysis.type == "task" and not required_capability_ids:
             assumptions.append("No direct single capability was committed during synthesis; route builders will refine the executable step.")
 
-        return {
+        output = {
             "status": "ready",
             "goal_type": goal_type_for_analysis(candidate_domain_ids, required_capability_ids),
             "candidate_domain_ids": candidate_domain_ids,
@@ -170,22 +206,81 @@ class RuleBasedGoalSynthesisProvider(GoalSynthesisProvider):
             "subgoals": subgoals,
             "message": "goal synthesis completed",
         }
+        self._last_raw_output = str(output)
+        return output
+
+
+class OpenAICompatibleGoalSynthesisProvider(GoalSynthesisProvider):
+    provider_version = "v0.8"
+
+    def __init__(self, intent_broker: IntentBroker | None = None, fallback: GoalSynthesisProvider | None = None) -> None:
+        self.intent_broker = intent_broker or RuleIntentBroker()
+        self.fallback = fallback or RuleBasedGoalSynthesisProvider(self.intent_broker)
+        self.config = load_openai_compatible_provider_config()
+        self.provider_name = self.config.provider_name
+        self.model_name = self.config.model_name or "unknown-model"
+
+    def synthesize(self, utterance: str, analysis: UtteranceAnalysis) -> dict[str, object]:
+        if not self.config.configured or not model_guidance_enabled("VIBEOS_ENABLE_MODEL_GOAL_SYNTHESIS"):
+            return self._fallback(utterance, analysis, error="missing_api_key_or_model_or_guidance_disabled")
+
+        host_hint = build_goal_synthesis_boundary_hint(utterance=utterance, analysis=analysis, intent_broker=self.intent_broker)
+        request_payload = build_goal_synthesis_request_payload(utterance=utterance, analysis=analysis, host_hint=host_hint)
+        try:
+            response = request_json_object(
+                config=self.config,
+                system_prompt=GOAL_SYNTHESIS_SYSTEM_PROMPT,
+                user_content=json.dumps(request_payload, ensure_ascii=False),
+                max_tokens=768,
+            )
+            parsed = response.parsed_object
+            validated = validate_goal_synthesis_payload(parsed, host_hint=host_hint)
+            self._last_parse_valid = True
+            self._last_fallback_used = False
+            self._last_error = None
+            self._last_raw_output = json.dumps(response.response_payload, ensure_ascii=False)
+            return validated
+        except (urllib.error.URLError, TimeoutError, KeyError, ValueError, json.JSONDecodeError) as exc:
+            return self._fallback(utterance, analysis, error=str(exc))
+
+    def _fallback(self, utterance: str, analysis: UtteranceAnalysis, *, error: str) -> dict[str, object]:
+        payload = self.fallback.synthesize(utterance, analysis)
+        self._last_parse_valid = False
+        self._last_fallback_used = True
+        self._last_error = error
+        self._last_raw_output = str(payload)
+        return payload
 
 
 class GoalSynthesizer:
     def __init__(self, provider: GoalSynthesisProvider | None = None) -> None:
-        self.provider = provider or RuleBasedGoalSynthesisProvider()
+        self.provider = provider or OpenAICompatibleGoalSynthesisProvider()
 
-    def synthesize(self, utterance: str, analysis: UtteranceAnalysis) -> GoalSynthesisResult:
+    def synthesize(self, utterance: str, analysis: UtteranceAnalysis, *, understanding_id: str | None = None) -> GoalSynthesisResult:
         normalized = self.provider.synthesize(utterance, analysis)
+        metadata = self.provider.response_metadata()
         exchange = ProviderExchange(
             provider_name=self.provider.provider_name,
             model_name=self.provider.model_name,
             normalized_output=normalized,
-            raw_output=str(normalized),
-            parse_valid=True,
-            fallback_used=False,
-            error=None,
+            raw_output=str(metadata.get("raw_output", str(normalized))),
+            parse_valid=bool(metadata.get("parse_valid", True)),
+            fallback_used=bool(metadata.get("fallback_used", False)),
+            error=str(metadata.get("error")) if metadata.get("error") is not None else None,
+        )
+        record_model_io(
+            phase="goal_synthesis",
+            provider=exchange.provider_name,
+            model=exchange.model_name,
+            request_payload={"utterance": utterance, "analysis": asdict(analysis)},
+            response_payload={"raw_output": exchange.raw_output},
+            normalized_output=exchange.normalized_output,
+            parse_valid=exchange.parse_valid,
+            fallback_used=exchange.fallback_used,
+            error=exchange.error,
+            actor="goal_synthesizer",
+            call_kind="structured_followup",
+            consumed_artifacts={"understanding_id": understanding_id},
         )
         try:
             status = str(normalized.get("status", "unsupported"))
@@ -204,6 +299,7 @@ class GoalSynthesizer:
                 goal_id=make_goal_id(utterance, status, goal_type),
                 goal_text=utterance.strip(),
                 goal_type=goal_type,
+                source_understanding_id=understanding_id,
                 subgoals=subgoals,
                 candidate_domain_ids=tuple(str(item) for item in normalized.get("candidate_domain_ids", ())),
                 required_capability_ids=tuple(str(item) for item in normalized.get("required_capability_ids", ())),
@@ -217,9 +313,9 @@ class GoalSynthesizer:
                     provider_name=self.provider.provider_name,
                     provider_version=self.provider.provider_version,
                     model_name=self.provider.model_name,
-                    fallback_used=False,
-                    parse_valid=True,
-                    error=None,
+                    fallback_used=exchange.fallback_used,
+                    parse_valid=exchange.parse_valid,
+                    error=exchange.error,
                 ),
             )
             return GoalSynthesisResult(
@@ -233,6 +329,20 @@ class GoalSynthesizer:
                 "status": "unsupported",
                 "message": f"goal synthesis payload validation failed: {exc}",
             }
+            record_model_io(
+                phase="goal_synthesis",
+                provider=self.provider.provider_name,
+                model=self.provider.model_name,
+                request_payload={"utterance": utterance, "analysis": asdict(analysis)},
+                response_payload={"raw_output": str(normalized)},
+                normalized_output=fallback,
+                parse_valid=False,
+                fallback_used=True,
+                error=str(exc),
+                actor="goal_synthesizer",
+                call_kind="structured_followup",
+                consumed_artifacts={"understanding_id": understanding_id},
+            )
             return GoalSynthesisResult(
                 status="unsupported",
                 goal_spec=None,
@@ -263,9 +373,6 @@ def infer_action_for_span(span: TaskSpan, intent_broker: IntentBroker) -> str:
         if "pause" in lowered:
             return "media.pause"
         return "media.play"
-    intent = RuleIntentBroker().parse(span.text)
-    if intent.action != "unknown":
-        return intent.action
     intent = intent_broker.parse(span.text)
     return intent.action
 
@@ -304,52 +411,38 @@ def make_goal_id(utterance: str, status: str, goal_type: str) -> str:
     return f"goal_{digest}"
 
 
-def synthesize_assistant_intent(utterance: str, analysis: UtteranceAnalysis) -> AssistantIntent | None:
+def synthesize_assistant_intent(
+    utterance: str,
+    analysis: UtteranceAnalysis,
+    intent_broker: IntentBroker | None = None,
+) -> AssistantIntent | None:
     stripped = utterance.strip()
+    broker = intent_broker or RuleIntentBroker()
+    cached_intent = cached_provider_intent(broker, stripped)
+    if cached_intent is not None:
+        structured = _assistant_intent_from_structured_intent(stripped, cached_intent)
+        if structured is not None:
+            return structured
+
+    intent = broker.parse(stripped)
+    structured = _assistant_intent_from_structured_intent(stripped, intent)
+    if structured is not None:
+        return structured
+
     browser_intent = infer_browser_intent_from_open_request(stripped)
     if browser_intent is not None:
-        if browser_intent.action == "browser.open_url":
-            uri = str(browser_intent.target.get("uri") or "")
-            return AssistantIntent(
-                objective_kind="open_url",
-                target=AssistantIntentTarget(
-                    entity_type="website",
-                    display_name=extract_open_target(stripped) or uri,
-                    canonical_identifier=uri,
-                ),
-                completion=AssistantCompletionSemantics(
-                    kind="page_identity",
-                    success_signal="final browser page identity matches the requested URL",
-                ),
-                interaction_hints=("direct-open",),
-                preferred_domains=("browser",),
-            )
-        target_name = extract_open_target(stripped) or stripped
-        return AssistantIntent(
-            objective_kind="open_named_website",
-            target=AssistantIntentTarget(
-                entity_type="website",
-                display_name=target_name,
-                canonical_identifier=normalize_bare_domain_uri(target_name),
-            ),
-            completion=AssistantCompletionSemantics(
-                kind="page_identity",
-                success_signal="the final browser page identity matches the intended official site",
-                requires_follow_up_navigation=True,
-                allows_intermediate_success=False,
-            ),
-            interaction_hints=("direct-open", "lookup", "follow-up-navigation"),
-            preferred_domains=("browser",),
-        )
+        structured = _assistant_intent_from_structured_intent(stripped, browser_intent)
+        if structured is not None:
+            return structured
 
-    app_match = APP_HISTORY_SEARCH_RE.match(stripped)
-    if app_match:
-        app_name = app_match.group("app").strip()
-        query = app_match.group("query").strip()
+    app_history_target = extract_app_history_search_target(stripped)
+    if app_history_target is not None:
+        app_name = app_history_target["app"]
+        query = app_history_target["query"]
         return AssistantIntent(
             objective_kind="in_app_search",
             target=AssistantIntentTarget(
-                entity_type=app_match.group("scope") or "app_content",
+                entity_type=app_history_target.get("scope") or "app_content",
                 display_name=query,
                 app_name=app_name,
                 query_text=query,
@@ -360,20 +453,6 @@ def synthesize_assistant_intent(utterance: str, analysis: UtteranceAnalysis) -> 
             ),
             interaction_hints=("structured-search", "shortcut-fallback"),
             preferred_domains=("app_interaction",),
-        )
-
-    rule_intent = RuleIntentBroker().parse(stripped)
-    if rule_intent.action == "app.open":
-        app_name = str(rule_intent.target.get("name") or "")
-        return AssistantIntent(
-            objective_kind="open_application",
-            target=AssistantIntentTarget(entity_type="application", display_name=app_name, app_name=app_name),
-            completion=AssistantCompletionSemantics(
-                kind="application_state",
-                success_signal="the requested application is opened or focused",
-            ),
-            interaction_hints=("native-open",),
-            preferred_domains=("apps",),
         )
     if analysis.domains == ("browser",) and "search" in stripped.lower():
         return AssistantIntent(
@@ -390,6 +469,126 @@ def synthesize_assistant_intent(utterance: str, analysis: UtteranceAnalysis) -> 
     return None
 
 
+def _assistant_intent_from_structured_intent(utterance: str, intent) -> AssistantIntent | None:
+    action = str(getattr(intent, "action", "") or "").strip()
+    if not action or action == "unknown":
+        return None
+    if action == "browser.open_url":
+        uri = str(intent.target.get("uri") or intent.target.get("url") or "").strip()
+        if not uri:
+            return None
+        return AssistantIntent(
+            objective_kind="open_url",
+            target=AssistantIntentTarget(
+                entity_type="website",
+                display_name=extract_open_target(utterance) or uri,
+                canonical_identifier=uri,
+            ),
+            completion=AssistantCompletionSemantics(
+                kind="page_identity",
+                success_signal="final browser page identity matches the requested URL",
+            ),
+            interaction_hints=("direct-open",),
+            preferred_domains=("browser",),
+        )
+    if action == "browser.search_web":
+        query = str(intent.target.get("query") or "").strip() or utterance.strip()
+        target_name = extract_open_target(utterance)
+        if target_name or _looks_like_named_website_query(query):
+            display_name = target_name or query
+            return AssistantIntent(
+                objective_kind="open_named_website",
+                target=AssistantIntentTarget(
+                    entity_type="website",
+                    display_name=display_name,
+                    canonical_identifier=normalize_bare_domain_uri(display_name),
+                    query_text=query,
+                ),
+                completion=AssistantCompletionSemantics(
+                    kind="page_identity",
+                    success_signal="the final browser page identity matches the intended official site",
+                    requires_follow_up_navigation=True,
+                    allows_intermediate_success=False,
+                ),
+                interaction_hints=("direct-open", "lookup", "follow-up-navigation"),
+                preferred_domains=("browser",),
+            )
+        return AssistantIntent(
+            objective_kind="search_web",
+            target=AssistantIntentTarget(entity_type="search_query", display_name=query, query_text=query),
+            completion=AssistantCompletionSemantics(
+                kind="search_results",
+                success_signal="the requested search query is observed in browser state",
+                allows_intermediate_success=True,
+            ),
+            interaction_hints=("lookup",),
+            preferred_domains=("browser",),
+        )
+    if action == "browser.open_site_search":
+        site = str(intent.target.get("site") or "").strip()
+        query = str(intent.target.get("query") or "").strip()
+        if not site or not query:
+            return None
+        return AssistantIntent(
+            objective_kind="search_web",
+            target=AssistantIntentTarget(
+                entity_type="search_query",
+                display_name=query,
+                query_text=query,
+                metadata={"site": site},
+            ),
+            completion=AssistantCompletionSemantics(
+                kind="search_results",
+                success_signal="the requested site-scoped search results are observed in browser state",
+                allows_intermediate_success=True,
+            ),
+            interaction_hints=("lookup",),
+            preferred_domains=("browser",),
+        )
+    if action == "app.search_history":
+        app_name = str(intent.target.get("app") or intent.target.get("name") or "").strip()
+        query = str(intent.target.get("query") or "").strip()
+        if not app_name or not query:
+            return None
+        return AssistantIntent(
+            objective_kind="in_app_search",
+            target=AssistantIntentTarget(
+                entity_type="app_content",
+                display_name=query,
+                app_name=app_name,
+                query_text=query,
+            ),
+            completion=AssistantCompletionSemantics(
+                kind="target_presence",
+                success_signal="the requested target appears in observed in-app search results",
+            ),
+            interaction_hints=("structured-search", "shortcut-fallback"),
+            preferred_domains=("app_interaction",),
+        )
+    if action == "app.open":
+        app_name = str(intent.target.get("name") or intent.target.get("app") or "").strip()
+        if not app_name:
+            return None
+        return AssistantIntent(
+            objective_kind="open_application",
+            target=AssistantIntentTarget(entity_type="application", display_name=app_name, app_name=app_name),
+            completion=AssistantCompletionSemantics(
+                kind="application_state",
+                success_signal="the requested application is opened or focused",
+            ),
+            interaction_hints=("native-open",),
+            preferred_domains=("apps",),
+        )
+    return None
+
+
+def _looks_like_named_website_query(query: str) -> bool:
+    lowered = query.lower()
+    return any(hint in query for hint in WEB_NAMED_TARGET_HINTS[:3]) or any(
+        hint in lowered for hint in WEB_NAMED_TARGET_HINTS[3:]
+    )
+
+
 def goal_synthesis_payload(result: GoalSynthesisResult) -> dict[str, object]:
     payload = {
         "status": result.status,
@@ -401,3 +600,129 @@ def goal_synthesis_payload(result: GoalSynthesisResult) -> dict[str, object]:
     else:
         payload["goal_spec"] = None
     return payload
+
+
+def build_goal_synthesis_request_payload(*, utterance: str, analysis: UtteranceAnalysis, host_hint: dict[str, object]) -> dict[str, object]:
+    return {
+        "utterance": utterance,
+        "analysis": asdict(analysis),
+        "host_hint": host_hint,
+        "allowed_statuses": ["ready", "clarification_needed", "missing_capability", "unsupported"],
+        "allowed_candidate_domain_ids": list(host_hint.get("candidate_domain_ids", [])) if isinstance(host_hint.get("candidate_domain_ids"), list) else [],
+        "allowed_required_capability_ids": list(host_hint.get("required_capability_ids", [])) if isinstance(host_hint.get("required_capability_ids"), list) else [],
+        "allowed_missing_capability_ids": list(host_hint.get("missing_capability_ids", [])) if isinstance(host_hint.get("missing_capability_ids"), list) else [],
+    }
+
+
+def validate_goal_synthesis_payload(payload: dict[str, object], *, host_hint: dict[str, object]) -> dict[str, object]:
+    normalized = dict(payload)
+    if not normalized.get("goal_type") and isinstance(normalized.get("type"), str):
+        normalized["goal_type"] = normalized["type"]
+    if not isinstance(normalized.get("candidate_domain_ids"), list):
+        normalized_domain = normalized.get("domain_id") or normalized.get("domain")
+        if isinstance(normalized_domain, str) and normalized_domain.strip():
+            normalized["candidate_domain_ids"] = [normalized_domain.strip()]
+    if not isinstance(normalized.get("required_capability_ids"), list):
+        normalized_capability = normalized.get("capability_id") or normalized.get("capability")
+        if isinstance(normalized_capability, str) and normalized_capability.strip():
+            normalized["required_capability_ids"] = [normalized_capability.strip()]
+    status = str(normalized.get("status") or "").strip()
+    if status not in {"ready", "clarification_needed", "missing_capability", "unsupported"}:
+        raise ValueError("goal synthesis status is invalid")
+    candidate_domain_ids = list(normalized.get("candidate_domain_ids", [])) if isinstance(normalized.get("candidate_domain_ids"), list) else []
+    required_capability_ids = list(normalized.get("required_capability_ids", [])) if isinstance(normalized.get("required_capability_ids"), list) else []
+    missing_capability_ids = list(normalized.get("missing_capability_ids", [])) if isinstance(normalized.get("missing_capability_ids"), list) else []
+
+    allowed_domains = set(str(item) for item in host_hint.get("candidate_domain_ids", [])) if isinstance(host_hint.get("candidate_domain_ids"), list) else set()
+    allowed_required_capabilities = set(str(item) for item in host_hint.get("required_capability_ids", [])) if isinstance(host_hint.get("required_capability_ids"), list) else set()
+    allowed_missing_capabilities = set(str(item) for item in host_hint.get("missing_capability_ids", [])) if isinstance(host_hint.get("missing_capability_ids"), list) else set()
+
+    if any(str(item) not in allowed_domains for item in candidate_domain_ids):
+        raise ValueError("candidate_domain_ids exceeded host-owned domain boundary")
+    if any(str(item) not in allowed_required_capabilities for item in required_capability_ids):
+        raise ValueError("required_capability_ids exceeded host-owned capability boundary")
+    if any(str(item) not in allowed_missing_capabilities for item in missing_capability_ids):
+        raise ValueError("missing_capability_ids exceeded host-owned capability boundary")
+    normalized["candidate_domain_ids"] = candidate_domain_ids
+    normalized["required_capability_ids"] = required_capability_ids
+    normalized["missing_capability_ids"] = missing_capability_ids
+    return normalized
+
+
+def model_guidance_enabled(env_name: str) -> bool:
+    return env_flag_enabled(env_name)
+
+
+def build_goal_synthesis_boundary_hint(
+    *,
+    utterance: str,
+    analysis: UtteranceAnalysis,
+    intent_broker: IntentBroker | None = None,
+) -> dict[str, object]:
+    candidate_domain_ids = [str(item) for item in analysis.domains if str(item)]
+    required_capability_ids = _goal_synthesis_required_capability_boundaries(analysis, intent_broker=intent_broker, utterance=utterance)
+    missing_capability_ids = list(infer_missing_capabilities(utterance)) if analysis.type == "rejected" else []
+    status = "ready"
+    message = analysis.explanation or "goal synthesis boundary ready"
+    clarification_questions: list[str] = []
+    if analysis.type == "clarification":
+        status = "clarification_needed"
+        clarification_questions = [analysis.chat_response or analysis.explanation or "Please clarify the request."]
+    elif analysis.type == "rejected":
+        status = "missing_capability" if missing_capability_ids else "unsupported"
+    return {
+        "status": status,
+        "goal_type": _goal_type_boundary_hint(analysis=analysis, required_capability_ids=required_capability_ids),
+        "candidate_domain_ids": candidate_domain_ids,
+        "required_capability_ids": required_capability_ids,
+        "missing_capability_ids": missing_capability_ids,
+        "clarification_questions": clarification_questions,
+        "constraints": ["Planner must use registered domains, routes, and capability families only."],
+        "fallback_hints": [],
+        "assumptions": [],
+        "assistant_intent": None,
+        "subgoals": [],
+        "message": message,
+    }
+
+
+def _goal_synthesis_required_capability_boundaries(
+    analysis: UtteranceAnalysis,
+    *,
+    intent_broker: IntentBroker | None,
+    utterance: str,
+) -> list[str]:
+    cached_intent = cached_provider_intent(intent_broker, utterance)
+    if cached_intent is not None and cached_intent.action and cached_intent.action != "unknown":
+        return [cached_intent.action]
+    capability_ids: list[str] = []
+    for domain_id in analysis.domains:
+        capability_ids.extend(DOMAIN_CAPABILITY_BOUNDARIES.get(domain_id, ()))
+    return list(dict.fromkeys(capability_ids))
+
+
+def _goal_type_boundary_hint(*, analysis: UtteranceAnalysis, required_capability_ids: list[str]) -> str:
+    if required_capability_ids:
+        return required_capability_ids[0].replace(".", "_")
+    if analysis.domains:
+        return analysis.domains[0]
+    return "unsupported"
+
+
+def cached_provider_intent(intent_broker: IntentBroker | None, utterance: str):
+    cached_fn = getattr(intent_broker, "cached_intent", None)
+    if callable(cached_fn):
+        return cached_fn(utterance)
+    return None
+
+
+DOMAIN_CAPABILITY_BOUNDARIES: dict[str, tuple[str, ...]] = {
+    "apps": ("app.open", "app.list"),
+    "app_interaction": ("app.search_history",),
+    "browser": ("browser.open_url", "browser.search_web", "browser.open_site_search"),
+    "clipboard": ("clipboard.write",),
+    "media": ("media.play", "media.search", "media.pause"),
+    "notification": ("notification.send",),
+    "system_observation": ("system.status",),
+    "window_management": ("window.list", "window.focus", "window.minimize", "window.maximize", "window.close"),
+}

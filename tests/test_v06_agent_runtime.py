@@ -43,6 +43,7 @@ def test_recovery_policy_selects_second_strategy() -> None:
     history = result.ledger.strategy_history
     assert history[0].strategy_id == "desktop_open_notion"
     assert history[1].strategy_id == "browser_search_notion"
+    assert history[0].strategy_decision_id.startswith("sdec_")
     assert history[1].failure_class == "semantic_mismatch"
     assert history[1].reason.startswith("selected replacement strategy")
 
@@ -301,7 +302,8 @@ def test_debug_payload_exposes_goal_runtime_strategy_candidates_and_recovery_sta
     assert debug_payload["selected_strategy_id"] == "browser_search_notion"
     assert debug_payload["action_plan_provenance"]
     assert len(debug_payload["recovery_decisions"]) == 2
-    assert debug_payload["provider_artifacts"] == []
+    assert debug_payload["provider_artifacts"]
+    assert debug_payload["provider_artifacts"][0]["strategy_decision_id"].startswith("sdec_")
 
 
 def test_tool_protocol_supports_future_capability_surface_placeholders_and_wait_tools() -> None:

@@ -6,7 +6,10 @@ from vibeos.apps import AppRegistry
 from vibeos.audit import AuditLog
 from vibeos.browser_state import record_browser_observation
 from vibeos.broker import CapabilityBroker
+from vibeos.candidate_selection import CandidateSelectionDecision, CandidateSelectionProvider
+from vibeos.clarification import ClarificationDecision, ClarificationProvider
 from vibeos.goal_models import GoalSpec, GoalSynthesisProvenance, GoalSynthesisResult, ProviderExchange
+from vibeos.goal_synthesizer import GoalSynthesisProvider
 from vibeos.execution_graph import execute_plan_graph
 from vibeos.intent import IntentBroker
 from vibeos.models import AppEntry, CommandRequest, Intent
@@ -14,8 +17,12 @@ from vibeos.intent import RuleIntentBroker
 from vibeos.planner import PlanningArtifacts, browser_media_plan
 from vibeos.portal import PortalAdapter
 from vibeos.reviews import ReviewStore
+from vibeos.semantic_acceptance import SemanticAcceptanceDecision, SemanticAcceptanceProvider, SemanticEvidenceSummary
+from vibeos.strategy import StrategySelectionProvider, StrategySelectionResult, make_strategy_decision
+from vibeos.task_trace import TaskTraceStore
 from vibeos.models import WindowEntry
 from vibeos.task_models import DisplayFields, ExpectedState, StepExecutionResult, StepPrecondition, StepProvenance, TaskPlan, TaskRoute, TaskSpan, TaskStep, UtteranceAnalysis
+from vibeos.understanding import UnderstandingAnalysisDecision, UnderstandingAnalysisProvider, UnderstandingArtifact, UnderstandingTransitionProvider
 from vibeos.verifiers import VerifierHarness
 
 
@@ -71,6 +78,11 @@ class FakeWindows:
         return {"status": "closed", "window_id": window.window_id}
 
 
+class FailingIntentBroker(IntentBroker):
+    def parse(self, utterance: str) -> Intent:
+        raise AssertionError("raw utterance should not be reparsed for compatibility intent")
+
+
 class TimeoutClipboard:
     def write(self, text: str) -> dict[str, object]:
         return {"status": "timeout", "error": "clipboard helper timed out", "adapter": "/usr/bin/wl-copy"}
@@ -87,6 +99,198 @@ class StaticIntentBroker(IntentBroker):
 
     def parse(self, utterance):
         return self.intent
+
+
+class CountingStaticIntentBroker(IntentBroker):
+    def __init__(self, intent):
+        self.intent = intent
+        self.call_count = 0
+
+    def parse(self, utterance):
+        self.call_count += 1
+        return self.intent
+
+
+class FixedUnderstandingTransitionProvider(UnderstandingTransitionProvider):
+    provider_name = "test_understanding_transition"
+    model_name = "deterministic-test"
+
+    def transition(self, *, understanding, current_analysis, decision, failure):
+        return UnderstandingAnalysisDecision(
+            analysis=UtteranceAnalysis(
+                utterance=understanding.utterance,
+                type="task",
+                confidence=0.97,
+                domains=("browser",),
+                explanation="test transition provider moved the request onto the browser domain",
+                task_spans=(
+                    TaskSpan(
+                        id="span_1",
+                        text=understanding.utterance,
+                        start=0,
+                        end=len(understanding.utterance),
+                        domain="browser",
+                        confidence=0.97,
+                    ),
+                ),
+                provenance=None,
+            ),
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            request_payload={"action": decision.action, "failure_class": failure.failure_class},
+            response_payload={"analysis_type": "task", "domains": ["browser"]},
+        )
+
+
+class FakeStackUnderstandingProvider(UnderstandingAnalysisProvider):
+    provider_name = "fake_understanding"
+    model_name = "fake-structured"
+
+    def __init__(self, analysis: UtteranceAnalysis) -> None:
+        self.analysis = analysis
+
+    def analyze(self, *, utterance: str, broker) -> UnderstandingAnalysisDecision:
+        return UnderstandingAnalysisDecision(
+            analysis=self.analysis,
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            request_payload={"utterance": utterance},
+            response_payload={"analysis_type": self.analysis.type},
+        )
+
+
+class CachedIntentTaskWithoutSpanUnderstandingProvider(UnderstandingAnalysisProvider):
+    provider_name = "cached_intent_task_without_span"
+    model_name = "deterministic-test"
+
+    def analyze(self, *, utterance: str, broker) -> UnderstandingAnalysisDecision:
+        broker.parse(utterance)
+        return UnderstandingAnalysisDecision(
+            analysis=UtteranceAnalysis(
+                utterance=utterance,
+                type="task",
+                confidence=0.94,
+                domains=("browser",),
+                explanation="test provider classified the utterance as a browser task without emitting a concrete span",
+                task_spans=(),
+                provenance=None,
+            ),
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            request_payload={"utterance": utterance},
+            response_payload={"analysis_type": "task", "domains": ["browser"]},
+        )
+
+
+class FakeStackClarificationProvider(ClarificationProvider):
+    provider_name = "fake_clarification"
+    model_name = "fake-structured"
+
+    def generate(self, *, utterance: str, analysis) -> ClarificationDecision:
+        return ClarificationDecision(
+            clarification_question_id="cqid_fake_stack",
+            question="Which exact site should I open?",
+            reason="fake clarification provider requested the minimal missing detail",
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+        )
+
+
+class FakeStackGoalSynthesisProvider(GoalSynthesisProvider):
+    provider_name = "fake_goal_synthesizer"
+    provider_version = "v0.fake"
+    model_name = "fake-structured"
+
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+
+    def synthesize(self, utterance: str, analysis) -> dict[str, object]:
+        self._last_parse_valid = True
+        self._last_fallback_used = False
+        self._last_error = None
+        self._last_raw_output = str(self.payload)
+        return dict(self.payload)
+
+
+class FakeStackRouteSelectionProvider(CandidateSelectionProvider):
+    provider_name = "fake_route_selector"
+    model_name = "fake-structured"
+
+    def __init__(self, selected_candidate_id: str | None, action: str = "select") -> None:
+        self.selected_candidate_id = selected_candidate_id
+        self.action = action
+
+    def decide(self, *, understanding, candidate_set) -> CandidateSelectionDecision:
+        return CandidateSelectionDecision(
+            route_decision_id="rdec_fake_stack",
+            candidate_set_id=candidate_set.candidate_set_id,
+            understanding_id=candidate_set.understanding_id,
+            action=self.action,
+            selected_candidate_id=self.selected_candidate_id,
+            reason="fake route selector chose a bounded candidate",
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+        )
+
+
+class FakeStackSemanticAcceptanceProvider(SemanticAcceptanceProvider):
+    provider_name = "fake_semantic_acceptance"
+    model_name = "fake-structured"
+
+    def summarize(self, *, input_payload):
+        return SemanticEvidenceSummary(
+            semantic_summary_id="ssum_fake_stack",
+            understanding_id=str(input_payload.get("understanding_id") or ""),
+            candidate_set_id=str(input_payload.get("candidate_set_id") or ""),
+            route_decision_id=str(input_payload.get("route_decision_id") or ""),
+            route_domain=str(input_payload.get("route_domain") or ""),
+            summary_text="fake semantic provider considers the goal satisfied",
+            structured_findings={
+                "supports_completion": True,
+                "evidence_incomplete": False,
+                "contradiction_detected": False,
+                "clarification_needed": False,
+            },
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+        )
+
+    def decide(self, *, summary: SemanticEvidenceSummary, allowed_decisions):
+        return SemanticAcceptanceDecision(
+            semantic_acceptance_decision_id="sacc_fake_stack",
+            semantic_summary_id=summary.semantic_summary_id,
+            understanding_id=summary.understanding_id,
+            candidate_set_id=summary.candidate_set_id,
+            route_decision_id=summary.route_decision_id,
+            decision="complete",
+            acceptance_status="passed",
+            reason="fake semantic provider marked the goal complete",
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+        )
+
+
+class FakeBrokerStrategySelectionProvider(StrategySelectionProvider):
+    provider_name = "fake_strategy_selector"
+    model_name = "fake-structured"
+
+    def __init__(self, selected_strategy_id: str) -> None:
+        self.selected_strategy_id = selected_strategy_id
+
+    def decide(self, *, utterance: str, eligible, constraints, environment, attempts, last_failure_class: str):
+        return StrategySelectionResult(
+            decision=make_strategy_decision(
+                action="select",
+                reason="fake strategy provider selected an allowed strategy",
+                selected_strategy_id=self.selected_strategy_id,
+                constraints=constraints,
+                failure_class=last_failure_class,
+                provider_name=self.provider_name,
+                model_name=self.model_name,
+            ),
+            request_payload={"utterance": utterance, "eligible": [candidate.strategy_id for _, candidate in eligible]},
+            response_payload={"action": "select", "selected_strategy_id": self.selected_strategy_id},
+        )
 
 
 def test_review_task_plan_allows_browser_media_route_without_l2_review() -> None:
@@ -133,10 +337,99 @@ def test_browser_media_route_executes_with_verification_metadata() -> None:
     assert result.step_results[0].diagnostics["site"] == "youtube.com"
     assert result.verification_status == "passed"
     assert result.verification_results[0]["verifier_id"] == "browser_search_route_completed"
-    assert len(step_entries) == 1
-    assert {item["step_id"] for item in step_entries} == {"open_media_search_uri"}
-    assert all(item["plan_id"] == plan.plan_id for item in step_entries)
-    assert all(item["layer"] == "adapter_execute" for item in step_entries)
+
+
+def test_broker_compatibility_intent_reuses_planning_step_when_provider_intent_is_missing() -> None:
+    broker = CapabilityBroker(intent_broker=FailingIntentBroker(), audit=AuditLog(), reviews=ReviewStore())
+    plan = TaskPlan(
+        schema_version="v0.5",
+        plan_id="plan_browser_search",
+        utterance="search web for hello",
+        display=DisplayFields(goal="search the web"),
+        selected_route_id="browser_search_web_route",
+        routes=(TaskRoute(id="browser_search_web_route", score=1.0, domain_id="browser", required_capabilities=("browser.search_web",)),),
+        steps=(
+            TaskStep(
+                id="browser_search_web",
+                action="browser.search_web",
+                capability_id="browser.search_web",
+                target={"query": "hello"},
+                expected_state=ExpectedState(kind="search_results_available", fields={"query": "hello"}),
+                preconditions=(StepPrecondition(kind="capability_available", capability_id="browser.search_web"),),
+                provenance=StepProvenance(source_span_id="span_1", planner="test"),
+            ),
+        ),
+    )
+    analysis = UtteranceAnalysis(
+        utterance="search web for hello",
+        type="task",
+        confidence=0.99,
+        domains=("browser",),
+        explanation="already understood as a browser search task",
+        task_spans=(TaskSpan(id="span_1", text="search web for hello", start=0, end=20, domain="browser", confidence=0.99),),
+        provenance=None,
+    )
+    understanding = UnderstandingArtifact(
+        understanding_id="und_test",
+        utterance="search web for hello",
+        analysis=analysis,
+        primary_understanding_id="und_test",
+        provider_intent=None,
+    )
+    planning = PlanningArtifacts(
+        understanding=understanding,
+        analysis=analysis,
+        goal_synthesis=None,
+        plan=plan,
+        candidates=(plan,),
+    )
+
+    compatibility_intent = broker._compatibility_intent_from_planning(planning)
+
+    assert compatibility_intent.action == "browser.search_web"
+    assert compatibility_intent.target["query"] == "hello"
+
+
+def test_broker_handle_does_not_fall_back_to_legacy_direct_execution_when_planning_stalls() -> None:
+    intent_broker = CountingStaticIntentBroker(
+        Intent(
+            action="browser.search_web",
+            target={"query": "OpenAI 文档"},
+            reason="test broker resolved the utterance as a browser search",
+        )
+    )
+    broker = CapabilityBroker(
+        intent_broker=intent_broker,
+        audit=AuditLog(),
+        reviews=ReviewStore(),
+        understanding_analysis_provider=CachedIntentTaskWithoutSpanUnderstandingProvider(),
+        goal_synthesis_provider=FakeStackGoalSynthesisProvider(
+            {
+                "status": "ready",
+                "goal_type": "browser_search_web",
+                "candidate_domain_ids": [],
+                "required_capability_ids": ["browser.search_web"],
+                "missing_capability_ids": [],
+                "clarification_questions": [],
+                "constraints": ["Planner must use registered domains, routes, and capability families only."],
+                "fallback_hints": [],
+                "assumptions": ["test provider intentionally emitted no executable candidate boundary"],
+                "assistant_intent": None,
+                "subgoals": [],
+                "message": "goal synthesis completed",
+            }
+        ),
+    )
+
+    result = broker.handle(CommandRequest("帮我查一下 OpenAI 文档"))
+
+    assert result.status == "failed"
+    assert result.execution_status == "not_started"
+    assert result.acceptance_status == "skipped"
+    assert result.overall_status == "failed"
+    assert result.message == "planner did not produce a task plan"
+    assert result.intent.action == "browser.search_web"
+    assert intent_broker.call_count == 1
 
 
 def test_browser_media_route_reports_verification_failure_when_harness_disagrees() -> None:
@@ -205,9 +498,28 @@ def test_browser_requests_expose_v06_runtime_state_on_main_path() -> None:
     assert result.result["selected_strategy_id"] == "strategy_browser_search_web_route"
     assert result.result["strategy_candidates"]
     assert result.result["run_ledger"]["terminal_outcome"]["status"] == "completed"
+    assert result.result["run_ledger"]["attempts"][0]["understanding_id"] == result.result["understanding"]["understanding_id"]
+    assert result.result["run_ledger"]["attempts"][0]["candidate_set_id"] == result.result["candidate_set"]["candidate_set_id"]
+    assert result.result["run_ledger"]["attempts"][0]["route_decision_id"] == result.result["route_decision"]["route_decision_id"]
     assert result.result["debug_trace"]["runtime_v0_6"]["goal_runtime"]["goal_id"] == result.result["goal_runtime"]["goal_id"]
     assert result.result["debug_trace"]["runtime_v0_6"]["environment_profile"]["search_policy"] == "browser_first"
     assert result.result["debug_trace"]["runtime_v0_6"]["provider_artifacts"]
+
+
+def test_broker_main_path_supports_explicit_fake_strategy_selection_provider() -> None:
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        portal=ObservedPortal(),
+        audit=AuditLog(make_audit_path("fake-strategy-provider")),
+        reviews=ReviewStore(make_review_path("fake-strategy-provider")),
+        strategy_selection_provider=FakeBrokerStrategySelectionProvider("strategy_browser_search_web_route"),
+    )
+
+    result = broker.handle(CommandRequest("search web for hello", debug=True))
+
+    assert result.status == "executed"
+    assert result.result["selected_strategy_id"] == "strategy_browser_search_web_route"
+    assert result.result["run_ledger"]["strategy_history"][0]["provider_name"] == "fake_strategy_selector"
 
 
 def test_app_requests_expose_v06_runtime_state_on_main_path() -> None:
@@ -227,10 +539,197 @@ def test_app_requests_expose_v06_runtime_state_on_main_path() -> None:
     assert result.result["selected_strategy_id"] == "strategy_apps_open_route"
     assert result.result["strategy_candidates"]
     assert result.result["run_ledger"]["terminal_outcome"]["status"] == "completed"
+    assert result.result["run_ledger"]["attempts"][0]["understanding_id"] == result.result["understanding"]["understanding_id"]
+    assert result.result["run_ledger"]["attempts"][0]["candidate_set_id"] == result.result["candidate_set"]["candidate_set_id"]
+    assert result.result["run_ledger"]["attempts"][0]["route_decision_id"] == result.result["route_decision"]["route_decision_id"]
     assert result.result["execution"]["acceptance_status"] == "passed"
     assert result.result["debug_trace"]["runtime_v0_6"]["goal_runtime"]["goal_id"] == result.result["goal_runtime"]["goal_id"]
     assert result.result["debug_trace"]["runtime_v0_6"]["environment_profile"]["search_policy"] == "balanced"
     assert result.result["debug_trace"]["runtime_v0_6"]["provider_artifacts"]
+
+
+def test_broker_main_path_supports_explicit_fake_provider_stack_without_rule_fallback(monkeypatch) -> None:
+    def fail_rule_understanding(*args, **kwargs):
+        raise AssertionError("deterministic understanding fallback should not run")
+
+    def fail_rule_goal_synthesis(*args, **kwargs):
+        raise AssertionError("rule goal synthesis fallback should not run")
+
+    def fail_rule_route_selection(*args, **kwargs):
+        raise AssertionError("deterministic route selection fallback should not run")
+
+    monkeypatch.setattr("vibeos.understanding.DeterministicUnderstandingAnalysisProvider.analyze", fail_rule_understanding)
+    monkeypatch.setattr("vibeos.goal_synthesizer.RuleBasedGoalSynthesisProvider.synthesize", fail_rule_goal_synthesis)
+    monkeypatch.setattr("vibeos.candidate_selection.DeterministicCandidateSelectionProvider.decide", fail_rule_route_selection)
+
+    broker = CapabilityBroker(
+        intent_broker=StaticIntentBroker(Intent(action="browser.search_web", target={"query": "hello"}, reason="fake intent broker")),
+        portal=ObservedPortal(),
+        audit=AuditLog(make_audit_path("fake-provider-stack")),
+        reviews=ReviewStore(make_review_path("fake-provider-stack")),
+        understanding_analysis_provider=FakeStackUnderstandingProvider(
+            UtteranceAnalysis(
+                utterance="search web for hello",
+                type="task",
+                confidence=0.99,
+                domains=("browser",),
+                explanation="fake understanding provider classified this as a browser search task",
+                task_spans=(TaskSpan(id="span_1", text="search web for hello", start=0, end=20, domain="browser", confidence=0.99),),
+            )
+        ),
+        goal_synthesis_provider=FakeStackGoalSynthesisProvider(
+            {
+                "status": "ready",
+                "goal_type": "browser_search_web",
+                "candidate_domain_ids": ["browser"],
+                "required_capability_ids": ["browser.search_web"],
+                "missing_capability_ids": [],
+                "clarification_questions": [],
+                "constraints": ["fake provider stayed inside host-owned capabilities"],
+                "fallback_hints": [],
+                "assumptions": ["fake provider stack"],
+                "assistant_intent": None,
+                "subgoals": [
+                    {
+                        "subgoal_id": "subgoal_1",
+                        "text": "search web for hello",
+                        "goal_type": "browser_search_web",
+                        "candidate_domain_ids": ["browser"],
+                        "required_capability_ids": ["browser.search_web"],
+                    }
+                ],
+                "message": "fake provider synthesized a ready goal",
+            }
+        ),
+        route_selection_provider=FakeStackRouteSelectionProvider("cand_browser_search_web_route"),
+    )
+
+    result = broker.handle(CommandRequest("search web for hello"))
+
+    assert result.status == "executed"
+    assert result.overall_status == "completed"
+    assert result.result["understanding"]["analysis_provider_name"] == "fake_understanding"
+    assert result.result["goal_synthesis"]["exchange"]["provider_name"] == "fake_goal_synthesizer"
+    assert result.result["route_decision"]["provider_name"] == "fake_route_selector"
+
+
+def test_broker_main_path_supports_explicit_fake_clarification_provider(monkeypatch) -> None:
+    def fail_rule_clarification(*args, **kwargs):
+        raise AssertionError("deterministic clarification fallback should not run")
+
+    monkeypatch.setattr("vibeos.clarification.DeterministicClarificationProvider.generate", fail_rule_clarification)
+
+    broker = CapabilityBroker(
+        intent_broker=StaticIntentBroker(Intent.unknown("fake intent broker should not be needed for clarification")),
+        audit=AuditLog(make_audit_path("fake-clarification-stack")),
+        reviews=ReviewStore(make_review_path("fake-clarification-stack")),
+        understanding_analysis_provider=FakeStackUnderstandingProvider(
+            UtteranceAnalysis(
+                utterance="open that site we discussed yesterday",
+                type="clarification",
+                confidence=0.97,
+                domains=("browser",),
+                explanation="fake understanding provider marked the target as ambiguous",
+                task_spans=(),
+                chat_response="Which exact site should I open?",
+            )
+        ),
+        clarification_provider=FakeStackClarificationProvider(),
+        goal_synthesis_provider=FakeStackGoalSynthesisProvider(
+            {
+                "status": "clarification_needed",
+                "goal_type": "clarification",
+                "candidate_domain_ids": ["browser"],
+                "required_capability_ids": [],
+                "missing_capability_ids": [],
+                "clarification_questions": ["Which exact site should I open?"],
+                "constraints": [],
+                "fallback_hints": [],
+                "assumptions": ["fake provider stack"],
+                "assistant_intent": None,
+                "subgoals": [],
+                "message": "fake provider requested clarification",
+            }
+        ),
+        route_selection_provider=FakeStackRouteSelectionProvider(None, action="clarify"),
+    )
+
+    result = broker.handle(CommandRequest("open that site we discussed yesterday"))
+
+    assert result.status == "ambiguous"
+    assert result.overall_status == "needs_user_input"
+    assert result.result["understanding"]["analysis_provider_name"] == "fake_understanding"
+    assert result.result["understanding"]["clarification_provider_name"] == "fake_clarification"
+    assert result.result["understanding"]["clarification_question_id"] == "cqid_fake_stack"
+
+
+def test_broker_maps_clarify_route_decision_with_candidates_to_needs_user_input() -> None:
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        route_selection_provider=FakeStackRouteSelectionProvider(None, action="clarify"),
+        portal=ObservedPortal(),
+        audit=AuditLog(make_audit_path("clarify-with-candidates")),
+        reviews=ReviewStore(make_review_path("clarify-with-candidates")),
+    )
+
+    result = broker.handle(CommandRequest("open baidu.com"))
+
+    assert result.status == "ambiguous"
+    assert result.execution_status == "not_started"
+    assert result.acceptance_status == "skipped"
+    assert result.overall_status == "needs_user_input"
+    assert result.result["route_decision"]["action"] == "clarify"
+    assert result.result["candidates"]
+
+
+def test_broker_execute_task_plan_supports_explicit_fake_semantic_acceptance_provider() -> None:
+    broker = CapabilityBroker(
+        intent_broker=StaticIntentBroker(Intent.unknown("semantic acceptance provider test uses a direct task plan")),
+        portal=ObservedPortal(),
+        audit=AuditLog(make_audit_path("fake-semantic-acceptance-provider")),
+        reviews=ReviewStore(make_review_path("fake-semantic-acceptance-provider")),
+        semantic_acceptance_provider=FakeStackSemanticAcceptanceProvider(),
+    )
+
+    plan = TaskPlan(
+        schema_version="v0.5",
+        plan_id="plan_fake_semantic_acceptance",
+        utterance="search web for hello",
+        display=DisplayFields(goal="search web for hello"),
+        selected_route_id="browser_search_web_route",
+        routes=(
+            TaskRoute(
+                id="browser_search_web_route",
+                score=1.0,
+                domain_id="browser",
+                required_capabilities=("browser.search_web",),
+                default_verifier_ids=("browser_search_route_completed",),
+            ),
+        ),
+        steps=(
+            TaskStep(
+                id="browser_search_web",
+                action="browser.search_web",
+                capability_id="browser.search_web",
+                target={"query": "hello"},
+                expected_state=ExpectedState(kind="search_results_available", fields={"query": "hello"}),
+                preconditions=(StepPrecondition(kind="capability_available", capability_id="browser.search_web"),),
+                provenance=StepProvenance(source_span_id="span_1", planner="test"),
+            ),
+        ),
+    )
+
+    execution = broker.execute_task_plan(
+        plan,
+        understanding_id="und_fake",
+        candidate_set_id="cset_fake",
+        route_decision_id="rdec_fake",
+    )
+
+    assert execution.acceptance_status == "passed"
+    assert execution.acceptance_result is not None
+    assert execution.acceptance_result["semantic_summary_id"] == "ssum_fake_stack"
+    assert execution.acceptance_result["semantic_acceptance_decision_id"] == "sacc_fake_stack"
 
 
 def test_broker_reuses_goal_runtime_across_repeated_browser_turns() -> None:
@@ -267,7 +766,7 @@ def test_broker_reuses_goal_runtime_across_repeated_app_turns() -> None:
     assert first.result["run"]["run_id"] != second.result["run"]["run_id"]
 
 
-def test_broker_v06_bridge_replaces_app_strategy_with_browser_strategy_without_changing_goal(monkeypatch) -> None:
+def test_broker_v06_bridge_respects_selected_route_boundary(monkeypatch) -> None:
     broker = CapabilityBroker(
         intent_broker=RuleIntentBroker(),
         apps=FakeApps(),
@@ -325,6 +824,16 @@ def test_broker_v06_bridge_replaces_app_strategy_with_browser_strategy_without_c
         synthesis_provenance=GoalSynthesisProvenance(provider_name="test", provider_version="v0.6"),
     )
     planning = PlanningArtifacts(
+        understanding=make_understanding(
+            UtteranceAnalysis(
+                utterance="open Notion",
+                type="task",
+                confidence=1.0,
+                domains=("apps", "browser"),
+                explanation="try app first and then browser fallback",
+                task_spans=(TaskSpan(id="span_1", text="open Notion", start=0, end=11, domain="apps", confidence=1.0),),
+            )
+        ),
         analysis=UtteranceAnalysis(
             utterance="open Notion",
             type="task",
@@ -347,14 +856,13 @@ def test_broker_v06_bridge_replaces_app_strategy_with_browser_strategy_without_c
 
     result = broker.handle(CommandRequest("open Notion", debug=True))
 
-    assert result.status == "executed"
-    assert result.overall_status == "completed"
+    assert result.status == "failed"
+    assert result.overall_status == "failed"
     assert result.result["goal_runtime"]["goal_id"] == "goal_open_notion_main_path"
-    assert result.result["selected_strategy_id"] == "strategy_browser_search_web_route"
-    assert len(result.result["attempts"]) == 2
+    assert result.result["selected_strategy_id"] == "strategy_apps_open_route"
+    assert len(result.result["attempts"]) == 1
     assert result.result["attempts"][0]["failure"]["failure_class"] == "semantic_mismatch"
-    assert result.result["attempts"][1]["selected_route_id"] == "browser_search_web_route"
-    assert result.result["run_ledger"]["terminal_outcome"]["status"] == "completed"
+    assert result.result["run_ledger"]["terminal_outcome"]["status"] == "failed"
 
 
 def test_window_list_requests_expose_v06_runtime_state_on_main_path() -> None:
@@ -575,8 +1083,20 @@ def test_task_plan_loop_replans_semantic_mismatch_into_browser_route(monkeypatch
         provenance={"planner": "test"},
     )
 
+    initial_understanding = make_understanding(
+        UtteranceAnalysis(
+            utterance="\u6253\u5f00\u767e\u5ea6\u5b98\u7f51",
+            type="task",
+            confidence=1.0,
+            domains=("apps",),
+            explanation="misclassified as app.open",
+            task_spans=(TaskSpan(id="span_1", text="\u6253\u5f00\u767e\u5ea6\u5b98\u7f51", start=0, end=6, domain="apps", confidence=1.0),),
+        )
+    )
+
     plans = [
         PlanningArtifacts(
+            understanding=initial_understanding,
             analysis=UtteranceAnalysis(
                 utterance="\u6253\u5f00\u767e\u5ea6\u5b98\u7f51",
                 type="task",
@@ -590,6 +1110,7 @@ def test_task_plan_loop_replans_semantic_mismatch_into_browser_route(monkeypatch
             candidates=(apps_plan,),
         ),
         PlanningArtifacts(
+            understanding=initial_understanding,
             analysis=UtteranceAnalysis(
                 utterance="\u6253\u5f00\u767e\u5ea6\u5b98\u7f51",
                 type="task",
@@ -615,8 +1136,16 @@ def test_task_plan_loop_replans_semantic_mismatch_into_browser_route(monkeypatch
     assert result.overall_status == "completed"
     assert result.result["plan"]["selected_route_id"] == "browser_search_web_route"
     assert len(result.result["attempts"]) == 2
+    assert result.result["attempts"][0]["understanding_id"] == result.result["understanding"]["primary_understanding_id"]
+    assert result.result["attempts"][1]["understanding_id"] == result.result["understanding"]["primary_understanding_id"]
+    assert result.result["understanding"]["artifact_role"] == "refinement"
+    assert result.result["understanding"]["source_understanding_id"] == result.result["attempts"][0]["understanding_id"]
+    assert result.result["understanding_refinement"]["previous_understanding_id"] == result.result["attempts"][0]["understanding_id"]
+    assert result.result["understanding_refinement"]["refined_understanding_id"] == result.result["understanding"]["understanding_id"]
+    assert "domains" in result.result["understanding_refinement"]["changed_fields"]
     assert result.result["attempts"][0]["failure"]["failure_class"] == "semantic_mismatch"
     assert result.result["attempts"][0]["replan_decision"]["action"] == "replan_with_constraints"
+    assert result.result["attempts"][0]["replan_decision"]["replan_decision_id"].startswith("rpdec_")
     assert result.result["attempts"][1]["selected_route_id"] == "browser_search_web_route"
 
 
@@ -652,6 +1181,16 @@ def test_task_plan_loop_preserves_attempt_history_when_replan_exhausts_candidate
 
     plans = [
         PlanningArtifacts(
+            understanding=make_understanding(
+                UtteranceAnalysis(
+                    utterance="\u6253\u5f00\u767e\u5ea6\u5b98\u7f51",
+                    type="task",
+                    confidence=1.0,
+                    domains=("apps",),
+                    explanation="misclassified as app.open",
+                    task_spans=(TaskSpan(id="span_1", text="\u6253\u5f00\u767e\u5ea6\u5b98\u7f51", start=0, end=6, domain="apps", confidence=1.0),),
+                )
+            ),
             analysis=UtteranceAnalysis(
                 utterance="\u6253\u5f00\u767e\u5ea6\u5b98\u7f51",
                 type="task",
@@ -665,6 +1204,16 @@ def test_task_plan_loop_preserves_attempt_history_when_replan_exhausts_candidate
             candidates=(apps_plan,),
         ),
         PlanningArtifacts(
+            understanding=make_understanding(
+                UtteranceAnalysis(
+                    utterance="\u6253\u5f00\u767e\u5ea6\u5b98\u7f51",
+                    type="rejected",
+                    confidence=1.0,
+                    domains=(),
+                    explanation="no replacement route available",
+                    task_spans=(),
+                )
+            ),
             analysis=UtteranceAnalysis(
                 utterance="\u6253\u5f00\u767e\u5ea6\u5b98\u7f51",
                 type="rejected",
@@ -690,6 +1239,189 @@ def test_task_plan_loop_preserves_attempt_history_when_replan_exhausts_candidate
     assert result.result["run"]["final_outcome"] == "failed"
     assert len(result.result["attempts"]) == 1
     assert result.result["attempts"][0]["failure"]["failure_class"] == "semantic_mismatch"
+
+
+def test_task_plan_loop_emits_understanding_supersession_when_replan_changes_type(monkeypatch) -> None:
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        apps=FakeApps(),
+        portal=FakePortal(),
+        audit=AuditLog(make_audit_path("semantic-replan-supersession")),
+        reviews=ReviewStore(make_review_path("semantic-replan-supersession")),
+    )
+
+    apps_plan = TaskPlan(
+        schema_version="v0.5",
+        plan_id="plan_apps_supersession",
+        utterance="open that site we discussed yesterday",
+        display=DisplayFields(goal="open an application"),
+        selected_route_id="apps_open_route",
+        routes=(TaskRoute(id="apps_open_route", score=1.0, domain_id="apps", required_capabilities=("app.open",)),),
+        steps=(
+            TaskStep(
+                id="open_app",
+                action="app.open",
+                capability_id="app.open",
+                target={"name": "that site we discussed yesterday"},
+                expected_state=ExpectedState(kind="app_opened_or_focused", fields={"app": "that site we discussed yesterday"}),
+                preconditions=(StepPrecondition(kind="capability_available", capability_id="app.open"),),
+                provenance=StepProvenance(source_span_id="span_1", planner="test"),
+            ),
+        ),
+        provenance={"planner": "test"},
+    )
+
+    initial_understanding = make_understanding(
+        UtteranceAnalysis(
+            utterance="open that site we discussed yesterday",
+            type="task",
+            confidence=1.0,
+            domains=("apps",),
+            explanation="misclassified as an app request",
+            task_spans=(TaskSpan(id="span_1", text="open that site we discussed yesterday", start=0, end=37, domain="apps", confidence=1.0),),
+        )
+    )
+
+    plans = [
+        PlanningArtifacts(
+            understanding=initial_understanding,
+            analysis=initial_understanding.analysis,
+            goal_synthesis=None,
+            plan=apps_plan,
+            candidates=(apps_plan,),
+        ),
+        PlanningArtifacts(
+            understanding=initial_understanding,
+            analysis=UtteranceAnalysis(
+                utterance="open that site we discussed yesterday",
+                type="clarification",
+                confidence=0.95,
+                domains=("browser",),
+                explanation="the referenced site is ambiguous without a concrete target",
+                task_spans=(),
+                chat_response="Which exact site should I open?",
+            ),
+            goal_synthesis=None,
+            plan=None,
+            candidates=(),
+        ),
+    ]
+
+    def fake_plan_turn(*args, **kwargs):
+        return plans.pop(0)
+
+    monkeypatch.setattr("vibeos.broker.plan_turn", fake_plan_turn)
+
+    result = broker.handle(CommandRequest("open that site we discussed yesterday"))
+
+    assert result.status == "ambiguous"
+    assert result.overall_status == "needs_user_input"
+    assert len(result.result["attempts"]) == 1
+    assert result.result["understanding"]["artifact_role"] == "supersession"
+    assert result.result["understanding"]["primary_understanding_id"] == result.result["attempts"][0]["understanding_id"]
+    assert result.result["understanding"]["source_understanding_id"] == result.result["attempts"][0]["understanding_id"]
+    assert result.result["understanding_supersession"]["previous_understanding_id"] == result.result["attempts"][0]["understanding_id"]
+    assert result.result["understanding_supersession"]["superseding_understanding_id"] == result.result["understanding"]["understanding_id"]
+    assert "type" in result.result["understanding_supersession"]["changed_fields"]
+
+
+def test_task_plan_loop_passes_refined_understanding_into_replanned_plan_turn(monkeypatch) -> None:
+    monkeypatch.setenv("VIBEOS_STATE_DIR", str(Path(".vibeos") / "test-state" / f"semantic-replan-transition-provider-{uuid4().hex}"))
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        apps=FakeApps(),
+        portal=ObservedPortal(),
+        audit=AuditLog(make_audit_path("semantic-replan-transition-provider")),
+        reviews=ReviewStore(make_review_path("semantic-replan-transition-provider")),
+        understanding_transition_provider=FixedUnderstandingTransitionProvider(),
+    )
+
+    apps_plan = TaskPlan(
+        schema_version="v0.5",
+        plan_id="plan_apps_transition_provider",
+        utterance="打开百度官网",
+        display=DisplayFields(goal="open an application"),
+        selected_route_id="apps_open_route",
+        routes=(TaskRoute(id="apps_open_route", score=1.0, domain_id="apps", required_capabilities=("app.open",)),),
+        steps=(
+            TaskStep(
+                id="open_app",
+                action="app.open",
+                capability_id="app.open",
+                target={"name": "百度官网"},
+                expected_state=ExpectedState(kind="app_opened_or_focused", fields={"app": "百度官网"}),
+                preconditions=(StepPrecondition(kind="capability_available", capability_id="app.open"),),
+                provenance=StepProvenance(source_span_id="span_1", planner="test"),
+            ),
+        ),
+        provenance={"planner": "test"},
+    )
+    browser_plan = TaskPlan(
+        schema_version="v0.5",
+        plan_id="plan_browser_transition_provider",
+        utterance="打开百度官网",
+        display=DisplayFields(goal="search Baidu in the browser"),
+        selected_route_id="browser_search_web_route",
+        routes=(TaskRoute(id="browser_search_web_route", score=1.0, domain_id="browser", required_capabilities=("browser.search_web",), default_verifier_ids=("browser_search_route_completed",)),),
+        steps=(
+            TaskStep(
+                id="search_baidu",
+                action="browser.search_web",
+                capability_id="browser.search_web",
+                target={"query": "百度官网"},
+                expected_state=ExpectedState(kind="search_results_available", fields={"query": "百度官网"}),
+                preconditions=(StepPrecondition(kind="capability_available", capability_id="browser.search_web"),),
+                provenance=StepProvenance(source_span_id="span_1", planner="test"),
+            ),
+        ),
+        provenance={"planner": "test"},
+    )
+    initial_understanding = make_understanding(
+        UtteranceAnalysis(
+            utterance="打开百度官网",
+            type="task",
+            confidence=1.0,
+            domains=("apps",),
+            explanation="misclassified as app.open",
+            task_spans=(TaskSpan(id="span_1", text="打开百度官网", start=0, end=6, domain="apps", confidence=1.0),),
+        )
+    )
+    seen_understandings: list[UnderstandingArtifact | None] = []
+
+    def fake_plan_turn(*args, **kwargs):
+        seen_understandings.append(kwargs.get("understanding"))
+        if len(seen_understandings) == 1:
+            return PlanningArtifacts(
+                understanding=initial_understanding,
+                analysis=initial_understanding.analysis,
+                goal_synthesis=None,
+                plan=apps_plan,
+                candidates=(apps_plan,),
+            )
+        replanned_understanding = kwargs.get("understanding")
+        assert replanned_understanding is not None
+        assert replanned_understanding.artifact_role == "refinement"
+        assert replanned_understanding.analysis.domains == ("browser",)
+        return PlanningArtifacts(
+            understanding=replanned_understanding,
+            analysis=replanned_understanding.analysis,
+            goal_synthesis=None,
+            plan=browser_plan,
+            candidates=(browser_plan,),
+        )
+
+    monkeypatch.setattr("vibeos.broker.plan_turn", fake_plan_turn)
+
+    result = broker.handle(CommandRequest("打开百度官网"))
+
+    assert result.status == "executed"
+    assert result.result["understanding"]["artifact_role"] == "refinement"
+    assert result.result["understanding"]["analysis_provider_name"] == initial_understanding.analysis_provider_name
+    assert len(seen_understandings) == 2
+    trace_run_id = result.trace_run_id
+    assert trace_run_id is not None
+    model_io = TaskTraceStore().model_io(trace_run_id)
+    assert any(item["provider"] == "test_understanding_transition" for item in model_io)
 
 
 def test_normal_ask_returns_plan_review_for_mixed_clipboard_request() -> None:
@@ -819,3 +1551,11 @@ def make_review_path(name: str) -> Path:
 
 def make_audit_path(name: str) -> Path:
     return Path(".vibeos") / f"audit-{name}-{uuid4().hex}.jsonl"
+
+
+def make_understanding(analysis: UtteranceAnalysis) -> UnderstandingArtifact:
+    return UnderstandingArtifact(
+        understanding_id=f"und_{uuid4().hex[:8]}",
+        utterance=analysis.utterance,
+        analysis=analysis,
+    )

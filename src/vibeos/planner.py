@@ -5,21 +5,31 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 from urllib.parse import quote_plus, urlparse
 
+from .candidate_selection import (
+    CandidateSelectionDecision,
+    CandidateSelectionProvider,
+    CandidateSet,
+    OpenAICompatibleCandidateSelectionProvider,
+    build_candidate_set,
+    resolve_selected_plan,
+)
 from .capabilities import CAPABILITIES
+from .clarification import ClarificationProvider
 from .config import search_engine_template
 from .debug_trace import build_debug_trace, serialize_provider_exchange
 from .domain_models import CapabilityExposure, DomainRoutingResult, ObservationReceipt, ObservationRequest
 from .domain_registry import DomainRegistry, RouteDefinition, default_domain_registry
 from .domain_router import route_domains
 from .goal_models import GoalSynthesisResult
-from .goal_synthesizer import GoalSynthesizer, RuleBasedGoalSynthesisProvider, goal_synthesis_payload
-from .intent import IntentBroker, OpenAICompatibleIntentBroker, RuleIntentBroker, infer_browser_intent_from_open_request
+from .goal_synthesizer import GoalSynthesisProvider, GoalSynthesizer, OpenAICompatibleGoalSynthesisProvider, goal_synthesis_payload
+from .intent import IntentBroker, OpenAICompatibleIntentBroker, infer_browser_intent_from_open_request
 from .models import Intent, utc_now_iso
-from .nlu import analyze_utterance, domain_for_action
+from .nlu import domain_for_action
 from .observation import build_capability_exposure, planner_context_payload, resolve_observation_request
 from .routes import available_capabilities as global_available_capabilities
-from .routes import score_candidates, select_best_plan
+from .routes import score_candidates
 from .run_trace import build_run_trace
+from .task_trace import record_model_io, record_trace_event
 from .task_models import (
     DisplayFields,
     ExpectedState,
@@ -33,6 +43,15 @@ from .task_models import (
     canonicalize_target_for_action,
 )
 from .task_validation import validate_plan
+from .understanding import (
+    CapturingIntentBroker,
+    UnderstandingArtifact,
+    UnderstandingAnalysisProvider,
+    UnderstandingRefinement,
+    UnderstandingSupersession,
+    create_primary_understanding,
+    root_understanding_id,
+)
 from .verifiers import default_verifier_registry
 
 
@@ -44,10 +63,15 @@ UNAVAILABLE_LOCAL_CAPABILITIES = {"media.search", "media.play", "media.pause"}
 
 @dataclass(frozen=True)
 class PlanningArtifacts:
+    understanding: UnderstandingArtifact
     analysis: UtteranceAnalysis
     goal_synthesis: GoalSynthesisResult | None
     plan: TaskPlan | None
     candidates: tuple[TaskPlan, ...]
+    understanding_refinement: UnderstandingRefinement | None = None
+    understanding_supersession: UnderstandingSupersession | None = None
+    candidate_set: CandidateSet | None = None
+    route_decision: CandidateSelectionDecision | None = None
     domain_routing: DomainRoutingResult | None = None
     observation_request: ObservationRequest | None = None
     observation_receipt: ObservationReceipt | None = None
@@ -69,17 +93,80 @@ def plan_turn(
     utterance: str,
     intent_broker: IntentBroker | None = None,
     capability_context: set[str] | None = None,
+    selection_provider: CandidateSelectionProvider | None = None,
+    clarification_provider: ClarificationProvider | None = None,
+    analysis_provider: UnderstandingAnalysisProvider | None = None,
+    goal_synthesis_provider: GoalSynthesisProvider | None = None,
+    understanding: UnderstandingArtifact | None = None,
     debug: bool = False,
     candidate_domain_ids_override: tuple[str, ...] | None = None,
     excluded_route_ids: tuple[str, ...] = (),
     excluded_capability_ids: tuple[str, ...] = (),
 ) -> PlanningArtifacts:
-    broker = intent_broker or OpenAICompatibleIntentBroker()
-    analysis = analyze_utterance(utterance, broker)
-    synthesizer = GoalSynthesizer(provider=RuleBasedGoalSynthesisProvider(broker))
-    goal_synthesis = synthesizer.synthesize(utterance, analysis)
+    if understanding is None:
+        understanding, broker = create_primary_understanding(
+            utterance,
+            intent_broker or OpenAICompatibleIntentBroker(),
+            clarification_provider=clarification_provider,
+            analysis_provider=analysis_provider,
+        )
+        analysis = understanding.analysis
+        record_trace_event(
+            phase="analysis",
+            event_type="understanding_created",
+            status=analysis.type,
+            actor="planner",
+            data={
+                "artifact_type": "understanding",
+                "artifact_id": understanding.understanding_id,
+                "source_artifact_ids": [],
+                "understanding_id": understanding.understanding_id,
+                "primary_understanding_id": understanding.primary_understanding_id,
+                "artifact_role": understanding.artifact_role,
+                "provider_parse_count": understanding.provider_parse_count,
+                "provider_cache_hit_count": understanding.provider_cache_hit_count,
+                "uncertainty_reasons": list(understanding.uncertainty_reasons),
+                "analysis": asdict(analysis),
+            },
+        )
+    else:
+        broker = intent_broker if isinstance(intent_broker, CapturingIntentBroker) else CapturingIntentBroker(intent_broker or OpenAICompatibleIntentBroker())
+        if understanding.provider_intent is not None:
+            broker.remember(utterance, understanding.provider_intent)
+        analysis = understanding.analysis
+        record_trace_event(
+            phase="analysis",
+            event_type="understanding_reused",
+            status=analysis.type,
+            actor="planner",
+            data={
+                "artifact_type": "understanding",
+                "artifact_id": understanding.understanding_id,
+                "source_artifact_ids": [understanding.source_understanding_id] if understanding.source_understanding_id else [],
+                "understanding_id": understanding.understanding_id,
+                "primary_understanding_id": understanding.primary_understanding_id,
+                "artifact_role": understanding.artifact_role,
+                "analysis": asdict(analysis),
+            },
+        )
+    synthesizer = GoalSynthesizer(
+        provider=goal_synthesis_provider or OpenAICompatibleGoalSynthesisProvider(broker)
+    )
+    goal_synthesis = synthesizer.synthesize(
+        utterance,
+        analysis,
+        understanding_id=understanding.primary_understanding_id or understanding.understanding_id,
+    )
+    record_trace_event(
+        phase="goal_synthesis",
+        event_type="goal_synthesized",
+        status=goal_synthesis.status,
+        actor="planner",
+        goal_id=goal_synthesis.goal_spec.goal_id if goal_synthesis.goal_spec is not None else None,
+        data=goal_synthesis_payload(goal_synthesis),
+    )
     if analysis.type not in {"task", "mixed", "clarification", "rejected"}:
-        return PlanningArtifacts(analysis=analysis, goal_synthesis=goal_synthesis, plan=None, candidates=())
+        return PlanningArtifacts(understanding=understanding, analysis=analysis, goal_synthesis=goal_synthesis, plan=None, candidates=())
 
     routing: DomainRoutingResult | None = None
     observation_request: ObservationRequest | None = None
@@ -89,6 +176,8 @@ def plan_turn(
     trace = None
     debug_trace = None
     fallback_reasons: list[str] = []
+    route_decision: CandidateSelectionDecision | None = None
+    candidate_set: CandidateSet | None = None
 
     candidate_domain_ids = candidate_domain_ids_override or (goal_synthesis.goal_spec.candidate_domain_ids if goal_synthesis.goal_spec else ())
     if should_use_domain_pipeline(goal_synthesis):
@@ -115,13 +204,90 @@ def plan_turn(
         excluded_route_ids=excluded_route_ids,
         excluded_capability_ids=excluded_capability_ids,
     )
+    record_trace_event(
+        phase="planning",
+        event_type="candidate_plans_built",
+        status="ok",
+        actor="planner",
+        goal_id=goal_synthesis.goal_spec.goal_id if goal_synthesis.goal_spec is not None else None,
+        data={
+            "candidate_count": len(candidates),
+            "route_ids": [candidate.selected_route_id for candidate in candidates],
+            "excluded_route_ids": list(excluded_route_ids),
+            "excluded_capability_ids": list(excluded_capability_ids),
+        },
+    )
 
     available = default_capability_context() if capability_context is None else capability_context
-    scored_candidates = score_candidates(candidates, available)
-    selected = select_best_plan(scored_candidates, available)
+    scored_candidates = tuple(score_candidates(candidates, available))
+    candidate_set = build_candidate_set(understanding=understanding, candidates=scored_candidates, capability_context=available)
+    primary_understanding_id = root_understanding_id(understanding)
+    record_trace_event(
+        phase="planning",
+        event_type="candidate_set_generated",
+        status="ok",
+        actor="planner",
+        goal_id=goal_synthesis.goal_spec.goal_id if goal_synthesis.goal_spec is not None else None,
+        data={
+            "understanding_id": primary_understanding_id,
+            "active_understanding_id": understanding.understanding_id,
+            "candidate_set_id": candidate_set.candidate_set_id,
+            "candidate_ids": [candidate.candidate_id for candidate in candidate_set.candidates],
+        },
+    )
+    selector = selection_provider or OpenAICompatibleCandidateSelectionProvider()
+    route_decision = selector.decide(understanding=understanding, candidate_set=candidate_set)
+    record_model_io(
+        phase="planning",
+        provider=route_decision.provider_name,
+        model=route_decision.model_name,
+        request_payload={
+            "understanding_id": primary_understanding_id,
+            "active_understanding_id": understanding.understanding_id,
+            "analysis_type": analysis.type,
+            "candidate_set_id": candidate_set.candidate_set_id,
+            "candidate_ids": [candidate.candidate_id for candidate in candidate_set.candidates],
+        },
+        response_payload=None,
+        normalized_output=asdict(route_decision),
+        actor="route_selector",
+        call_kind="structured_followup",
+        consumed_artifacts={
+            "understanding_id": primary_understanding_id,
+            "active_understanding_id": understanding.understanding_id,
+            "candidate_set_id": candidate_set.candidate_set_id,
+        },
+    )
+    selected = resolve_selected_plan(decision=route_decision, candidates=scored_candidates, capability_context=available)
     validation = validate_plan(selected) if selected is not None else None
+    record_trace_event(
+        phase="planning",
+        event_type="route_selected" if selected is not None else "planning_unresolved",
+        status="ok" if selected is not None and (validation is None or validation.ok) else ("invalid" if validation is not None and not validation.ok else "rejected"),
+        actor="planner",
+        goal_id=goal_synthesis.goal_spec.goal_id if goal_synthesis.goal_spec is not None else None,
+        plan_id=selected.plan_id if selected is not None else None,
+        data={
+            "understanding_id": primary_understanding_id,
+            "active_understanding_id": understanding.understanding_id,
+            "candidate_set_id": candidate_set.candidate_set_id,
+            "route_decision_id": route_decision.route_decision_id,
+            "candidate_count": len(scored_candidates),
+            "decision_action": route_decision.action,
+            "selected_candidate_id": route_decision.selected_candidate_id,
+            "selected_route_id": selected.selected_route_id if selected is not None else None,
+            "validation_ok": validation.ok if validation is not None else None,
+            "validation_errors": list(validation.errors) if validation is not None else [],
+        },
+    )
     candidate_selection = {
+        "understanding_id": primary_understanding_id,
+        "active_understanding_id": understanding.understanding_id,
+        "candidate_set_id": candidate_set.candidate_set_id,
+        "route_decision_id": route_decision.route_decision_id,
         "candidate_count": len(scored_candidates),
+        "decision_action": route_decision.action,
+        "selected_candidate_id": route_decision.selected_candidate_id,
         "selected_route_id": selected.selected_route_id if selected is not None else "",
         "selected_plan_id": selected.plan_id if selected is not None else "",
     }
@@ -146,10 +312,13 @@ def plan_turn(
         debug_trace_id="debug_trace_v0_5",
     )
     return PlanningArtifacts(
+        understanding=understanding,
         analysis=analysis,
         goal_synthesis=goal_synthesis,
         plan=selected,
-        candidates=tuple(scored_candidates),
+        candidates=scored_candidates,
+        candidate_set=candidate_set,
+        route_decision=route_decision,
         domain_routing=routing,
         observation_request=observation_request,
         observation_receipt=observation_receipt,
@@ -190,12 +359,9 @@ def default_capability_context() -> set[str]:
 
 
 def structured_capability_intent(text: str, intent_broker: IntentBroker | None = None) -> Intent:
-    intent = RuleIntentBroker().parse(text)
-    if intent.action != "unknown":
-        return intent
     if intent_broker is not None:
         return intent_broker.parse(text)
-    return intent
+    return Intent.unknown("no intent broker was available for compatibility planning")
 
 
 def build_candidate_plans(analysis: UtteranceAnalysis, intent_broker: IntentBroker | None = None) -> list[TaskPlan]:
@@ -420,8 +586,12 @@ def build_browser_open_url_plan(
     route_definition: RouteDefinition,
     intent_broker: IntentBroker | None = None,
 ) -> TaskPlan | None:
-    del intent_broker
-    uri = extract_browser_url(span.text)
+    intent = structured_capability_intent(span.text, intent_broker)
+    uri = ""
+    if intent.action == "browser.open_url":
+        uri = str(canonicalize_target_for_action(intent.action, intent.target).get("uri") or "")
+    if not uri:
+        uri = extract_browser_url(span.text)
     if not uri:
         return None
     route = task_route_from_definition(route_definition, "Open a URL in the browser.")
@@ -454,8 +624,12 @@ def build_browser_search_web_plan(
     route_definition: RouteDefinition,
     intent_broker: IntentBroker | None = None,
 ) -> TaskPlan | None:
-    del intent_broker
-    query = extract_browser_search_query(span.text)
+    intent = structured_capability_intent(span.text, intent_broker)
+    query = ""
+    if intent.action == "browser.search_web":
+        query = str(canonicalize_target_for_action(intent.action, intent.target).get("query") or "")
+    if not query:
+        query = extract_browser_search_query(span.text)
     if not query:
         return None
     route = task_route_from_definition(route_definition, "Search the web in the browser.")
@@ -488,11 +662,18 @@ def build_browser_site_search_plan(
     route_definition: RouteDefinition,
     intent_broker: IntentBroker | None = None,
 ) -> TaskPlan | None:
-    del intent_broker
-    site_search = extract_site_search(span.text)
-    if site_search is None:
-        return None
-    site, query = site_search
+    intent = structured_capability_intent(span.text, intent_broker)
+    site = ""
+    query = ""
+    if intent.action == "browser.open_site_search":
+        target = canonicalize_target_for_action(intent.action, intent.target)
+        site = str(target.get("site") or "")
+        query = str(target.get("query") or "")
+    if not site or not query:
+        site_search = extract_site_search(span.text)
+        if site_search is None:
+            return None
+        site, query = site_search
     route = task_route_from_definition(route_definition, "Search a site in the browser.")
     step = TaskStep(
         id="browser_site_search",
@@ -643,6 +824,93 @@ def build_apps_open_plan(
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_apps_route"),
     )
     return make_explicit_plan(utterance, span, route, (step,), goal="open an application", explanation="Use the explicit apps domain for application launch or focus.")
+
+
+def build_app_structured_search_plan(
+    utterance: str,
+    span: TaskSpan,
+    route_definition: RouteDefinition,
+    intent_broker: IntentBroker | None = None,
+) -> TaskPlan | None:
+    return build_app_search_plan(
+        utterance,
+        span,
+        route_definition,
+        intent_broker=intent_broker,
+        interaction_surface="structured",
+    )
+
+
+def build_app_shortcut_search_plan(
+    utterance: str,
+    span: TaskSpan,
+    route_definition: RouteDefinition,
+    intent_broker: IntentBroker | None = None,
+) -> TaskPlan | None:
+    return build_app_search_plan(
+        utterance,
+        span,
+        route_definition,
+        intent_broker=intent_broker,
+        interaction_surface="shortcut",
+    )
+
+
+def build_app_search_plan(
+    utterance: str,
+    span: TaskSpan,
+    route_definition: RouteDefinition,
+    *,
+    intent_broker: IntentBroker | None = None,
+    interaction_surface: str,
+) -> TaskPlan | None:
+    intent = structured_capability_intent(span.text, intent_broker)
+    if intent.action != "app.search_history":
+        return None
+    target = canonicalize_target_for_action(intent.action, intent.target)
+    app_name = str(target.get("app") or "")
+    query = str(target.get("query") or "")
+    if not app_name or not query:
+        return None
+    route = task_route_from_definition(
+        route_definition,
+        "Search inside an application through the explicit app-interaction domain.",
+    )
+    step = TaskStep(
+        id=route_definition.route_id.replace("_route", ""),
+        action="app.search_history",
+        capability_id="app.search_history",
+        target={"app": app_name, "query": query},
+        depends_on=(),
+        risk_level=CAPABILITIES["app.search_history"].risk_level,
+        expected_state=ExpectedState(kind="search_results_available", fields={"query": query}),
+        preconditions=(StepPrecondition(kind="capability_available", capability_id="app.search_history"),),
+        provenance=StepProvenance(source_span_id=span.id, planner="v0.8_app_interaction_route"),
+    )
+    display = DisplayFields(
+        goal=f"search {app_name} for {query}",
+        explanation=(
+            "Prefer structured UI search controls inside the application."
+            if interaction_surface == "structured"
+            else "Use a bounded shortcut-driven in-app search fallback."
+        ),
+    )
+    return TaskPlan(
+        schema_version="v0.5",
+        plan_id=make_plan_id(utterance, route.id),
+        utterance=utterance,
+        display=display,
+        selected_route_id=route.id,
+        routes=(route,),
+        steps=(step,),
+        provenance={
+            "planner": "v0.8_domain_planner",
+            "planner_version": "v0.8",
+            "source_span_id": span.id,
+            "domain_id": "app_interaction",
+            "interaction_surface": interaction_surface,
+        },
+    )
 
 
 def build_window_list_plan(
@@ -827,6 +1095,8 @@ def make_explicit_plan(
 ROUTE_BUILDERS = {
     "build_apps_list_plan": build_apps_list_plan,
     "build_apps_open_plan": build_apps_open_plan,
+    "build_app_structured_search_plan": build_app_structured_search_plan,
+    "build_app_shortcut_search_plan": build_app_shortcut_search_plan,
     "build_window_list_plan": build_window_list_plan,
     "build_window_focus_plan": build_window_focus_plan,
     "build_window_state_plan": build_window_state_plan,
@@ -865,14 +1135,37 @@ def plan_payload(
     artifacts = plan_turn(utterance, intent_broker=intent_broker, capability_context=capability_context, debug=debug)
     goal_payload = goal_synthesis_payload(artifacts.goal_synthesis) if artifacts.goal_synthesis is not None else None
     if artifacts.plan is None:
-        status = "clarification" if artifacts.analysis.type == "clarification" else "rejected"
+        route_action = artifacts.route_decision.action if artifacts.route_decision is not None else None
+        if route_action == "clarify" or artifacts.analysis.type == "clarification":
+            status = "clarification"
+            overall_status = "needs_user_input"
+            message = (
+                artifacts.route_decision.reason
+                if artifacts.route_decision is not None and artifacts.route_decision.reason
+                else (artifacts.goal_synthesis.message if artifacts.goal_synthesis is not None else artifacts.analysis.explanation)
+            )
+        elif route_action == "blocked":
+            status = "blocked"
+            overall_status = "blocked"
+            message = artifacts.route_decision.reason if artifacts.route_decision is not None else "no route satisfies required capabilities"
+        elif route_action == "unsupported":
+            status = "rejected"
+            overall_status = "failed"
+            message = artifacts.route_decision.reason if artifacts.route_decision is not None else "no executable task plan was produced"
+        else:
+            status = "rejected"
+            overall_status = "failed"
+            message = artifacts.goal_synthesis.message if artifacts.goal_synthesis is not None else artifacts.analysis.explanation
         if artifacts.candidates:
             return {
-                "status": "rejected",
+                "status": status,
+                "understanding": asdict(artifacts.understanding),
                 "analysis": asdict(artifacts.analysis),
                 "goal_synthesis": goal_payload,
                 "plan": None,
                 "validation": None,
+                "candidate_set": asdict(artifacts.candidate_set) if artifacts.candidate_set is not None else None,
+                "route_decision": asdict(artifacts.route_decision) if artifacts.route_decision is not None else None,
                 "candidates": [candidate_summary(candidate) for candidate in sorted(artifacts.candidates, key=lambda item: item.routes[0].score, reverse=True)],
                 "domain_routing": asdict(artifacts.domain_routing) if artifacts.domain_routing else None,
                 "observation_request": asdict(artifacts.observation_request) if artifacts.observation_request else None,
@@ -882,15 +1175,18 @@ def plan_payload(
                 "debug_trace": asdict(artifacts.debug_trace) if artifacts.debug_trace is not None else {},
                 "execution_status": "not_started",
                 "acceptance_status": "skipped",
-                "overall_status": "failed",
-                "message": "no route satisfies required capabilities",
+                "overall_status": overall_status,
+                "message": message or "no route satisfies required capabilities",
             }
         return {
             "status": status,
+            "understanding": asdict(artifacts.understanding),
             "analysis": asdict(artifacts.analysis),
             "goal_synthesis": goal_payload,
             "plan": None,
             "validation": None,
+            "candidate_set": asdict(artifacts.candidate_set) if artifacts.candidate_set is not None else None,
+            "route_decision": asdict(artifacts.route_decision) if artifacts.route_decision is not None else None,
             "candidates": [],
             "domain_routing": asdict(artifacts.domain_routing) if artifacts.domain_routing else None,
             "observation_request": asdict(artifacts.observation_request) if artifacts.observation_request else None,
@@ -900,17 +1196,20 @@ def plan_payload(
             "debug_trace": asdict(artifacts.debug_trace) if artifacts.debug_trace is not None else {},
             "execution_status": "not_started",
             "acceptance_status": "skipped",
-            "overall_status": "failed",
-            "message": artifacts.goal_synthesis.message if artifacts.goal_synthesis is not None else artifacts.analysis.explanation,
+            "overall_status": overall_status,
+            "message": message,
         }
     validation = validate_plan(artifacts.plan)
     status = "validated" if validation.ok else "invalid"
     return {
         "status": status,
+        "understanding": asdict(artifacts.understanding),
         "analysis": asdict(artifacts.analysis),
         "goal_synthesis": goal_payload,
         "plan": asdict(artifacts.plan),
         "validation": asdict(validation),
+        "candidate_set": asdict(artifacts.candidate_set) if artifacts.candidate_set is not None else None,
+        "route_decision": asdict(artifacts.route_decision) if artifacts.route_decision is not None else None,
         "candidates": [candidate_summary(candidate) for candidate in sorted(artifacts.candidates, key=lambda item: item.routes[0].score, reverse=True)],
         "domain_routing": asdict(artifacts.domain_routing) if artifacts.domain_routing else None,
         "observation_request": asdict(artifacts.observation_request) if artifacts.observation_request else None,
@@ -927,6 +1226,7 @@ def plan_payload(
 def candidate_summary(plan: TaskPlan) -> dict[str, object]:
     route = plan.routes[0]
     return {
+        "candidate_id": f"cand_{route.id}",
         "plan_id": plan.plan_id,
         "route_id": route.id,
         "domain_id": route.domain_id,

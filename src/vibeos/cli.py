@@ -11,6 +11,7 @@ from .intent import RuleIntentBroker
 from .models import CommandRequest
 from .planner import plan_payload
 from .runtime import LocalRuntime, RuntimeSelectionError, build_runtime
+from .task_trace import TaskTraceStore, bind_trace_session, make_trace_run_id
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -58,6 +59,21 @@ def build_parser() -> argparse.ArgumentParser:
     tail = audit_sub.add_parser("tail", help="print recent audit entries")
     tail.add_argument("-n", "--count", type=int, default=20)
 
+    trace = subparsers.add_parser("trace", help="inspect unified task traces")
+    trace_sub = trace.add_subparsers(dest="trace_command", required=True)
+    trace_latest = trace_sub.add_parser("latest", help="list recent task traces")
+    trace_latest.add_argument("-n", "--count", type=int, default=10)
+    trace_latest.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    trace_show = trace_sub.add_parser("show", help="show one task trace summary")
+    trace_show.add_argument("run_id")
+    trace_show.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    trace_events = trace_sub.add_parser("events", help="show one task trace event stream")
+    trace_events.add_argument("run_id")
+    trace_events.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    trace_model = trace_sub.add_parser("model", help="show one task trace model I/O")
+    trace_model.add_argument("run_id")
+    trace_model.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
     return parser
 
 
@@ -72,8 +88,62 @@ def main(argv: list[str] | None = None) -> int:
             print_doctor(report)
         return 0 if report["summary"]["overall"] in {"ok", "warn"} else 1
 
+    if args.command == "trace":
+        store = TaskTraceStore()
+        if args.trace_command == "latest":
+            payload = store.latest_runs(args.count)
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                print_traces(payload)
+            return 0
+        if args.trace_command == "show":
+            payload = {
+                "manifest": store.manifest(args.run_id),
+                "summary": store.summary(args.run_id),
+            }
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                print_trace_summary(payload)
+            return 0 if payload["summary"] else 1
+        if args.trace_command == "events":
+            payload = store.events(args.run_id)
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                print_trace_events(payload)
+            return 0 if payload else 1
+        if args.trace_command == "model":
+            payload = store.model_io(args.run_id)
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                print_trace_model(payload)
+            return 0 if payload else 1
+
     if args.command == "plan":
-        payload = plan_payload(args.utterance, intent_broker=RuleIntentBroker() if args.offline else None, debug=args.debug)
+        store = TaskTraceStore()
+        trace_session = store.start_run(
+            run_id=make_trace_run_id(args.utterance),
+            command_name="plan",
+            utterance=args.utterance,
+            mode="plan",
+            transport=None,
+            dry_run=True,
+            debug=args.debug,
+        )
+        with bind_trace_session(trace_session):
+            payload = plan_payload(args.utterance, intent_broker=RuleIntentBroker() if args.offline else None, debug=args.debug)
+        goal_synthesis = payload.get("goal_synthesis") if isinstance(payload.get("goal_synthesis"), dict) else {}
+        goal_spec = goal_synthesis.get("goal_spec") if isinstance(goal_synthesis.get("goal_spec"), dict) else {}
+        trace_session.finalize(
+            status=str(payload.get("status", "failed")),
+            goal_id=str(goal_spec.get("goal_id")) if goal_spec.get("goal_id") is not None else None,
+            message=str(payload.get("message", "")),
+            overall_status=str(payload.get("overall_status", payload.get("status", "failed"))),
+            plan_id=str(payload.get("plan", {}).get("plan_id")) if isinstance(payload.get("plan"), dict) and payload.get("plan", {}).get("plan_id") is not None else None,
+        )
         print_plan_payload(payload, json_output=args.json)
         return 0 if payload["status"] == "validated" else 1
 
@@ -169,6 +239,8 @@ def print_result(result, json_output: bool = False) -> None:
         print(f"transport: {result.transport}")
     if result.review_id:
         print(f"review_id: {result.review_id}")
+    if result.trace_run_id:
+        print(f"trace_run_id: {result.trace_run_id}")
     if result.review:
         print(f"risk: {result.review.risk_level}")
         print(f"review_required: {result.review.review_required}")
@@ -250,6 +322,38 @@ def print_pending_reviews(payload: list[dict[str, object]]) -> None:
         intent = item["intent"]
         review = item["review"]
         print(f"{item['review_id']}  {review['risk_level']}  {intent['action']}  {item['utterance']}")
+
+
+def print_traces(payload: list[dict[str, object]]) -> None:
+    if not payload:
+        print("no traces")
+        return
+    for item in payload:
+        print(f"{item.get('run_id')}  {item.get('status')}  {item.get('started_at')}  {item.get('message', '')}")
+
+
+def print_trace_summary(payload: dict[str, object]) -> None:
+    summary = payload.get("summary")
+    if not isinstance(summary, dict):
+        print("trace not found")
+        return
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def print_trace_events(payload: list[dict[str, object]]) -> None:
+    if not payload:
+        print("no events")
+        return
+    for item in payload:
+        print(f"{item.get('ts')}  {item.get('phase')}  {item.get('event_type')}  {item.get('status')}")
+
+
+def print_trace_model(payload: list[dict[str, object]]) -> None:
+    if not payload:
+        print("no model io")
+        return
+    for item in payload:
+        print(f"{item.get('ts')}  {item.get('phase')}  {item.get('provider')}  {item.get('model')}")
 
 
 if __name__ == "__main__":
