@@ -534,6 +534,26 @@ def test_http_runtime_approve_review_preserves_plan_execution_metadata() -> None
     assert result.result["step_results"][0]["diagnostics"]["selected_target"] == "firefox.desktop"
 
 
+def test_dbus_runtime_forwards_supplemental_input() -> None:
+    client = FakeDaemonClient()
+    runtime = DBusDaemonRuntime(client, audit=AuditLog(make_audit_path("dbus-supplemental-input")))
+
+    runtime.handle(CommandRequest("", review_id="rev_user_input", supplemental_input="browser"))
+
+    assert client.payloads[-1]["review_id"] == "rev_user_input"
+    assert client.payloads[-1]["supplemental_input"] == "browser"
+
+
+def test_http_runtime_forwards_supplemental_input() -> None:
+    client = FakeHttpClient()
+    runtime = HTTPDaemonRuntime(client, audit=AuditLog(make_audit_path("http-supplemental-input")))
+
+    runtime.handle(CommandRequest("", review_id="rev_user_input", supplemental_input="browser"))
+
+    assert client.payloads[-1]["review_id"] == "rev_user_input"
+    assert client.payloads[-1]["supplemental_input"] == "browser"
+
+
 def make_audit_path(name: str):
     from pathlib import Path
     from uuid import uuid4

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from hashlib import sha256
+from typing import Any
 
 from .domain_registry import default_domain_registry
 from .loop_models import LoopObservation, ObservationLevel
@@ -9,6 +10,8 @@ from .models import utc_now_iso
 from .observation import resolve_post_execution_observation
 from .task_models import TaskPlan, TaskStep
 from .verifiers import VerifierHarness, VerifierRegistry
+
+VOLATILE_OBSERVATION_KEYS = {"attempt_id", "captured_at", "freshness_ts", "run_id"}
 
 
 class ObservationService:
@@ -52,7 +55,33 @@ class ObservationService:
 def observation_progressed(pre: LoopObservation | None, post: LoopObservation | None) -> bool:
     if pre is None or post is None:
         return True
-    return (pre.packages, pre.route_id, pre.step_id) != (post.packages, post.route_id, post.step_id)
+    return (
+        _normalized_observation_packages(pre.packages),
+        pre.route_id,
+        pre.step_id,
+    ) != (
+        _normalized_observation_packages(post.packages),
+        post.route_id,
+        post.step_id,
+    )
+
+
+def _normalized_observation_packages(packages: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {package_id: _strip_volatile_fields(payload) for package_id, payload in packages.items()}
+
+
+def _strip_volatile_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_volatile_fields(item)
+            for key, item in value.items()
+            if key not in VOLATILE_OBSERVATION_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_volatile_fields(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_strip_volatile_fields(item) for item in value)
+    return value
 
 
 def _observation_request(plan: TaskPlan, package_ids: tuple[str, ...]):

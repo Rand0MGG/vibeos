@@ -60,6 +60,7 @@ class VibeRequestHandler(BaseHTTPRequestHandler):
             return
         utterance = str(payload.get("utterance", "")).strip()
         review_id = payload.get("review_id")
+        supplemental_input = payload.get("supplemental_input")
         reject = bool(payload.get("reject", False))
         if not utterance and not review_id:
             self.send_error(400, "missing utterance or review_id")
@@ -74,6 +75,7 @@ class VibeRequestHandler(BaseHTTPRequestHandler):
             dry_run=bool(payload.get("dry_run", False)),
             approve=bool(payload.get("approve", False)),
             review_id=review_id,
+            supplemental_input=str(supplemental_input) if supplemental_input is not None else None,
             debug=bool(payload.get("debug", False)),
             transport="http",
         )

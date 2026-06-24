@@ -93,6 +93,8 @@ class DBusDaemonRuntime:
             "approve": request.approve,
             "review_id": request.review_id,
         }
+        if request.supplemental_input is not None:
+            payload["supplemental_input"] = request.supplemental_input
         if request.debug:
             payload["debug"] = True
         try:
@@ -160,6 +162,8 @@ class HTTPDaemonRuntime:
             "approve": request.approve,
             "review_id": request.review_id,
         }
+        if request.supplemental_input is not None:
+            payload["supplemental_input"] = request.supplemental_input
         if request.debug:
             payload["debug"] = True
         try:

@@ -1,19 +1,31 @@
+from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 from vibeos.apps import AppRegistry
 from vibeos.audit import AuditLog
+from vibeos.browser_state import record_browser_observation
 from vibeos.broker import CapabilityBroker
 from vibeos.intent import IntentBroker, RuleIntentBroker
-from vibeos.models import AppEntry, CommandRequest, Intent, WindowEntry
+from vibeos.loop_models import LoopState
+from vibeos.models import AppEntry, CommandRequest, Intent, PermissionReview, WindowEntry
+from vibeos.portal import PortalAdapter
 from vibeos.reviews import ReviewStore
+from vibeos.task_models import DisplayFields, StepReviewRecord, TaskPlan, TaskRoute, TaskStep
+from vibeos.understanding import UnderstandingArtifact, default_understanding_host_hint, validated_understanding_from_payload
 
 
 class FakeApps(AppRegistry):
+    def __init__(self):
+        self.open_calls = 0
+
     def list_apps(self):
         return [AppEntry(desktop_id="firefox.desktop", name="Firefox", keywords=("browser",))]
 
     def open_app(self, app):
+        self.open_calls += 1
         return {"status": "opened", "desktop_id": app.desktop_id}
 
 
@@ -35,6 +47,24 @@ class FakeWindows:
 
     def close(self, window):
         return {"status": "closed", "window_id": window.window_id}
+
+
+class ObservedPortal(PortalAdapter):
+    def __init__(self):
+        self.open_calls = 0
+
+    def open_uri(self, uri: str) -> dict[str, object]:
+        self.open_calls += 1
+        parsed = urlparse(uri)
+        params = parse_qs(parsed.query)
+        observed_query = ""
+        for key in ("q", "query", "wd", "p", "text", "search_query"):
+            values = params.get(key)
+            if values:
+                observed_query = str(values[0])
+                break
+        record_browser_observation(active_url=uri, query=observed_query or None, adapter="test-broker-browser")
+        return {"status": "opened", "uri": uri, "adapter": "test-broker-browser"}
 
 
 class RetryWindows(FakeWindows):
@@ -235,6 +265,125 @@ def test_approve_review_dry_run_does_not_consume() -> None:
     assert loaded
     assert loaded.status == "pending"
     assert approved.status == "executed"
+
+
+def test_existing_capability_path_can_suspend_and_resume(monkeypatch) -> None:
+    review_path = make_review_path("goal-loop-existing-capability")
+    reviews = ReviewStore(review_path)
+    portal = ObservedPortal()
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        portal=portal,
+        audit=AuditLog(),
+        reviews=reviews,
+    )
+    gate = {"needs_review": True}
+
+    def review_step(plan, step):
+        required = gate["needs_review"]
+        reason = "approval required" if required else "allowed"
+        return (
+            PermissionReview("L2" if required else "L1", required, True, reason),
+            StepReviewRecord(f"srev_{step.id}", step.id, step.action, "L2" if required else "L1", required, True, reason),
+        )
+
+    monkeypatch.setenv("VIBEOS_ENABLE_GOAL_LOOP", "1")
+    monkeypatch.setattr(broker, "review_task_step", review_step)
+
+    pending = broker.handle(CommandRequest("search web for hello"))
+    stored = reviews.get(pending.review_id or "")
+
+    gate["needs_review"] = False
+    approved = broker.handle(CommandRequest("", review_id=pending.review_id, approve=True))
+
+    assert pending.status == "review_required"
+    assert stored is not None
+    assert stored.snapshot_payload is not None
+    assert stored.snapshot_payload["current_step_id"]
+    assert approved.status == "executed"
+    assert portal.open_calls == 1
+    assert approved.result["attempts"]
+
+
+def test_broker_provide_input_resumes_user_input_review(monkeypatch) -> None:
+    review_path = make_review_path("goal-loop-user-input")
+    reviews = ReviewStore(review_path)
+    portal = ObservedPortal()
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        portal=portal,
+        audit=AuditLog(),
+        reviews=reviews,
+    )
+    state = LoopState(
+        loop_snapshot_id="lsnap_user_input",
+        trace_run_id="run_user_input",
+        goal_id="goal_user_input",
+        primary_understanding_id="und_user_input",
+        candidate_set_id=None,
+        selected_route_decision_id=None,
+        current_step_id=None,
+        stage="needs_user_input",
+    )
+    review = reviews.create_loop_review(
+        "open that site we discussed yesterday",
+        plan_payload={"analysis": {"type": "clarification", "confidence": 0.5, "domains": ["browser"], "explanation": "need more detail", "chat_response": "which site?"}},
+        snapshot_payload=asdict(state),
+        pending_reason="which site?",
+        step_id=None,
+        review_kind="user_input",
+    )
+
+    def fake_plan_turn(utterance, *args, **kwargs):
+        plan = TaskPlan(
+            schema_version="v0.5",
+            plan_id="plan_user_input_resumed",
+            utterance="search web for browser",
+            display=DisplayFields(goal="search browser"),
+            selected_route_id="browser_search_web_route",
+            routes=(TaskRoute(id="browser_search_web_route", score=1.0, domain_id="browser"),),
+            steps=(TaskStep(id="search_browser", action="browser.search_web", capability_id="browser.search_web", target={"query": "browser"}),),
+        )
+        analysis = validated_understanding_from_payload(
+            utterance=utterance,
+            payload={"type": "task", "confidence": 0.9, "domains": ["browser"], "explanation": "resolved target"},
+            host_hint=default_understanding_host_hint(utterance),
+        )
+        understanding = UnderstandingArtifact(
+            understanding_id="und_resumed",
+            utterance=utterance,
+            analysis=analysis,
+            primary_understanding_id="und_resumed",
+        )
+        return SimpleNamespace(
+            understanding=understanding,
+            analysis=analysis,
+            goal_synthesis=None,
+            plan=plan,
+            candidates=(plan,),
+            understanding_refinement=None,
+            understanding_supersession=None,
+            candidate_set=None,
+            route_decision=None,
+            domain_routing=None,
+            observation_request=None,
+            observation_receipt=None,
+            capability_exposure=None,
+            trace=None,
+            debug_trace=None,
+        )
+
+    monkeypatch.setenv("VIBEOS_ENABLE_GOAL_LOOP", "1")
+    monkeypatch.setattr("vibeos.broker.plan_turn", fake_plan_turn)
+
+    result = broker.handle(CommandRequest("", review_id=review.review_id, supplemental_input="browser"))
+    loaded = reviews.get(review.review_id)
+
+    assert result.status == "executed"
+    assert result.result["attempts"]
+    assert portal.open_calls == 1
+    assert loaded is not None
+    assert loaded.status == "consumed"
 
 
 def test_reject_review_blocks_later_approval() -> None:

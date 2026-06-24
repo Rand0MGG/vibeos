@@ -232,7 +232,7 @@ class ReviewStore:
 
     def consume(self, review_id: str) -> ReviewRequest | None:
         request = self.get(review_id)
-        if not request or request.status != "approved":
+        if not request or request.status not in {"approved", "provided"}:
             return request
         self._append({"event": "consumed", "review_id": review_id, "timestamp": utc_now_iso()})
         record_trace_event(

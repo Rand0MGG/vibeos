@@ -53,6 +53,7 @@ class CommandRequest:
     dry_run: bool = False
     approve: bool = False
     review_id: str | None = None
+    supplemental_input: str | None = None
     transport: str | None = None
     debug: bool = False
 

@@ -188,6 +188,51 @@ def test_http_review_lifecycle_executes_stored_task_plan() -> None:
     assert pending_after["reviews"] == []
 
 
+def test_http_command_endpoint_accepts_supplemental_input() -> None:
+    captured = {}
+
+    class FakeBroker:
+        def handle(self, request):
+            captured["request"] = request
+            from vibeos.models import CommandResult, Intent
+
+            return CommandResult(
+                status="executed",
+                intent=Intent(action="app.open", target={"name": "browser"}),
+                result={"ok": True},
+                execution_status="succeeded",
+                acceptance_status="passed",
+                overall_status="completed",
+            )
+
+    server = create_http_server(
+        FakeBroker(),
+        "127.0.0.1",
+        0,
+        status_payload=build_status_payload(["http"], host="127.0.0.1", port=0),
+    )
+    thread = start_http_server_thread(server)
+    host, port = server.server_address[:2]
+    base_url = f"http://{host}:{port}"
+    try:
+        request = urllib.request.Request(
+            f"{base_url}/v1/command",
+            data=json.dumps({"review_id": "rev_user_input", "supplemental_input": "browser"}).encode("utf-8"),
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert payload["status"] == "executed"
+    assert captured["request"].review_id == "rev_user_input"
+    assert captured["request"].supplemental_input == "browser"
+
+
 def make_review_path(name: str) -> Path:
     return Path(".vibeos") / f"test-{name}-{uuid4().hex}.jsonl"
 

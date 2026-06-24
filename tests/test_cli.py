@@ -363,6 +363,34 @@ def test_approve_dry_run_json_previews_window_close_without_real_window_state(mo
     assert step["result"]["selected_target"].startswith("preview:")
 
 
+def test_reviews_provide_forwards_supplemental_input(monkeypatch, capsys) -> None:
+    captured = {}
+
+    class FakeRuntime:
+        def handle(self, request):
+            captured["request"] = request
+            from vibeos.models import CommandResult, Intent
+
+            return CommandResult(
+                status="executed",
+                intent=Intent(action="app.open", target={"name": "browser"}),
+                result={"ok": True},
+                execution_status="succeeded",
+                acceptance_status="passed",
+                overall_status="completed",
+            )
+
+    monkeypatch.setattr("vibeos.cli.build_runtime", lambda: FakeRuntime())
+
+    exit_code = main(["reviews", "provide", "rev_user_input", "open", "browser", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["status"] == "executed"
+    assert captured["request"].review_id == "rev_user_input"
+    assert captured["request"].supplemental_input == "open browser"
+
+
 def test_ask_json_debug_exposes_runtime_task_plan_provider_artifacts(monkeypatch, capsys) -> None:
     runtime = LocalRuntime(
         CapabilityBroker(

@@ -8,6 +8,7 @@ from vibeos.failure_classifier import FailureClassifier
 from vibeos.goal_loop import GoalLoop
 from vibeos.loop_models import LoopObservation, LoopState
 from vibeos.models import CommandRequest, PermissionReview
+from vibeos.observation_service import observation_progressed
 from vibeos.reviews import ReviewStore
 from vibeos.strategy import StrategyStep
 from vibeos.task_models import (
@@ -81,9 +82,9 @@ def test_goal_loop_suspends_for_review_with_real_review_store() -> None:
         assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: (_ for _ in ()).throw(AssertionError("final assessment should not run")),
         classify_failure=FailureClassifier().classify,
         decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: (_ for _ in ()).throw(AssertionError("replanner should not run")),
-        persist_review=lambda utterance, plan, loop_state, step, reason: store.create_loop_review(
+        persist_review=lambda utterance, planning, loop_state, step, reason: store.create_loop_review(
             utterance,
-            plan_payload={"plan_id": plan.plan_id, "plan": asdict(plan)},
+            plan_payload={"plan_id": planning.plan.plan_id, "plan": asdict(planning.plan)},
             snapshot_payload=asdict(loop_state),
             pending_reason=reason,
             step_id=step.id,
@@ -151,9 +152,9 @@ def test_review_approval_resumes_from_pending_step_without_reexecuting_completed
         ),
         classify_failure=FailureClassifier().classify,
         decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: (_ for _ in ()).throw(AssertionError("replanner should not run")),
-        persist_review=lambda utterance, plan, loop_state, step, reason: store.create_loop_review(
+        persist_review=lambda utterance, planning, loop_state, step, reason: store.create_loop_review(
             utterance,
-            plan_payload={"plan_id": plan.plan_id, "plan": asdict(plan)},
+            plan_payload={"plan_id": planning.plan.plan_id, "plan": asdict(planning.plan)},
             snapshot_payload=asdict(loop_state),
             pending_reason=reason,
             step_id=step.id,
@@ -218,7 +219,7 @@ def test_goal_loop_classifies_same_action_no_progress() -> None:
             action="stop",
             reason=failure.message,
         ),
-        persist_review=lambda utterance, plan, loop_state, step, reason: (_ for _ in ()).throw(AssertionError("review path should not run")),
+        persist_review=lambda utterance, planning, loop_state, step, reason: (_ for _ in ()).throw(AssertionError("review path should not run")),
         persist_user_input=lambda utterance, planning, loop_state, reason: (_ for _ in ()).throw(AssertionError("user-input path should not run")),
     )
 
@@ -233,6 +234,49 @@ def test_goal_loop_classifies_same_action_no_progress() -> None:
     assert result.acceptance_status == "failed"
     assert result.overall_status == "blocked"
     assert result.message == "step executed successfully but the observed state did not change"
+    assert result.attempt_records
+
+
+def test_observation_progress_ignores_volatile_fields() -> None:
+    pre = LoopObservation(
+        observation_id="obs_pre",
+        level="L0",
+        phase="pre",
+        packages={"session_context": {"captured_at": "2026-06-24T00:00:00Z", "active_url": "https://example.com"}},
+        route_id="browser_search_web_route",
+        step_id="step_1",
+    )
+    post = LoopObservation(
+        observation_id="obs_post",
+        level="L0",
+        phase="post",
+        packages={"session_context": {"captured_at": "2026-06-24T00:00:01Z", "active_url": "https://example.com"}},
+        route_id="browser_search_web_route",
+        step_id="step_1",
+    )
+
+    assert observation_progressed(pre, post) is False
+
+
+def test_observation_progress_detects_meaningful_state_change() -> None:
+    pre = LoopObservation(
+        observation_id="obs_pre",
+        level="L0",
+        phase="pre",
+        packages={"browser_context": {"active_url": "https://example.com", "captured_at": "2026-06-24T00:00:00Z"}},
+        route_id="browser_search_web_route",
+        step_id="step_1",
+    )
+    post = LoopObservation(
+        observation_id="obs_post",
+        level="L0",
+        phase="post",
+        packages={"browser_context": {"active_url": "https://example.com/done", "captured_at": "2026-06-24T00:00:01Z"}},
+        route_id="browser_search_web_route",
+        step_id="step_1",
+    )
+
+    assert observation_progressed(pre, post) is True
 
 
 def test_agent_runtime_execute_strategy_step_updates_state() -> None:

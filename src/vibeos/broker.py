@@ -6,6 +6,7 @@ from dataclasses import replace
 from dataclasses import asdict
 from hashlib import sha256
 from time import perf_counter
+from types import SimpleNamespace
 
 from .acceptance import AcceptanceEngine
 from .agent_runtime import AgentRuntime, EnvironmentProfile, TerminalOutcome
@@ -22,10 +23,11 @@ from .domain_models import ObservationRequest
 from .domain_registry import default_domain_registry
 from .execution_graph import execute_plan_graph, overall_status as execution_graph_overall_status
 from .failure_classifier import FailureClassifier
-from .goal_loop import GoalLoop
+from .goal_loop import GoalLoop, step_result_from_payload
 from .goal_models import GoalSpec, GoalSynthesisProvenance
 from .intent import IntentBroker, OpenAICompatibleIntentBroker, RuleIntentBroker
 from .loop_policy import goal_loop_enabled
+from .loop_models import LoopState
 from .notifications import NotificationAdapter
 from .models import CommandRequest, CommandResult, Intent, PermissionReview, utc_now_iso
 from .observation import resolve_post_execution_observation
@@ -63,9 +65,12 @@ from .understanding import (
     OpenAICompatibleUnderstandingTransitionProvider,
     UnderstandingAnalysisDecision,
     UnderstandingAnalysisProvider,
+    UnderstandingArtifact,
     UnderstandingTransitionProvider,
+    default_understanding_host_hint,
     reconcile_understanding_transition,
     root_understanding_id,
+    validated_understanding_from_payload,
 )
 from .verifiers import VerifierHarness, VerifierRegistry, default_verifier_registry
 from .windows import WindowRegistry
@@ -260,16 +265,13 @@ class CapabilityBroker:
         self,
         *,
         utterance: str,
-        plan: TaskPlan,
+        planning,
         loop_state,
         step: TaskStep,
         reason: str,
     ):
-        payload = {
-            "plan_id": plan.plan_id,
-            "plan": asdict(plan),
-            "loop_snapshot": asdict(loop_state),
-        }
+        payload = self._planning_payload(planning)
+        payload["loop_snapshot"] = asdict(loop_state)
         return self.reviews.create_loop_review(
             utterance,
             plan_payload=payload,
@@ -280,13 +282,8 @@ class CapabilityBroker:
         )
 
     def create_user_input_review(self, *, utterance: str, planning, loop_state, reason: str):
-        plan = getattr(planning, "plan", None)
-        payload = {
-            "plan_id": plan.plan_id if plan is not None else None,
-            "plan": asdict(plan) if plan is not None else None,
-            "loop_snapshot": asdict(loop_state),
-            "understanding": asdict(planning.understanding) if getattr(planning, "understanding", None) is not None else None,
-        }
+        payload = self._planning_payload(planning)
+        payload["loop_snapshot"] = asdict(loop_state)
         return self.reviews.create_loop_review(
             utterance,
             plan_payload=payload,
@@ -316,6 +313,54 @@ class CapabilityBroker:
             candidate_domain_ids_override=candidate_domain_ids_override or None,
             excluded_route_ids=excluded_route_ids,
             excluded_capability_ids=excluded_capability_ids,
+        )
+
+    def _make_goal_loop(self) -> GoalLoop:
+        return GoalLoop(
+            observation_service=ObservationService(self.verifier_registry, self.verifier_harness),
+            planning_payload=self._planning_payload,
+            resolve_understanding_transition=lambda current, trigger: self._resolve_planning_understanding_transition(current, trigger=trigger),
+            apply_replan_transition=lambda current, decision, failure: self._planning_from_replan_decision(current, decision=decision, failure=failure),
+            plan_again=self.plan_turn_from_loop,
+            review_step=self.review_task_step,
+            execute_step=lambda plan, step, active_request, attempt_id: self.execute_task_step(
+                plan,
+                step,
+                dry_run=active_request.dry_run,
+                transport=active_request.transport,
+                review_id=active_request.review_id,
+            ),
+            assess_plan_execution=lambda plan, step_results, active_request, run_id, understanding_id, candidate_set_id, route_decision_id: self.assess_task_plan_execution(
+                plan,
+                step_results,
+                dry_run=active_request.dry_run,
+                understanding_id=understanding_id,
+                candidate_set_id=candidate_set_id,
+                route_decision_id=route_decision_id,
+            ),
+            classify_failure=self.failure_classifier.classify,
+            decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: self.replanner.decide(
+                utterance=utterance,
+                current_plan=current_plan,
+                attempts=self._goal_loop_attempts_from_records(run_id="loop_run", records=tuple(attempts)),
+                failure=failure,
+                understanding_id=understanding_id,
+                candidate_set_id=candidate_set_id,
+                available_domain_ids=available_domain_ids,
+            ),
+            persist_review=lambda utterance, current, loop_state, step, reason: self.create_loop_review(
+                utterance=utterance,
+                planning=current,
+                loop_state=loop_state,
+                step=step,
+                reason=reason,
+            ),
+            persist_user_input=lambda utterance, current, loop_state, reason: self.create_user_input_review(
+                utterance=utterance,
+                planning=current,
+                loop_state=loop_state,
+                reason=reason,
+            ),
         )
 
     def execute_task_plan(
@@ -540,7 +585,25 @@ class CapabilityBroker:
                     "debug": request.debug,
                 },
             )
-            if request.review_id:
+            if request.review_id and request.supplemental_input is not None and request.approve:
+                fallback = Intent.unknown("review resume cannot combine approval and supplemental input")
+                result = self._with_transport(
+                    CommandResult(
+                        status="rejected",
+                        intent=fallback,
+                        review_id=request.review_id,
+                        message="supplemental input resumes a user-input review; do not combine it with explicit approval",
+                    ),
+                    request.transport,
+                )
+            elif request.review_id and request.supplemental_input is not None:
+                result = self.provide_review_input(
+                    request.review_id,
+                    request.supplemental_input,
+                    dry_run=request.dry_run,
+                    transport=request.transport,
+                )
+            elif request.review_id:
                 result = self.approve_review(request.review_id, dry_run=request.dry_run, transport=request.transport)
             elif request.approve:
                 fallback = Intent.unknown("approval requires a stored review id")
@@ -2289,63 +2352,7 @@ class CapabilityBroker:
         goal_spec = planning.goal_synthesis.goal_spec if planning.goal_synthesis is not None else None
         if goal_spec is None:
             return None
-        loop = GoalLoop(
-            observation_service=ObservationService(self.verifier_registry, self.verifier_harness),
-            planning_payload=self._planning_payload,
-            resolve_understanding_transition=lambda current, trigger: self._resolve_planning_understanding_transition(current, trigger=trigger),
-            apply_replan_transition=lambda current, decision, failure: self._planning_from_replan_decision(current, decision=decision, failure=failure),
-            plan_again=self.plan_turn_from_loop,
-            review_step=self.review_task_step,
-            execute_step=lambda plan, step, active_request, attempt_id: self.execute_task_step(
-                plan,
-                step,
-                dry_run=active_request.dry_run,
-                transport=active_request.transport,
-                review_id=active_request.review_id,
-            ),
-            assess_plan_execution=lambda plan, step_results, active_request, run_id, understanding_id, candidate_set_id, route_decision_id: self.assess_task_plan_execution(
-                plan,
-                step_results,
-                dry_run=active_request.dry_run,
-                understanding_id=understanding_id,
-                candidate_set_id=candidate_set_id,
-                route_decision_id=route_decision_id,
-            ),
-            classify_failure=self.failure_classifier.classify,
-            decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: self.replanner.decide(
-                utterance=utterance,
-                current_plan=current_plan,
-                attempts=tuple(
-                    PlanAttempt(
-                        attempt_id=str(item.get("attempt_id") or ""),
-                        run_id="loop_run",
-                        attempt_index=index + 1,
-                        trigger=str(item.get("selected_route_id") or "goal_loop"),
-                        selected_route_id=str(item.get("selected_route_id") or ""),
-                        failure=FailureClassification(**item["failure"]) if isinstance(item.get("failure"), dict) else None,
-                        replan_decision=ReplanDecision(**item["replan_decision"]) if isinstance(item.get("replan_decision"), dict) else None,
-                    )
-                    for index, item in enumerate(attempts)
-                ),
-                failure=failure,
-                understanding_id=understanding_id,
-                candidate_set_id=candidate_set_id,
-                available_domain_ids=available_domain_ids,
-            ),
-            persist_review=lambda utterance, plan, loop_state, step, reason: self.create_loop_review(
-                utterance=utterance,
-                plan=plan,
-                loop_state=loop_state,
-                step=step,
-                reason=reason,
-            ),
-            persist_user_input=lambda utterance, current, loop_state, reason: self.create_user_input_review(
-                utterance=utterance,
-                planning=current,
-                loop_state=loop_state,
-                reason=reason,
-            ),
-        )
+        loop = self._make_goal_loop()
         run_id = self._make_run_id(request.utterance)
         result = loop.run(
             request=request,
@@ -2353,26 +2360,36 @@ class CapabilityBroker:
             run_id=run_id,
             goal_id=goal_spec.goal_id,
         )
-        payload = dict(result.payload)
-        if result.review_id:
-            payload["review_id"] = result.review_id
-        intent = Intent.unknown(result.message or "goal loop result")
+        return self._finalize_goal_loop_result(
+            request=request,
+            planning=planning,
+            run_id=run_id,
+            goal_id=goal_spec.goal_id,
+            loop_result=result,
+        )
+
+    def _finalize_goal_loop_result(self, *, request: CommandRequest, planning, run_id: str, goal_id: str, loop_result) -> CommandResult:
+        payload = dict(loop_result.payload)
+        if loop_result.review_id:
+            payload["review_id"] = loop_result.review_id
+        intent = Intent.unknown(loop_result.message or "goal loop result")
         if getattr(planning, "plan", None) is not None and planning.plan.steps:
             intent = self._intent_from_task_step(planning.plan.steps[0])
+        attempts = self._goal_loop_attempts_from_records(run_id=run_id, records=loop_result.attempt_records)
         return self._finalize_task_plan_result(
             request=request,
             run_id=run_id,
-            goal_id=goal_spec.goal_id,
-            attempts=(),
+            goal_id=goal_id,
+            attempts=attempts,
             payload=payload,
             intent=intent,
-            status="review_required" if result.overall_status == "needs_review" else ("ambiguous" if result.overall_status == "needs_user_input" else ("executed" if result.overall_status == "completed" else "failed")),
-            message=result.message,
-            execution_status=result.execution_status,
-            acceptance_status=result.acceptance_status,
-            overall_status=result.overall_status,
-            selected_target=result.selected_target,
-            review_id=result.review_id,
+            status="review_required" if loop_result.overall_status == "needs_review" else ("ambiguous" if loop_result.overall_status == "needs_user_input" else ("executed" if loop_result.overall_status == "completed" else "failed")),
+            message=loop_result.message,
+            execution_status=loop_result.execution_status,
+            acceptance_status=loop_result.acceptance_status,
+            overall_status=loop_result.overall_status,
+            selected_target=loop_result.selected_target,
+            review_id=loop_result.review_id,
         )
 
     def _run_task_plan_loop(self, request: CommandRequest, planning) -> CommandResult:
@@ -2911,6 +2928,144 @@ class CapabilityBroker:
             "debug_trace": asdict(planning.debug_trace) if planning.debug_trace is not None else {},
         }
 
+    def _planning_from_loop_payload(self, *, utterance: str, payload: dict[str, object]):
+        plan_payload = payload.get("plan") if isinstance(payload.get("plan"), dict) else None
+        plan = task_plan_from_payload(plan_payload) if plan_payload is not None else None
+        candidate_payloads = payload.get("candidates")
+        candidates = tuple(
+            task_plan_from_payload(item)
+            for item in candidate_payloads
+            if isinstance(item, dict)
+        ) if isinstance(candidate_payloads, list) else ()
+        understanding = self._understanding_from_loop_payload(utterance=utterance, payload=payload)
+        analysis = understanding.analysis
+        return SimpleNamespace(
+            understanding=understanding,
+            analysis=analysis,
+            goal_synthesis=None,
+            plan=plan,
+            candidates=candidates,
+            understanding_refinement=None,
+            understanding_supersession=None,
+            candidate_set=None,
+            route_decision=None,
+            domain_routing=None,
+            observation_request=None,
+            observation_receipt=None,
+            capability_exposure=None,
+            trace=None,
+            debug_trace=None,
+        )
+
+    def _understanding_from_loop_payload(self, *, utterance: str, payload: dict[str, object]) -> UnderstandingArtifact:
+        understanding_payload = payload.get("understanding") if isinstance(payload.get("understanding"), dict) else {}
+        analysis_payload = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else understanding_payload.get("analysis")
+        if not isinstance(analysis_payload, dict):
+            plan = task_plan_from_payload(payload["plan"]) if isinstance(payload.get("plan"), dict) else None
+            analysis_payload = {
+                "type": "task" if plan is not None else "clarification",
+                "confidence": 0.5,
+                "domains": [route.domain_id for route in plan.routes if route.domain_id] if plan is not None else ["browser"],
+                "explanation": "restored from stored goal loop payload",
+                "chat_response": None,
+            }
+        analysis = validated_understanding_from_payload(
+            utterance=utterance,
+            payload=analysis_payload,
+            host_hint=default_understanding_host_hint(utterance),
+        )
+        understanding_id = str(understanding_payload.get("understanding_id") or f"und_resume_{sha256(utterance.encode('utf-8')).hexdigest()[:10]}")
+        primary_understanding_id = understanding_payload.get("primary_understanding_id")
+        source_understanding_id = understanding_payload.get("source_understanding_id")
+        return UnderstandingArtifact(
+            understanding_id=understanding_id,
+            utterance=utterance,
+            analysis=analysis,
+            artifact_role=str(understanding_payload.get("artifact_role", "primary")),
+            primary_understanding_id=str(primary_understanding_id) if primary_understanding_id is not None else understanding_id,
+            source_understanding_id=str(source_understanding_id) if source_understanding_id is not None else None,
+            refinement_id=str(understanding_payload["refinement_id"]) if understanding_payload.get("refinement_id") is not None else None,
+            supersession_id=str(understanding_payload["supersession_id"]) if understanding_payload.get("supersession_id") is not None else None,
+            provider_intent=None,
+            provider_parse_count=int(understanding_payload.get("provider_parse_count", 0)),
+            provider_cache_hit_count=int(understanding_payload.get("provider_cache_hit_count", 0)),
+            uncertainty_reasons=tuple(str(item) for item in understanding_payload.get("uncertainty_reasons", ())),
+            clarification_question_id=str(understanding_payload["clarification_question_id"]) if understanding_payload.get("clarification_question_id") is not None else None,
+            clarification_provider_name=str(understanding_payload["clarification_provider_name"]) if understanding_payload.get("clarification_provider_name") is not None else None,
+            clarification_model_name=str(understanding_payload["clarification_model_name"]) if understanding_payload.get("clarification_model_name") is not None else None,
+            clarification_parse_valid=bool(understanding_payload.get("clarification_parse_valid", True)),
+            clarification_fallback_used=bool(understanding_payload.get("clarification_fallback_used", False)),
+            clarification_error=str(understanding_payload["clarification_error"]) if understanding_payload.get("clarification_error") is not None else None,
+            analysis_provider_name=str(understanding_payload["analysis_provider_name"]) if understanding_payload.get("analysis_provider_name") is not None else None,
+            analysis_model_name=str(understanding_payload["analysis_model_name"]) if understanding_payload.get("analysis_model_name") is not None else None,
+            analysis_parse_valid=bool(understanding_payload.get("analysis_parse_valid", True)),
+            analysis_fallback_used=bool(understanding_payload.get("analysis_fallback_used", False)),
+            analysis_error=str(understanding_payload["analysis_error"]) if understanding_payload.get("analysis_error") is not None else None,
+        )
+
+    def _goal_loop_attempts_from_records(self, *, run_id: str, records: tuple[dict[str, object], ...]) -> tuple[PlanAttempt, ...]:
+        attempts: list[PlanAttempt] = []
+        for index, item in enumerate(records):
+            attempts.append(
+                PlanAttempt(
+                    attempt_id=str(item.get("attempt_id") or ""),
+                    run_id=run_id,
+                    attempt_index=index + 1,
+                    trigger=str(item.get("trigger") or "goal_loop"),
+                    understanding_id=str(item["understanding_id"]) if item.get("understanding_id") is not None else None,
+                    candidate_set_id=str(item["candidate_set_id"]) if item.get("candidate_set_id") is not None else None,
+                    route_decision_id=str(item["route_decision_id"]) if item.get("route_decision_id") is not None else None,
+                    selected_route_id=str(item.get("selected_route_id") or ""),
+                    task_plan=task_plan_from_payload(item["task_plan"]) if isinstance(item.get("task_plan"), dict) else None,
+                    execution_result=self._goal_loop_execution_from_record(item),
+                    failure=FailureClassification(**item["failure"]) if isinstance(item.get("failure"), dict) else None,
+                    replan_decision=ReplanDecision(**item["replan_decision"]) if isinstance(item.get("replan_decision"), dict) else None,
+                )
+            )
+        return tuple(attempts)
+
+    def _goal_loop_execution_from_record(self, record: dict[str, object]) -> PlanExecutionResult | None:
+        step_payload = record.get("step_result")
+        plan_payload = record.get("task_plan")
+        if not isinstance(step_payload, dict) or not isinstance(plan_payload, dict):
+            return None
+        step_result = StepExecutionResult(
+            step_id=str(step_payload["step_id"]),
+            layer=str(step_payload["layer"]),
+            status=str(step_payload["status"]),
+            step_safety_review_id=str(step_payload["step_safety_review_id"]) if step_payload.get("step_safety_review_id") is not None else None,
+            adapter=str(step_payload["adapter"]) if step_payload.get("adapter") is not None else None,
+            capability_id=str(step_payload["capability_id"]) if step_payload.get("capability_id") is not None else None,
+            attempt=int(step_payload.get("attempt", 1)),
+            duration_ms=int(step_payload["duration_ms"]) if step_payload.get("duration_ms") is not None else None,
+            adapter_status=str(step_payload["adapter_status"]) if step_payload.get("adapter_status") is not None else None,
+            diagnostics=dict(step_payload.get("diagnostics", {})),
+            error_code=str(step_payload["error_code"]) if step_payload.get("error_code") is not None else None,
+            result=dict(step_payload.get("result", {})),
+            error=str(step_payload["error"]) if step_payload.get("error") is not None else None,
+            audit_id=str(step_payload["audit_id"]) if step_payload.get("audit_id") is not None else None,
+        )
+        failure = FailureClassification(**record["failure"]) if isinstance(record.get("failure"), dict) else None
+        execution_status = "failed" if step_result.status != "succeeded" else "succeeded"
+        acceptance_status = "failed" if failure is not None and failure.failure_class == "same_action_no_progress" else "skipped"
+        overall_status = "failed" if step_result.status != "succeeded" or acceptance_status == "failed" else "incomplete"
+        return PlanExecutionResult(
+            plan_id=str(plan_payload.get("plan_id", "")),
+            status="succeeded" if step_result.status == "succeeded" else "failed",
+            step_results=(step_result,),
+            execution_status=execution_status,  # type: ignore[arg-type]
+            acceptance_status=acceptance_status,  # type: ignore[arg-type]
+            overall_status=overall_status,  # type: ignore[arg-type]
+            acceptance_result={"message": failure.message} if failure is not None else None,
+            error=step_result.error,
+        )
+
+    @staticmethod
+    def _merge_user_input_utterance(utterance: str, supplemental_input: str) -> str:
+        base = utterance.strip()
+        detail = supplemental_input.strip()
+        return f"{base}\n\nAdditional user detail: {detail}" if base else detail
+
     @staticmethod
     def _replan_available_domain_ids(planning) -> tuple[str, ...]:
         goal_synthesis = getattr(planning, "goal_synthesis", None)
@@ -3235,6 +3390,182 @@ class CapabilityBroker:
             synthesis_provenance=GoalSynthesisProvenance(provider_name="permission_review", provider_version="v0.6"),
         )
 
+    def _resume_loop_state(self, review_request) -> object | None:
+        if not isinstance(review_request.snapshot_payload, dict):
+            return None
+        return replace(
+            LoopState(**review_request.snapshot_payload),
+            pending_review_id=None,
+            pending_user_input_id=None,
+        )
+
+    def _resume_loop_review(self, review_request, *, dry_run: bool, transport: str | None) -> CommandResult:
+        state = self._resume_loop_state(review_request)
+        if state is None:
+            fallback = Intent.unknown("stored loop snapshot is missing", {"review_id": review_request.review_id})
+            return self._with_transport(
+                CommandResult(status="failed", intent=fallback, review_id=review_request.review_id, message="stored loop snapshot is missing"),
+                transport,
+            )
+        planning_payload = review_request.plan_payload or {}
+        planning = self._planning_from_loop_payload(utterance=review_request.utterance, payload=planning_payload)
+        plan = getattr(planning, "plan", None)
+        if plan is None:
+            fallback = Intent.unknown("stored loop plan is missing", {"review_id": review_request.review_id})
+            return self._with_transport(
+                CommandResult(status="failed", intent=fallback, review_id=review_request.review_id, message="stored loop plan is missing"),
+                transport,
+            )
+        loop = self._make_goal_loop()
+        request = CommandRequest(
+            review_request.utterance,
+            dry_run=dry_run,
+            approve=True,
+            review_id=review_request.review_id,
+            transport=transport,
+        )
+        loop_result = loop.resume_from_review(
+            request=request,
+            planning=planning,
+            state=state,
+            run_id=state.trace_run_id,
+            goal_id=state.goal_id,
+        )
+        return self._finalize_goal_loop_result(
+            request=request,
+            planning=planning,
+            run_id=state.trace_run_id,
+            goal_id=state.goal_id,
+            loop_result=loop_result,
+        )
+
+    def _resume_user_input_review(self, review_request, *, dry_run: bool, transport: str | None) -> CommandResult:
+        state = self._resume_loop_state(review_request)
+        if state is None:
+            fallback = Intent.unknown("stored loop snapshot is missing", {"review_id": review_request.review_id})
+            return self._with_transport(
+                CommandResult(status="failed", intent=fallback, review_id=review_request.review_id, message="stored loop snapshot is missing"),
+                transport,
+            )
+        supplemental_input = (review_request.supplemental_input or "").strip()
+        if not supplemental_input:
+            fallback = Intent.unknown("supplemental input is required", {"review_id": review_request.review_id})
+            return self._with_transport(
+                CommandResult(status="rejected", intent=fallback, review_id=review_request.review_id, message="supplemental input is required to resume this review"),
+                transport,
+            )
+        resumed_utterance = self._merge_user_input_utterance(review_request.utterance, supplemental_input)
+        planning = plan_turn(
+            resumed_utterance,
+            self.intent_broker,
+            selection_provider=self.route_selection_provider,
+            clarification_provider=self.clarification_provider,
+            analysis_provider=self.understanding_analysis_provider,
+            goal_synthesis_provider=self.goal_synthesis_provider,
+        )
+        plan = getattr(planning, "plan", None)
+        if plan is not None:
+            available_step_ids = {step.id for step in plan.steps}
+            state = replace(
+                state,
+                completed_step_ids=tuple(step_id for step_id in state.completed_step_ids if step_id in available_step_ids),
+                current_step_id=state.current_step_id if state.current_step_id in available_step_ids else None,
+            )
+        request = CommandRequest(
+            resumed_utterance,
+            dry_run=dry_run,
+            review_id=review_request.review_id,
+            supplemental_input=supplemental_input,
+            transport=transport,
+        )
+        loop = self._make_goal_loop()
+        loop_result = loop.run(
+            request=request,
+            planning=planning,
+            run_id=state.trace_run_id,
+            goal_id=state.goal_id,
+            state=replace(state, stage="init_loop"),
+            step_results=tuple(step_result_from_payload(item) for item in state.step_result_payloads),
+            attempts=(),
+        )
+        return self._finalize_goal_loop_result(
+            request=request,
+            planning=planning,
+            run_id=state.trace_run_id,
+            goal_id=state.goal_id,
+            loop_result=loop_result,
+        )
+
+    def provide_review_input(self, review_id: str, supplemental_input: str, dry_run: bool = False, transport: str | None = None) -> CommandResult:
+        if dry_run:
+            review_request = self.reviews.get(review_id)
+            if not review_request:
+                fallback = Intent.unknown("review request not found", {"review_id": review_id})
+                return self._with_transport(
+                    CommandResult(status="rejected", intent=fallback, review_id=review_id, message="review request not found"),
+                    transport,
+                )
+            if review_request.review_kind != "user_input":
+                return self._with_transport(
+                    CommandResult(
+                        status="rejected",
+                        intent=review_request.intent,
+                        review=review_request.review,
+                        review_id=review_id,
+                        message="supplemental input is only valid for user-input reviews",
+                    ),
+                    transport,
+                )
+            preview_request = replace(review_request, supplemental_input=supplemental_input)
+            result = self._resume_user_input_review(preview_request, dry_run=True, transport=transport)
+        else:
+            review_request = self.reviews.provide_input(review_id, supplemental_input)
+            if not review_request:
+                fallback = Intent.unknown("review request not found", {"review_id": review_id})
+                return self._with_transport(
+                    CommandResult(status="rejected", intent=fallback, review_id=review_id, message="review request not found"),
+                    transport,
+                )
+            if review_request.status != "provided":
+                return self._with_transport(
+                    CommandResult(
+                        status="rejected",
+                        intent=review_request.intent,
+                        review=review_request.review,
+                        review_id=review_id,
+                        message=f"review request is not pending; current status is {review_request.status}",
+                    ),
+                    transport,
+                )
+            if review_request.review_kind != "user_input":
+                return self._with_transport(
+                    CommandResult(
+                        status="rejected",
+                        intent=review_request.intent,
+                        review=review_request.review,
+                        review_id=review_id,
+                        message="supplemental input is only valid for user-input reviews",
+                    ),
+                    transport,
+                )
+            result = self._resume_user_input_review(review_request, dry_run=False, transport=transport)
+            if result.status in {"executed", "review_required", "ambiguous"}:
+                self.reviews.consume(review_id)
+        audit_id = self.audit.record(
+            request=CommandRequest("", dry_run=dry_run, review_id=review_id, supplemental_input=supplemental_input, transport=transport),
+            intent=result.intent,
+            status=result.status,
+            result=result.result,
+            selected_target=result.selected_target,
+            message=result.message,
+            review=result.review,
+            review_id=review_id,
+            execution_status=result.execution_status,
+            acceptance_status=result.acceptance_status,
+            overall_status=result.overall_status,
+        )
+        return replace(result, audit_id=audit_id)
+
     def approve_review(self, review_id: str, dry_run: bool = False, transport: str | None = None) -> CommandResult:
         if dry_run:
             review_request = self.reviews.get(review_id)
@@ -3282,6 +3613,35 @@ class CapabilityBroker:
                     execution_status=result.execution_status,
                     acceptance_status=result.acceptance_status,
                     overall_status=result.overall_status,
+                )
+            if review_request.review_kind == "loop":
+                result = self._resume_loop_review(review_request, dry_run=True, transport=transport)
+                audit_id = self.audit.record(
+                    request=CommandRequest("", dry_run=True, approve=True, review_id=review_id, transport=transport),
+                    intent=result.intent,
+                    status=result.status,
+                    result=result.result,
+                    selected_target=result.selected_target,
+                    message=result.message,
+                    review=result.review,
+                    review_id=review_id,
+                    plan_id=review_request.plan_id,
+                    layer="goal_loop",
+                    execution_status=result.execution_status,
+                    acceptance_status=result.acceptance_status,
+                    overall_status=result.overall_status,
+                )
+                return replace(result, audit_id=audit_id)
+            if review_request.review_kind == "user_input":
+                return self._with_transport(
+                    CommandResult(
+                        status="rejected",
+                        intent=review_request.intent,
+                        review=review_request.review,
+                        review_id=review_id,
+                        message="use supplemental input to resume this review",
+                    ),
+                    transport,
                 )
             request = CommandRequest(
                 utterance=review_request.utterance,
@@ -3360,6 +3720,37 @@ class CapabilityBroker:
                 execution_status=result.execution_status,
                 acceptance_status=result.acceptance_status,
                 overall_status=result.overall_status,
+            )
+        if review_request.review_kind == "loop":
+            result = self._resume_loop_review(review_request, dry_run=dry_run, transport=transport)
+            if result.status in {"executed", "review_required", "ambiguous"}:
+                self.reviews.consume(review_id)
+            audit_id = self.audit.record(
+                request=CommandRequest("", dry_run=dry_run, approve=True, review_id=review_id, transport=transport),
+                intent=result.intent,
+                status=result.status,
+                result=result.result,
+                selected_target=result.selected_target,
+                message=result.message,
+                review=result.review,
+                review_id=review_id,
+                plan_id=review_request.plan_id,
+                layer="goal_loop",
+                execution_status=result.execution_status,
+                acceptance_status=result.acceptance_status,
+                overall_status=result.overall_status,
+            )
+            return replace(result, audit_id=audit_id)
+        if review_request.review_kind == "user_input":
+            return self._with_transport(
+                CommandResult(
+                    status="rejected",
+                    intent=review_request.intent,
+                    review=review_request.review,
+                    review_id=review_id,
+                    message="use supplemental input to resume this review",
+                ),
+                transport,
             )
 
         request = CommandRequest(

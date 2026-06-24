@@ -36,6 +36,7 @@ def run_dbus_service(
                 payload = {}
             utterance = str(payload.get("utterance", "")).strip()
             review_id = payload.get("review_id")
+            supplemental_input = payload.get("supplemental_input")
             if review_id and payload.get("reject"):
                 result = broker.reject_review(str(review_id), transport="dbus")
             else:
@@ -46,6 +47,7 @@ def run_dbus_service(
                         dry_run=bool(payload.get("dry_run", False)),
                         approve=bool(payload.get("approve", False)),
                         review_id=str(review_id) if review_id is not None else None,
+                        supplemental_input=str(supplemental_input) if supplemental_input is not None else None,
                         debug=bool(payload.get("debug", False)),
                         transport="dbus",
                     )

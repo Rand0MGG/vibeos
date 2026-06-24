@@ -47,6 +47,10 @@ def build_parser() -> argparse.ArgumentParser:
     reviews_sub = reviews.add_subparsers(dest="reviews_command", required=True)
     reviews_pending = reviews_sub.add_parser("pending", help="list pending L2 review requests")
     reviews_pending.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    reviews_provide = reviews_sub.add_parser("provide", help="provide supplemental input for a pending user-input review")
+    reviews_provide.add_argument("review_id")
+    reviews_provide.add_argument("supplemental_input", nargs="+")
+    reviews_provide.add_argument("--json", action="store_true", help="print machine-readable JSON")
     reviews_reject = reviews_sub.add_parser("reject", help="reject a pending L2 review request")
     reviews_reject.add_argument("review_id")
     reviews_reject.add_argument("--json", action="store_true", help="print machine-readable JSON")
@@ -195,6 +199,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print_pending_reviews(payload)
         return 0
+
+    if args.command == "reviews" and args.reviews_command == "provide":
+        result = runtime.handle(CommandRequest("", review_id=args.review_id, supplemental_input=" ".join(args.supplemental_input)))
+        print_result(result, json_output=args.json)
+        return 0 if result.overall_status in {"completed", "dry_run"} else 1
 
     if args.command == "reviews" and args.reviews_command == "reject":
         result = runtime.reject_review(args.review_id)

@@ -115,3 +115,4 @@ class GoalLoopResult:
     acceptance_status: str = "skipped"
     overall_status: str = "failed"
     payload: dict[str, Any] = field(default_factory=dict)
+    attempt_records: tuple[dict[str, Any], ...] = ()

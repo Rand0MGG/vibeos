@@ -26,7 +26,7 @@ class GoalLoop:
         assess_plan_execution: Callable[[TaskPlan, tuple[StepExecutionResult, ...], CommandRequest, str, str | None, str | None, str | None], PlanExecutionResult],
         classify_failure: Callable[[TaskPlan, PlanExecutionResult], FailureClassification],
         decide_replan: Callable[[str, TaskPlan, tuple[Any, ...], FailureClassification, str | None, str | None, tuple[str, ...]], ReplanDecision],
-        persist_review: Callable[[str, TaskPlan, LoopState, TaskStep, str], ReviewRequest],
+        persist_review: Callable[[str, Any, LoopState, TaskStep, str], ReviewRequest],
         persist_user_input: Callable[[str, Any, LoopState, str], ReviewRequest],
         policy: LoopPolicy | None = None,
     ) -> None:
@@ -78,6 +78,8 @@ class GoalLoop:
             plan = getattr(planning, "plan", None)
             analysis = getattr(planning, "analysis", None)
             route_decision = getattr(planning, "route_decision", None)
+            if plan is not None and not attempts_list and state.step_result_payloads:
+                attempts_list = _seed_attempt_records(state, plan)
 
             if plan is None:
                 route_action = getattr(route_decision, "action", None)
@@ -107,6 +109,7 @@ class GoalLoop:
                         acceptance_status="skipped",
                         overall_status="needs_user_input",
                         payload=payload,
+                        attempt_records=tuple(attempts_list),
                     )
                 overall_status = "blocked" if route_action == "blocked" else "failed"
                 return GoalLoopResult(
@@ -117,6 +120,7 @@ class GoalLoop:
                     acceptance_status="skipped",
                     overall_status=overall_status,
                     payload=payload,
+                    attempt_records=tuple(attempts_list),
                 )
 
             if loop_budget_exhausted(state, self.policy):
@@ -129,6 +133,7 @@ class GoalLoop:
                     acceptance_status="skipped",
                     overall_status="blocked",
                     payload=payload,
+                    attempt_records=tuple(attempts_list),
                 )
 
             next_step = _next_step(plan, state.completed_step_ids)
@@ -154,6 +159,7 @@ class GoalLoop:
                     acceptance_status=execution.acceptance_status,
                     overall_status=overall_status,
                     payload=payload,
+                    attempt_records=tuple(attempts_list),
                 )
 
             state = replace(state, current_step_id=next_step.id, selected_plan_id=plan.plan_id, selected_route_id=plan.selected_route_id, stage="observe_pre")
@@ -199,9 +205,10 @@ class GoalLoop:
                     acceptance_status="skipped",
                     overall_status="failed",
                     payload=payload,
+                    attempt_records=tuple(attempts_list),
                 )
             if review.review_required and not request.approve:
-                review_request = self.persist_review(request.utterance, plan, replace(state, stage="needs_review"), next_step, review.reason)
+                review_request = self.persist_review(request.utterance, planning, replace(state, stage="needs_review"), next_step, review.reason)
                 state = replace(state, pending_review_id=review_request.review_id, stage="needs_review")
                 record_trace_event(
                     phase="goal_loop",
@@ -222,12 +229,25 @@ class GoalLoop:
                     acceptance_status="skipped",
                     overall_status="needs_review",
                     payload=payload,
+                    attempt_records=tuple(attempts_list),
                 )
 
             state = replace(state, stage="act")
             attempt_id = _make_attempt_id(run_id, len(step_results_list) + 1, next_step.id)
             step_result = self.execute_step(plan, next_step, request, attempt_id)
             step_results_list.append(step_result)
+            attempts_list.append(
+                {
+                    "attempt_id": attempt_id,
+                    "trigger": trigger,
+                    "selected_route_id": plan.selected_route_id,
+                    "understanding_id": state.primary_understanding_id,
+                    "candidate_set_id": state.candidate_set_id,
+                    "route_decision_id": state.selected_route_decision_id,
+                    "task_plan": asdict(plan),
+                    "step_result": asdict(step_result),
+                }
+            )
             state = replace(
                 state,
                 attempt_history=(*state.attempt_history, attempt_id),
@@ -307,14 +327,11 @@ class GoalLoop:
                 state.candidate_set_id,
                 tuple(dict.fromkeys(route.domain_id for route in plan.routes if route.domain_id)),
             )
-            attempts_list.append(
-                {
-                    "attempt_id": attempt_id,
-                    "selected_route_id": plan.selected_route_id,
-                    "failure": asdict(failure),
-                    "replan_decision": asdict(decision),
-                }
-            )
+            attempts_list[-1] = {
+                **attempts_list[-1],
+                "failure": asdict(failure),
+                "replan_decision": asdict(decision),
+            }
             if decision.action == "ask_user":
                 review_request = self.persist_user_input(request.utterance, planning, replace(state, stage="needs_user_input"), decision.reason or failure.message)
                 state = replace(state, pending_user_input_id=review_request.review_id, stage="needs_user_input")
@@ -327,6 +344,7 @@ class GoalLoop:
                     acceptance_status="skipped",
                     overall_status="needs_user_input",
                     payload=payload,
+                    attempt_records=tuple(attempts_list),
                 )
             if decision.action == "stop":
                 overall_status = "blocked" if failure.failure_class in {"same_action_no_progress", "state_changed_externally"} else "failed"
@@ -339,6 +357,7 @@ class GoalLoop:
                     acceptance_status="failed" if failure.failure_class == "same_action_no_progress" else "skipped",
                     overall_status=overall_status,
                     payload=payload,
+                    attempt_records=tuple(attempts_list),
                 )
             planning = self.apply_replan_transition(planning, decision, failure)
             excluded_route_ids = tuple(dict.fromkeys((*excluded_route_ids, *decision.do_not_repeat_route_ids)))
@@ -354,7 +373,7 @@ class GoalLoop:
             planning=planning,
             run_id=run_id,
             goal_id=goal_id,
-            state=state,
+            state=replace(state, pending_review_id=None, stage="step_review"),
             step_results=tuple(step_result_from_payload(item) for item in state.step_result_payloads),
             attempts=(),
         )
@@ -440,6 +459,25 @@ def _make_snapshot_id(run_id: str, goal_id: str) -> str:
 def _make_attempt_id(run_id: str, attempt_index: int, step_id: str) -> str:
     digest = sha256(f"{run_id}:{attempt_index}:{step_id}:{utc_now_iso()}".encode("utf-8")).hexdigest()[:10]
     return f"attempt_{digest}"
+
+
+def _seed_attempt_records(state: LoopState, plan: TaskPlan) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for index, step_payload in enumerate(state.step_result_payloads):
+        attempt_id = state.attempt_history[index] if index < len(state.attempt_history) else f"attempt_resumed_{index + 1}"
+        records.append(
+            {
+                "attempt_id": attempt_id,
+                "trigger": "resume",
+                "selected_route_id": state.selected_route_id or plan.selected_route_id,
+                "understanding_id": state.primary_understanding_id,
+                "candidate_set_id": state.candidate_set_id,
+                "route_decision_id": state.selected_route_decision_id,
+                "task_plan": asdict(plan),
+                "step_result": dict(step_payload),
+            }
+        )
+    return records
 
 
 def step_result_from_payload(payload: dict[str, Any]) -> StepExecutionResult:
