@@ -11,6 +11,8 @@ ALLOWED_ACTIONS = allowed_actions()
 Action = Literal[
     "app.list",
     "app.open",
+    "app.search_history",
+    "browser.open_named_target",
     "browser.open_site_search",
     "browser.open_url",
     "browser.search_web",
@@ -89,13 +91,16 @@ class ReviewRequest:
     intent: Intent
     review: PermissionReview
     created_at: str
-    status: Literal["pending", "approved", "rejected", "consumed", "expired"] = "pending"
+    status: Literal["pending", "approved", "rejected", "consumed", "expired", "provided"] = "pending"
     expires_at: str | None = None
-    review_kind: Literal["intent", "plan"] = "intent"
+    review_kind: Literal["intent", "plan", "loop", "user_input"] = "intent"
     plan_id: str | None = None
     plan_payload: dict[str, Any] | None = None
     step_reviews: tuple[dict[str, Any], ...] = ()
     layer: str | None = None
+    snapshot_payload: dict[str, Any] | None = None
+    pending_reason: str | None = None
+    supplemental_input: str | None = None
 
 
 @dataclass(frozen=True)

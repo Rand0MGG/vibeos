@@ -257,8 +257,9 @@ def test_ask_offline_dry_run_browser_preview_completes_with_runtime_evidence(mon
     assert payload["status"] == "dry_run"
     assert payload["result"]["goal_runtime"]["status"] == "completed"
     assert payload["result"]["selected_strategy_id"] == "strategy_browser_search_web_route"
-    assert payload["result"]["preview"]["acceptance_status"] == "passed"
-    assert payload["result"]["preview"]["verification_status"] == "passed"
+    assert payload["result"]["preview"]["execution_status"] == "dry_run"
+    assert payload["result"]["preview"]["acceptance_status"] == "skipped"
+    assert payload["result"]["preview"]["verification_status"] == "failed"
 
 
 def test_ask_json_executes_allowed_task_plan(monkeypatch, capsys) -> None:
@@ -362,7 +363,7 @@ def test_approve_dry_run_json_previews_window_close_without_real_window_state(mo
     assert step["result"]["selected_target"].startswith("preview:")
 
 
-def test_ask_json_debug_exposes_v06_provider_artifacts(monkeypatch, capsys) -> None:
+def test_ask_json_debug_exposes_runtime_task_plan_provider_artifacts(monkeypatch, capsys) -> None:
     runtime = LocalRuntime(
         CapabilityBroker(
             intent_broker=RuleIntentBroker(),
@@ -377,8 +378,8 @@ def test_ask_json_debug_exposes_v06_provider_artifacts(monkeypatch, capsys) -> N
     payload = json.loads(capsys.readouterr().out)
 
     assert exit_code == 0
-    assert payload["result"]["debug_trace"]["runtime_v0_6"]["provider_artifacts"]
-    assert payload["result"]["debug_trace"]["runtime_v0_6"]["environment_profile"]["search_policy"] == "browser_first"
+    assert payload["result"]["debug_trace"]["runtime_task_plan"]["provider_artifacts"]
+    assert payload["result"]["debug_trace"]["runtime_task_plan"]["environment_profile"]["search_policy"] == "browser_first"
 
 
 def test_ask_offline_uses_local_rule_broker_even_with_runtime_available(monkeypatch, capsys) -> None:

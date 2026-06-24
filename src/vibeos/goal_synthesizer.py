@@ -258,6 +258,8 @@ class GoalSynthesizer:
 
     def synthesize(self, utterance: str, analysis: UtteranceAnalysis, *, understanding_id: str | None = None) -> GoalSynthesisResult:
         normalized = self.provider.synthesize(utterance, analysis)
+        if isinstance(normalized, dict):
+            normalized = _normalize_goal_candidate_domains(normalized)
         metadata = self.provider.response_metadata()
         exchange = ProviderExchange(
             provider_name=self.provider.provider_name,
@@ -637,6 +639,13 @@ def validate_goal_synthesis_payload(payload: dict[str, object], *, host_hint: di
     allowed_required_capabilities = set(str(item) for item in host_hint.get("required_capability_ids", [])) if isinstance(host_hint.get("required_capability_ids"), list) else set()
     allowed_missing_capabilities = set(str(item) for item in host_hint.get("missing_capability_ids", [])) if isinstance(host_hint.get("missing_capability_ids"), list) else set()
 
+    candidate_domain_ids = _reconcile_goal_candidate_domains(
+        candidate_domain_ids=candidate_domain_ids,
+        required_capability_ids=required_capability_ids,
+        assistant_intent_payload=normalized.get("assistant_intent"),
+        allowed_domains=allowed_domains,
+    )
+
     if any(str(item) not in allowed_domains for item in candidate_domain_ids):
         raise ValueError("candidate_domain_ids exceeded host-owned domain boundary")
     if any(str(item) not in allowed_required_capabilities for item in required_capability_ids):
@@ -659,8 +668,8 @@ def build_goal_synthesis_boundary_hint(
     analysis: UtteranceAnalysis,
     intent_broker: IntentBroker | None = None,
 ) -> dict[str, object]:
-    candidate_domain_ids = [str(item) for item in analysis.domains if str(item)]
     required_capability_ids = _goal_synthesis_required_capability_boundaries(analysis, intent_broker=intent_broker, utterance=utterance)
+    candidate_domain_ids = _goal_boundary_candidate_domains(analysis=analysis, required_capability_ids=required_capability_ids)
     missing_capability_ids = list(infer_missing_capabilities(utterance)) if analysis.type == "rejected" else []
     status = "ready"
     message = analysis.explanation or "goal synthesis boundary ready"
@@ -709,6 +718,57 @@ def _goal_type_boundary_hint(*, analysis: UtteranceAnalysis, required_capability
     return "unsupported"
 
 
+def _goal_boundary_candidate_domains(*, analysis: UtteranceAnalysis, required_capability_ids: list[str]) -> list[str]:
+    domains: list[str] = []
+    required_domains = _single_domain_capability_family(required_capability_ids)
+    if required_domains is not None:
+        domains.extend(required_domains)
+    domains.extend(str(item) for item in analysis.domains if str(item))
+    return list(dict.fromkeys(domains))
+
+
+def _reconcile_goal_candidate_domains(
+    *,
+    candidate_domain_ids: list[str],
+    required_capability_ids: list[str],
+    assistant_intent_payload: object,
+    allowed_domains: set[str],
+) -> list[str]:
+    domains: list[str] = []
+    if isinstance(assistant_intent_payload, dict):
+        preferred_domains = assistant_intent_payload.get("preferred_domains", ())
+        if isinstance(preferred_domains, (list, tuple)):
+            domains.extend(str(item) for item in preferred_domains if str(item))
+    required_domains = _single_domain_capability_family(required_capability_ids)
+    if required_domains is not None:
+        domains.extend(required_domains)
+    domains.extend(str(item) for item in candidate_domain_ids if str(item))
+    if allowed_domains:
+        domains = [domain_id for domain_id in domains if domain_id in allowed_domains]
+    return list(dict.fromkeys(domains))
+
+
+def _normalize_goal_candidate_domains(payload: dict[str, object]) -> dict[str, object]:
+    normalized = dict(payload)
+    candidate_domain_ids = list(normalized.get("candidate_domain_ids", [])) if isinstance(normalized.get("candidate_domain_ids"), list) else []
+    required_capability_ids = list(normalized.get("required_capability_ids", [])) if isinstance(normalized.get("required_capability_ids"), list) else []
+    normalized["candidate_domain_ids"] = _reconcile_goal_candidate_domains(
+        candidate_domain_ids=candidate_domain_ids,
+        required_capability_ids=required_capability_ids,
+        assistant_intent_payload=normalized.get("assistant_intent"),
+        allowed_domains=set(),
+    )
+    return normalized
+
+
+def _single_domain_capability_family(capability_ids: list[str]) -> list[str] | None:
+    domains = [domain_for_action(str(capability_id)) for capability_id in capability_ids if str(capability_id)]
+    unique_domains = list(dict.fromkeys(domain_id for domain_id in domains if domain_id))
+    if len(unique_domains) != 1:
+        return None
+    return unique_domains
+
+
 def cached_provider_intent(intent_broker: IntentBroker | None, utterance: str):
     cached_fn = getattr(intent_broker, "cached_intent", None)
     if callable(cached_fn):
@@ -719,7 +779,7 @@ def cached_provider_intent(intent_broker: IntentBroker | None, utterance: str):
 DOMAIN_CAPABILITY_BOUNDARIES: dict[str, tuple[str, ...]] = {
     "apps": ("app.open", "app.list"),
     "app_interaction": ("app.search_history",),
-    "browser": ("browser.open_url", "browser.search_web", "browser.open_site_search"),
+    "browser": ("browser.open_url", "browser.search_web", "browser.open_site_search", "browser.open_named_target"),
     "clipboard": ("clipboard.write",),
     "media": ("media.play", "media.search", "media.pause"),
     "notification": ("notification.send",),

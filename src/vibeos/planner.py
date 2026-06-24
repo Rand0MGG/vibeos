@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 from urllib.parse import quote_plus, urlparse
 
+from .assistant_semantics import AssistantIntent
 from .candidate_selection import (
     CandidateSelectionDecision,
     CandidateSelectionProvider,
@@ -20,7 +21,7 @@ from .debug_trace import build_debug_trace, serialize_provider_exchange
 from .domain_models import CapabilityExposure, DomainRoutingResult, ObservationReceipt, ObservationRequest
 from .domain_registry import DomainRegistry, RouteDefinition, default_domain_registry
 from .domain_router import route_domains
-from .goal_models import GoalSynthesisResult
+from .goal_models import GoalSpec, GoalSynthesisResult
 from .goal_synthesizer import GoalSynthesisProvider, GoalSynthesizer, OpenAICompatibleGoalSynthesisProvider, goal_synthesis_payload
 from .intent import IntentBroker, OpenAICompatibleIntentBroker, infer_browser_intent_from_open_request
 from .models import Intent, utc_now_iso
@@ -179,8 +180,12 @@ def plan_turn(
     route_decision: CandidateSelectionDecision | None = None
     candidate_set: CandidateSet | None = None
 
-    candidate_domain_ids = candidate_domain_ids_override or (goal_synthesis.goal_spec.candidate_domain_ids if goal_synthesis.goal_spec else ())
-    if should_use_domain_pipeline(goal_synthesis):
+    candidate_domain_ids = candidate_domain_ids_for_planning(
+        analysis=analysis,
+        goal_synthesis=goal_synthesis,
+        candidate_domain_ids_override=candidate_domain_ids_override,
+    )
+    if should_use_domain_pipeline(analysis=analysis, candidate_domain_ids=candidate_domain_ids):
         verifier_registry = default_verifier_registry()
         registry = default_domain_registry(verifier_registry.ids())
         routing = route_domains(analysis, registry, candidate_domain_ids=candidate_domain_ids)
@@ -196,9 +201,14 @@ def plan_turn(
                 broker,
             )
     elif analysis.type in {"task", "mixed"}:
-        fallback_reasons.append("domain pipeline unavailable for synthesized goal; compatibility planner considered")
-        candidates = build_candidate_plans(analysis, broker)
+        fallback_reasons.append("no registered candidate domains were available from understanding or goal synthesis")
 
+    candidates = augment_goal_directed_candidates(
+        utterance=utterance,
+        analysis=analysis,
+        goal_synthesis=goal_synthesis,
+        candidates=candidates,
+    )
     candidates = apply_replanning_constraints(
         candidates,
         excluded_route_ids=excluded_route_ids,
@@ -348,10 +358,179 @@ def apply_replanning_constraints(
     return filtered
 
 
-def should_use_domain_pipeline(goal_synthesis: GoalSynthesisResult | None) -> bool:
-    if goal_synthesis is None or goal_synthesis.goal_spec is None:
+def augment_goal_directed_candidates(
+    *,
+    utterance: str,
+    analysis: UtteranceAnalysis,
+    goal_synthesis: GoalSynthesisResult | None,
+    candidates: list[TaskPlan],
+) -> list[TaskPlan]:
+    goal_spec = goal_synthesis.goal_spec if goal_synthesis is not None else None
+    if goal_spec is None or goal_spec.assistant_intent is None:
+        return candidates
+    filtered = filter_goal_conflicting_candidates(goal_spec, candidates)
+    filtered.extend(goal_directed_candidate_plans(utterance=utterance, analysis=analysis, goal_spec=goal_spec))
+    return dedupe_candidates(filtered)
+
+
+def filter_goal_conflicting_candidates(goal_spec: GoalSpec, candidates: list[TaskPlan]) -> list[TaskPlan]:
+    assistant_intent = goal_spec.assistant_intent
+    if assistant_intent is None:
+        return candidates
+    blocked_route_ids: set[str] = set()
+    if assistant_intent.objective_kind == "open_named_website":
+        blocked_route_ids.update({"browser_open_url_route", "browser_search_web_route", "browser_site_search_route"})
+    if not blocked_route_ids:
+        return candidates
+    return [candidate for candidate in candidates if candidate.selected_route_id not in blocked_route_ids]
+
+
+def goal_directed_candidate_plans(
+    *,
+    utterance: str,
+    analysis: UtteranceAnalysis,
+    goal_spec: GoalSpec,
+) -> list[TaskPlan]:
+    assistant_intent = goal_spec.assistant_intent
+    if assistant_intent is None:
+        return []
+    if assistant_intent.objective_kind == "open_named_website":
+        return build_named_website_candidates(utterance=utterance, analysis=analysis, assistant_intent=assistant_intent)
+    return []
+
+
+def build_named_website_candidates(
+    *,
+    utterance: str,
+    analysis: UtteranceAnalysis,
+    assistant_intent: AssistantIntent,
+) -> list[TaskPlan]:
+    target_name = str(assistant_intent.target.display_name or assistant_intent.target.query_text or "").strip()
+    if not target_name:
+        return []
+    span = primary_task_span(analysis)
+    direct_route = TaskRoute(
+        id="browser_named_direct_open_route",
+        score=0.94,
+        domain_id="browser",
+        display=DisplayFields(explanation="Resolve and open the named website target directly through a host-owned browser route."),
+        score_inputs={},
+        required_capabilities=("browser.open_named_target",),
+        default_verifier_ids=("browser_goal_page_identity",),
+    )
+    direct_step = TaskStep(
+        id="browser_open_named_target",
+        action="browser.open_named_target",
+        capability_id="browser.open_named_target",
+        target={"name": target_name, "resolution_mode": "direct"},
+        depends_on=(),
+        risk_level=CAPABILITIES["browser.open_named_target"].risk_level,
+        expected_state=ExpectedState(kind="named_site_open_requested", fields={"name": target_name}),
+        preconditions=(StepPrecondition(kind="capability_available", capability_id="browser.open_named_target"),),
+        provenance=StepProvenance(source_span_id=span.id, planner="v0.8_goal_directed_planner"),
+    )
+    search_route = TaskRoute(
+        id="browser_search_followup_route",
+        score=0.89,
+        domain_id="browser",
+        display=DisplayFields(explanation="Search for the named website and continue to the resolved official result before accepting completion."),
+        score_inputs={},
+        required_capabilities=("browser.search_web",),
+        default_verifier_ids=("browser_goal_page_identity",),
+    )
+    search_step = TaskStep(
+        id="browser_search_followup",
+        action="browser.search_web",
+        capability_id="browser.search_web",
+        target={"query": target_name, "follow_search_result": True, "named_target": target_name},
+        depends_on=(),
+        risk_level=CAPABILITIES["browser.search_web"].risk_level,
+        expected_state=ExpectedState(kind="named_site_open_requested", fields={"name": target_name}),
+        preconditions=(StepPrecondition(kind="capability_available", capability_id="browser.search_web"),),
+        provenance=StepProvenance(source_span_id=span.id, planner="v0.8_goal_directed_planner"),
+    )
+    return [
+        TaskPlan(
+            schema_version="v0.5",
+            plan_id=make_plan_id(utterance, direct_route.id),
+            utterance=utterance,
+            display=DisplayFields(
+                goal=f"open {target_name}",
+                explanation="Resolve the named website target directly before using weaker browser strategies.",
+            ),
+            selected_route_id=direct_route.id,
+            routes=(direct_route,),
+            steps=(direct_step,),
+            provenance={
+                "planner": "v0.8_goal_directed_planner",
+                "planner_version": "v0.8",
+                "source_span_id": span.id,
+                "domain_id": "browser",
+                "assistant_intent": assistant_intent.objective_kind,
+            },
+        ),
+        TaskPlan(
+            schema_version="v0.5",
+            plan_id=make_plan_id(utterance, search_route.id),
+            utterance=utterance,
+            display=DisplayFields(
+                goal=f"search and continue to {target_name}",
+                explanation="Use a bounded browser search follow-up that resolves to the official result before completion.",
+            ),
+            selected_route_id=search_route.id,
+            routes=(search_route,),
+            steps=(search_step,),
+            provenance={
+                "planner": "v0.8_goal_directed_planner",
+                "planner_version": "v0.8",
+                "source_span_id": span.id,
+                "domain_id": "browser",
+                "assistant_intent": assistant_intent.objective_kind,
+                "interaction_surface": "structured",
+            },
+        ),
+    ]
+
+
+def primary_task_span(analysis: UtteranceAnalysis) -> TaskSpan:
+    if analysis.task_spans:
+        return analysis.task_spans[0]
+    return TaskSpan(id="span_1", text=analysis.utterance, start=0, end=len(analysis.utterance), domain=(analysis.domains[0] if analysis.domains else "browser"), confidence=analysis.confidence)
+
+
+def should_use_domain_pipeline(*, analysis: UtteranceAnalysis, candidate_domain_ids: tuple[str, ...]) -> bool:
+    if analysis.type not in {"task", "mixed"}:
         return False
-    return bool(goal_synthesis.goal_spec.candidate_domain_ids)
+    return bool(candidate_domain_ids)
+
+
+def candidate_domain_ids_for_planning(
+    *,
+    analysis: UtteranceAnalysis,
+    goal_synthesis: GoalSynthesisResult | None,
+    candidate_domain_ids_override: tuple[str, ...] | None,
+) -> tuple[str, ...]:
+    if candidate_domain_ids_override:
+        return tuple(dict.fromkeys(domain_id for domain_id in candidate_domain_ids_override if domain_id))
+    domains: list[str] = []
+    goal_spec = goal_synthesis.goal_spec if goal_synthesis is not None else None
+    if goal_spec is not None:
+        assistant_intent = goal_spec.assistant_intent
+        if assistant_intent is not None:
+            domains.extend(domain_id for domain_id in assistant_intent.preferred_domains if domain_id)
+        required_domains = _single_required_domain(goal_spec.required_capability_ids)
+        if required_domains is not None:
+            domains.append(required_domains)
+        domains.extend(domain_id for domain_id in goal_spec.candidate_domain_ids if domain_id)
+    domains.extend(domain_id for domain_id in analysis.domains if domain_id)
+    return tuple(dict.fromkeys(domains))
+
+
+def _single_required_domain(capability_ids: tuple[str, ...]) -> str | None:
+    domains = tuple(dict.fromkeys(domain_for_action(capability_id) for capability_id in capability_ids if capability_id))
+    if len(domains) != 1:
+        return None
+    return domains[0]
 
 
 def default_capability_context() -> set[str]:
@@ -361,20 +540,7 @@ def default_capability_context() -> set[str]:
 def structured_capability_intent(text: str, intent_broker: IntentBroker | None = None) -> Intent:
     if intent_broker is not None:
         return intent_broker.parse(text)
-    return Intent.unknown("no intent broker was available for compatibility planning")
-
-
-def build_candidate_plans(analysis: UtteranceAnalysis, intent_broker: IntentBroker | None = None) -> list[TaskPlan]:
-    broker = intent_broker or OpenAICompatibleIntentBroker()
-    candidates: list[TaskPlan] = []
-    for span in analysis.task_spans:
-        if span.domain == "media":
-            candidates.extend(media_candidate_plans(analysis.utterance, span))
-            continue
-        intent = structured_capability_intent(span.text, broker)
-        if intent.action != "unknown":
-            candidates.append(normalize_intent_to_task_plan(intent, analysis.utterance, analysis, span))
-    return candidates
+    return Intent.unknown("structured route building requires an intent broker")
 
 
 def build_domain_candidate_plans(
@@ -880,7 +1046,7 @@ def build_app_search_plan(
         id=route_definition.route_id.replace("_route", ""),
         action="app.search_history",
         capability_id="app.search_history",
-        target={"app": app_name, "query": query},
+        target={"app": app_name, "query": query, "interaction_surface": interaction_surface},
         depends_on=(),
         risk_level=CAPABILITIES["app.search_history"].risk_level,
         expected_state=ExpectedState(kind="search_results_available", fields={"query": query}),

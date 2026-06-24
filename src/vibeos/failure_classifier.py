@@ -9,6 +9,13 @@ class FailureClassifier:
             return FailureClassification(failure_class="none", message="dry-run execution does not require failure classification")
 
         if execution.execution_status == "succeeded":
+            if isinstance(execution.acceptance_result, dict) and bool(execution.acceptance_result.get("same_action_no_progress", False)):
+                return FailureClassification(
+                    failure_class="same_action_no_progress",
+                    message=self._acceptance_message(execution) or "execution succeeded but did not change the observed state",
+                    replannable=True,
+                    details={"acceptance_status": execution.acceptance_status},
+                )
             if execution.acceptance_status == "passed":
                 return FailureClassification(failure_class="none", message="execution and acceptance completed")
             if execution.acceptance_status == "indeterminate":
@@ -74,6 +81,35 @@ class FailureClassifier:
             return FailureClassification(
                 failure_class="semantic_mismatch",
                 message=step.error or execution.error or "requested target does not look like a resolvable window",
+                replannable=True,
+                details={"capability_id": action, "selected_route_id": plan.selected_route_id},
+            )
+
+        if action == "app.search_history" and any(
+            phrase in error
+            for phrase in (
+                "structured search control was not visible",
+                "shortcut search mode is unavailable",
+                "search query entry requires a visible control",
+            )
+        ):
+            return FailureClassification(
+                failure_class="semantic_mismatch",
+                message=step.error or execution.error or "requested in-app interaction surface is unavailable",
+                replannable=True,
+                details={"capability_id": action, "selected_route_id": plan.selected_route_id},
+            )
+
+        if action in {"browser.open_named_target", "browser.search_web"} and any(
+            phrase in error
+            for phrase in (
+                "no local direct-open resolution matched the named website target",
+                "browser search results did not provide a follow-up destination",
+            )
+        ):
+            return FailureClassification(
+                failure_class="semantic_mismatch",
+                message=step.error or execution.error or "requested named website route did not resolve to an official target",
                 replannable=True,
                 details={"capability_id": action, "selected_route_id": plan.selected_route_id},
             )

@@ -93,6 +93,7 @@ class ReviewStore:
             plan_payload=plan_payload,
             step_reviews=tuple(asdict(item) for item in plan_review.step_reviews),
             layer="permission_review",
+            snapshot_payload=plan_payload.get("loop_snapshot") if isinstance(plan_payload.get("loop_snapshot"), dict) else None,
         )
         self._append({"event": "created", **review_to_payload(request)})
         record_trace_event(
@@ -101,6 +102,65 @@ class ReviewStore:
             status="pending",
             actor="review_store",
             plan_id=plan_review.plan_id,
+            review_id=review_id,
+            data=review_to_payload(request),
+        )
+        return request
+
+    def create_loop_review(
+        self,
+        utterance: str,
+        *,
+        plan_payload: dict[str, Any],
+        snapshot_payload: dict[str, Any],
+        pending_reason: str,
+        step_id: str | None,
+        review_kind: str = "loop",
+    ) -> ReviewRequest:
+        now = datetime.now(UTC)
+        created_at = isoformat_utc(now)
+        expires_at = isoformat_utc(now + timedelta(seconds=self.ttl_seconds))
+        placeholder_intent = Intent.unknown("stored goal loop approval", {"plan_id": plan_payload.get("plan_id"), "step_id": step_id})
+        review = PermissionReview(
+            risk_level="L2",
+            review_required=review_kind == "loop",
+            allowed=True,
+            reason=pending_reason,
+            effects=("May resume a stored goal loop from the pending step.",),
+            reversible=False,
+        )
+        review_id = make_plan_review_id(
+            {
+                "plan_payload": plan_payload,
+                "snapshot_payload": snapshot_payload,
+                "review_kind": review_kind,
+                "step_id": step_id,
+            },
+            created_at,
+        )
+        request = ReviewRequest(
+            review_id=review_id,
+            utterance=utterance,
+            intent=placeholder_intent,
+            review=review,
+            created_at=created_at,
+            status="pending",
+            expires_at=expires_at,
+            review_kind="loop" if review_kind == "loop" else "user_input",
+            plan_id=str(plan_payload.get("plan_id")) if plan_payload.get("plan_id") is not None else None,
+            plan_payload=plan_payload,
+            step_reviews=(),
+            layer="goal_loop",
+            snapshot_payload=snapshot_payload,
+            pending_reason=pending_reason,
+        )
+        self._append({"event": "created", **review_to_payload(request)})
+        record_trace_event(
+            phase="review",
+            event_type="review_created",
+            status="pending",
+            actor="review_store",
+            plan_id=request.plan_id,
             review_id=review_id,
             data=review_to_payload(request),
         )
@@ -133,6 +193,9 @@ class ReviewStore:
             plan_payload=request.plan_payload,
             step_reviews=request.step_reviews,
             layer=request.layer,
+            snapshot_payload=request.snapshot_payload,
+            pending_reason=request.pending_reason,
+            supplemental_input=request.supplemental_input,
         )
 
     def reject(self, review_id: str) -> ReviewRequest | None:
@@ -162,6 +225,9 @@ class ReviewStore:
             plan_payload=request.plan_payload,
             step_reviews=request.step_reviews,
             layer=request.layer,
+            snapshot_payload=request.snapshot_payload,
+            pending_reason=request.pending_reason,
+            supplemental_input=request.supplemental_input,
         )
 
     def consume(self, review_id: str) -> ReviewRequest | None:
@@ -191,6 +257,48 @@ class ReviewStore:
             plan_payload=request.plan_payload,
             step_reviews=request.step_reviews,
             layer=request.layer,
+            snapshot_payload=request.snapshot_payload,
+            pending_reason=request.pending_reason,
+            supplemental_input=request.supplemental_input,
+        )
+
+    def provide_input(self, review_id: str, supplemental_input: str) -> ReviewRequest | None:
+        request = self.get(review_id)
+        if not request or request.status != "pending":
+            return request
+        self._append(
+            {
+                "event": "provided",
+                "review_id": review_id,
+                "timestamp": utc_now_iso(),
+                "supplemental_input": supplemental_input,
+            }
+        )
+        record_trace_event(
+            phase="review",
+            event_type="review_input_provided",
+            status="provided",
+            actor="review_store",
+            plan_id=request.plan_id,
+            review_id=review_id,
+            data={"supplemental_input": supplemental_input, "review_kind": request.review_kind},
+        )
+        return ReviewRequest(
+            review_id=request.review_id,
+            utterance=request.utterance,
+            intent=request.intent,
+            review=request.review,
+            created_at=request.created_at,
+            status="provided",
+            expires_at=request.expires_at,
+            review_kind=request.review_kind,
+            plan_id=request.plan_id,
+            plan_payload=request.plan_payload,
+            step_reviews=request.step_reviews,
+            layer=request.layer,
+            snapshot_payload=request.snapshot_payload,
+            pending_reason=request.pending_reason,
+            supplemental_input=supplemental_input,
         )
 
     def get(self, review_id: str) -> ReviewRequest | None:
@@ -208,6 +316,10 @@ class ReviewStore:
                 status = "rejected"
             elif entry.get("event") == "consumed":
                 status = "consumed"
+            elif entry.get("event") == "provided":
+                status = "provided"
+                if latest is not None:
+                    latest = {**latest, "supplemental_input": entry.get("supplemental_input")}
         if not latest:
             return None
         if status == "pending" and review_payload_expired(latest):
@@ -231,6 +343,8 @@ class ReviewStore:
                 statuses[review_id] = "rejected"
             elif event == "consumed":
                 statuses[review_id] = "consumed"
+            elif event == "provided":
+                statuses[review_id] = "provided"
 
         pending = []
         for review_id, payload in created.items():
@@ -302,6 +416,9 @@ def review_to_payload(request: ReviewRequest) -> dict[str, Any]:
         "plan_payload": request.plan_payload,
         "step_reviews": list(request.step_reviews),
         "layer": request.layer,
+        "snapshot_payload": request.snapshot_payload,
+        "pending_reason": request.pending_reason,
+        "supplemental_input": request.supplemental_input,
     }
 
 
@@ -333,6 +450,9 @@ def review_from_payload(payload: dict[str, Any], status: str) -> ReviewRequest:
         plan_payload=payload.get("plan_payload") if isinstance(payload.get("plan_payload"), dict) else None,
         step_reviews=tuple(payload.get("step_reviews", ())),
         layer=str(payload["layer"]) if payload.get("layer") is not None else None,
+        snapshot_payload=payload.get("snapshot_payload") if isinstance(payload.get("snapshot_payload"), dict) else None,
+        pending_reason=str(payload["pending_reason"]) if payload.get("pending_reason") is not None else None,
+        supplemental_input=str(payload["supplemental_input"]) if payload.get("supplemental_input") is not None else None,
     )
 
 

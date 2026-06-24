@@ -292,7 +292,7 @@ def build_replan_options(
             )
         return (ReplanOption(option_id="stop_transient_budget", action="stop", reason="transient retry budget exhausted"),)
 
-    if failure.failure_class in {"semantic_mismatch", "acceptance_unverified", "acceptance_failed"}:
+    if failure.failure_class in {"semantic_mismatch", "acceptance_unverified", "acceptance_failed", "same_action_no_progress"}:
         return semantic_recovery_options(
             current_plan=current_plan,
             attempts=attempts,
@@ -313,9 +313,19 @@ def semantic_recovery_options(
     failure: FailureClassification,
     available_domain_ids: tuple[str, ...],
 ) -> tuple[ReplanOption, ...]:
+    do_not_repeat_capability_ids = tuple(step.capability_id for step in current_plan.steps)
+    selected_route = current_plan.routes[0] if current_plan.routes else None
+    if (
+        selected_route is not None
+        and selected_route.domain_id == "app_interaction"
+        and do_not_repeat_capability_ids == ("app.search_history",)
+    ):
+        # App search recovery often needs to keep the same capability while switching
+        # to a weaker interaction surface such as a shortcut-driven route.
+        do_not_repeat_capability_ids = ()
     shared_constraints = {
         "do_not_repeat_route_ids": (current_plan.selected_route_id,),
-        "do_not_repeat_capability_ids": tuple(step.capability_id for step in current_plan.steps),
+        "do_not_repeat_capability_ids": do_not_repeat_capability_ids,
     }
     alternative_domains = replan_candidate_domains(
         current_plan=current_plan,
@@ -406,6 +416,7 @@ def build_replan_request_payload(
     options: tuple[ReplanOption, ...],
     understanding_id: str | None,
     candidate_set_id: str | None,
+    available_domain_ids: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     return {
         "utterance": utterance,
@@ -445,6 +456,7 @@ def build_replan_request_payload(
             }
             for option in options
         ],
+        "available_domain_ids": list(available_domain_ids),
     }
 
 

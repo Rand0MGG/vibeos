@@ -5,6 +5,7 @@ from vibeos.goal_synthesizer import (
     GoalSynthesizer,
     OpenAICompatibleGoalSynthesisProvider,
     RuleBasedGoalSynthesisProvider,
+    build_goal_synthesis_boundary_hint,
     synthesize_assistant_intent,
     validate_goal_synthesis_payload,
 )
@@ -13,6 +14,7 @@ from vibeos.models import Intent
 from vibeos.nlu import analyze_utterance
 from vibeos.provider_client import OpenAICompatibleProviderConfig, ProviderJsonObjectResponse
 from vibeos.task_models import TaskSpan, UtteranceAnalysis
+from vibeos.understanding import CapturingIntentBroker
 
 
 class StaticIntentBroker(IntentBroker):
@@ -150,6 +152,45 @@ class LegacyShapeGoalSynthesisProvider(GoalSynthesisProvider):
         }
 
 
+class MismatchedAppOpenGoalSynthesisProvider(GoalSynthesisProvider):
+    provider_name = "fake_mismatched_goal_synthesizer"
+    provider_version = "v0.test"
+    model_name = "fake-structured"
+
+    def synthesize(self, utterance: str, analysis) -> dict[str, object]:
+        self._last_parse_valid = True
+        self._last_fallback_used = False
+        self._last_error = None
+        self._last_raw_output = '{"status":"ready"}'
+        return {
+            "status": "ready",
+            "goal_type": "app_open",
+            "candidate_domain_ids": ["browser"],
+            "required_capability_ids": ["app.open"],
+            "missing_capability_ids": [],
+            "clarification_questions": [],
+            "constraints": [],
+            "fallback_hints": [],
+            "assumptions": [],
+            "assistant_intent": {
+                "objective_kind": "open_application",
+                "target": {
+                    "entity_type": "application",
+                    "display_name": "browser",
+                    "app_name": "browser",
+                },
+                "completion": {
+                    "kind": "application_state",
+                    "success_signal": "the requested application is opened or focused",
+                },
+                "interaction_hints": ["native-open"],
+                "preferred_domains": ["apps"],
+            },
+            "subgoals": [],
+            "message": "fake provider synthesized a mismatched app-open goal",
+        }
+
+
 class FailingGoalSynthesisFallback(GoalSynthesisProvider):
     def synthesize(self, utterance: str, analysis) -> dict[str, object]:
         raise AssertionError("rule goal synthesis fallback should not run before a successful provider response")
@@ -180,6 +221,45 @@ def test_goal_synthesis_validation_normalizes_legacy_provider_shape_into_host_bo
     assert validated["goal_type"] == "browser_open_url"
     assert validated["candidate_domain_ids"] == ["browser"]
     assert validated["required_capability_ids"] == ["browser.open_url"]
+
+
+def test_goal_synthesis_boundary_hint_includes_intent_implied_domain_when_analysis_drifts() -> None:
+    analysis = UtteranceAnalysis(
+        utterance="open browser",
+        type="task",
+        confidence=0.95,
+        domains=("browser",),
+        explanation="provider analysis drifted toward browser navigation",
+        task_spans=(
+            TaskSpan(
+                id="span_1",
+                text="open browser",
+                start=0,
+                end=len("open browser"),
+                domain="browser",
+                confidence=0.95,
+            ),
+        ),
+        provenance=None,
+    )
+
+    broker = CapturingIntentBroker(StaticIntentBroker(Intent(action="app.open", target={"name": "browser"}, reason="cached app-open intent")))
+    broker.remember("open browser", Intent(action="app.open", target={"name": "browser"}, reason="cached app-open intent"))
+    hint = build_goal_synthesis_boundary_hint(utterance="open browser", analysis=analysis, intent_broker=broker)
+
+    assert hint["candidate_domain_ids"] == ["apps", "browser"]
+    assert hint["required_capability_ids"] == ["app.open"]
+
+
+def test_goal_synthesizer_reconciles_provider_domains_with_assistant_intent_preferences() -> None:
+    analysis = analyze_utterance("open browser")
+
+    result = GoalSynthesizer(provider=MismatchedAppOpenGoalSynthesisProvider()).synthesize("open browser", analysis)
+
+    assert result.goal_spec is not None
+    assert result.goal_spec.candidate_domain_ids == ("apps", "browser")
+    assert result.goal_spec.required_capability_ids == ("app.open",)
+    assert result.exchange.normalized_output["candidate_domain_ids"] == ["apps", "browser"]
 
 
 def test_rule_goal_synthesizer_main_path_no_longer_depends_on_shadow_rule_reparse(monkeypatch) -> None:

@@ -328,7 +328,7 @@ def test_app_fixture_missing_controls_does_not_false_accept_goal() -> None:
     result = broker.handle(command("search chat history in WeChat for Alice", debug=True))
 
     assert result.status == "failed"
-    assert result.result["execution"]["acceptance_status"] == "failed"
+    assert result.result["execution"]["acceptance_status"] == "skipped"
     assert result.result["run_ledger"]["terminal_outcome"]["status"] in {"failed", "blocked"}
 
 

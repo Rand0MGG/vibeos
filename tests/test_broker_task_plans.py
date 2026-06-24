@@ -481,7 +481,7 @@ def test_browser_media_route_uses_observed_browser_context_for_verification_with
     assert result.result["execution"]["acceptance_status"] == "passed"
 
 
-def test_browser_requests_expose_v06_runtime_state_on_main_path() -> None:
+def test_browser_requests_expose_runtime_state_on_main_path() -> None:
     broker = CapabilityBroker(
         intent_broker=RuleIntentBroker(),
         portal=ObservedPortal(),
@@ -501,9 +501,9 @@ def test_browser_requests_expose_v06_runtime_state_on_main_path() -> None:
     assert result.result["run_ledger"]["attempts"][0]["understanding_id"] == result.result["understanding"]["understanding_id"]
     assert result.result["run_ledger"]["attempts"][0]["candidate_set_id"] == result.result["candidate_set"]["candidate_set_id"]
     assert result.result["run_ledger"]["attempts"][0]["route_decision_id"] == result.result["route_decision"]["route_decision_id"]
-    assert result.result["debug_trace"]["runtime_v0_6"]["goal_runtime"]["goal_id"] == result.result["goal_runtime"]["goal_id"]
-    assert result.result["debug_trace"]["runtime_v0_6"]["environment_profile"]["search_policy"] == "browser_first"
-    assert result.result["debug_trace"]["runtime_v0_6"]["provider_artifacts"]
+    assert result.result["debug_trace"]["runtime_task_plan"]["goal_runtime"]["goal_id"] == result.result["goal_runtime"]["goal_id"]
+    assert result.result["debug_trace"]["runtime_task_plan"]["environment_profile"]["search_policy"] == "browser_first"
+    assert result.result["debug_trace"]["runtime_task_plan"]["provider_artifacts"]
 
 
 def test_broker_main_path_supports_explicit_fake_strategy_selection_provider() -> None:
@@ -522,7 +522,7 @@ def test_broker_main_path_supports_explicit_fake_strategy_selection_provider() -
     assert result.result["run_ledger"]["strategy_history"][0]["provider_name"] == "fake_strategy_selector"
 
 
-def test_app_requests_expose_v06_runtime_state_on_main_path() -> None:
+def test_app_requests_expose_runtime_state_on_main_path() -> None:
     broker = CapabilityBroker(
         intent_broker=RuleIntentBroker(),
         apps=FakeApps(),
@@ -543,9 +543,9 @@ def test_app_requests_expose_v06_runtime_state_on_main_path() -> None:
     assert result.result["run_ledger"]["attempts"][0]["candidate_set_id"] == result.result["candidate_set"]["candidate_set_id"]
     assert result.result["run_ledger"]["attempts"][0]["route_decision_id"] == result.result["route_decision"]["route_decision_id"]
     assert result.result["execution"]["acceptance_status"] == "passed"
-    assert result.result["debug_trace"]["runtime_v0_6"]["goal_runtime"]["goal_id"] == result.result["goal_runtime"]["goal_id"]
-    assert result.result["debug_trace"]["runtime_v0_6"]["environment_profile"]["search_policy"] == "balanced"
-    assert result.result["debug_trace"]["runtime_v0_6"]["provider_artifacts"]
+    assert result.result["debug_trace"]["runtime_task_plan"]["goal_runtime"]["goal_id"] == result.result["goal_runtime"]["goal_id"]
+    assert result.result["debug_trace"]["runtime_task_plan"]["environment_profile"]["search_policy"] == "balanced"
+    assert result.result["debug_trace"]["runtime_task_plan"]["provider_artifacts"]
 
 
 def test_broker_main_path_supports_explicit_fake_provider_stack_without_rule_fallback(monkeypatch) -> None:
@@ -857,12 +857,13 @@ def test_broker_v06_bridge_respects_selected_route_boundary(monkeypatch) -> None
     result = broker.handle(CommandRequest("open Notion", debug=True))
 
     assert result.status == "failed"
-    assert result.overall_status == "failed"
+    assert result.overall_status == "blocked"
     assert result.result["goal_runtime"]["goal_id"] == "goal_open_notion_main_path"
     assert result.result["selected_strategy_id"] == "strategy_apps_open_route"
-    assert len(result.result["attempts"]) == 1
+    assert len(result.result["attempts"]) == 3
+    assert all(item["selected_route_id"] == "apps_open_route" for item in result.result["attempts"])
     assert result.result["attempts"][0]["failure"]["failure_class"] == "semantic_mismatch"
-    assert result.result["run_ledger"]["terminal_outcome"]["status"] == "failed"
+    assert result.result["run_ledger"]["terminal_outcome"]["status"] == "blocked"
 
 
 def test_window_list_requests_expose_v06_runtime_state_on_main_path() -> None:
@@ -1015,7 +1016,7 @@ def test_task_planning_uses_configured_intent_broker_for_normal_requests() -> No
     assert result.result["plan"]["steps"][0]["action"] == "window.list"
 
 
-def test_normal_ask_routes_named_web_targets_to_browser_semantics() -> None:
+def test_normal_ask_rejects_named_web_targets_when_no_official_resolution_path_exists() -> None:
     broker = CapabilityBroker(
         intent_broker=RuleIntentBroker(),
         portal=FakePortal(),
@@ -1026,10 +1027,14 @@ def test_normal_ask_routes_named_web_targets_to_browser_semantics() -> None:
 
     result = broker.handle(CommandRequest("\u6253\u5f00\u767e\u5ea6\u5b98\u7f51"))
 
-    assert result.status == "executed"
-    assert result.result["plan"]["selected_route_id"] == "browser_search_web_route"
-    assert result.result["execution"]["step_results"][0]["capability_id"] == "browser.search_web"
-    assert result.result["execution"]["step_results"][0]["diagnostics"]["query"] == "\u767e\u5ea6\u5b98\u7f51"
+    assert result.status == "rejected"
+    assert result.result["assistant_intent"]["objective_kind"] == "open_named_website"
+    assert [attempt["selected_route_id"] for attempt in result.result["attempts"]] == [
+        "browser_named_direct_open_route",
+        "browser_search_followup_route",
+    ]
+    assert result.result["attempts"][0]["failure"]["failure_class"] == "semantic_mismatch"
+    assert result.result["attempts"][1]["failure"]["failure_class"] == "semantic_mismatch"
 
 
 def test_task_plan_loop_replans_semantic_mismatch_into_browser_route(monkeypatch) -> None:

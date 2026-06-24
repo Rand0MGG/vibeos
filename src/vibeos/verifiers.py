@@ -162,6 +162,68 @@ def browser_search_route_completed_verifier(plan: TaskPlan, execution: PlanExecu
     )
 
 
+def browser_goal_page_identity_verifier(plan: TaskPlan, execution: PlanExecutionResult, harness: VerifierHarness) -> VerifierResult:
+    browser_context = harness.context_package_for("browser_context")
+    observed_url = str(browser_context.get("active_url") or "")
+    expected_url = ""
+    target_name = ""
+    for step in plan.steps:
+        if step.action not in {"browser.open_named_target", "browser.search_web"}:
+            continue
+        if step.action == "browser.search_web" and not bool(step.target.get("follow_search_result")):
+            continue
+        target_name = str(step.target.get("name") or step.target.get("named_target") or step.target.get("query") or "")
+        break
+    for step_result in execution.step_results:
+        result_payload = step_result.result if isinstance(step_result.result, dict) else {}
+        expected_url = str(
+            result_payload.get("official_url")
+            or result_payload.get("resolved_url")
+            or ""
+        )
+        if expected_url:
+            break
+    if execution.status != "succeeded":
+        return VerifierResult(
+            verifier_id="browser_goal_page_identity",
+            status="skipped",
+            message="adapter execution did not succeed",
+            observation_package_ids=("browser_context",),
+            details={"execution_status": execution.status, "target_name": target_name},
+        )
+    if not expected_url:
+        return VerifierResult(
+            verifier_id="browser_goal_page_identity",
+            status="failed",
+            message="goal-page verifier did not receive a resolved official URL",
+            observation_package_ids=("browser_context",),
+            details={"target_name": target_name},
+        )
+    if not observed_url:
+        return VerifierResult(
+            verifier_id="browser_goal_page_identity",
+            status="failed",
+            message="goal-page verifier did not observe a browser URL",
+            observation_package_ids=("browser_context",),
+            details={"target_name": target_name, "expected_url": expected_url, "browser_context_status": browser_context.get("status")},
+        )
+    if observed_url != expected_url:
+        return VerifierResult(
+            verifier_id="browser_goal_page_identity",
+            status="failed",
+            message="goal-page verifier observed a different URL than the resolved official target",
+            observation_package_ids=("browser_context",),
+            details={"target_name": target_name, "expected_url": expected_url, "observed_url": observed_url},
+        )
+    return VerifierResult(
+        verifier_id="browser_goal_page_identity",
+        status="passed",
+        message="browser verifier observed the resolved goal page identity",
+        observation_package_ids=("browser_context",),
+        details={"target_name": target_name, "observed_url": observed_url},
+    )
+
+
 def _query_from_url(url: str) -> str:
     if not url:
         return ""
@@ -207,6 +269,7 @@ def default_verifier_registry() -> VerifierRegistry:
         (
             VerifierSpec("browser_url_opened", ("browser_context",), browser_url_opened_verifier),
             VerifierSpec("browser_search_route_completed", ("browser_context",), browser_search_route_completed_verifier),
+            VerifierSpec("browser_goal_page_identity", ("browser_context",), browser_goal_page_identity_verifier),
             VerifierSpec("media_playback_state_available", ("media_context",), media_playback_state_available_verifier),
         )
     )

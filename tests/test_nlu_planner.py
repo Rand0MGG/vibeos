@@ -8,6 +8,7 @@ from vibeos.domain_registry import default_domain_registry
 from vibeos.domain_router import route_domains
 from vibeos.nlu import analyze_utterance
 from vibeos.planner import plan_payload, plan_turn, plan_utterance
+from vibeos.goal_synthesizer import GoalSynthesisProvider
 from vibeos.provider_client import OpenAICompatibleProviderConfig, ProviderJsonObjectResponse
 from vibeos.task_models import TaskSpan, UtteranceAnalysis
 from vibeos.understanding import (
@@ -73,6 +74,77 @@ class StaticClarificationProvider(ClarificationProvider):
             provider_name=self.provider_name,
             model_name=self.model_name,
         )
+
+
+class EmptyDomainGoalSynthesisProvider(GoalSynthesisProvider):
+    provider_name = "test_goal_synthesizer"
+    model_name = "deterministic-test"
+
+    def synthesize(self, utterance: str, analysis: UtteranceAnalysis) -> dict[str, object]:
+        self._last_parse_valid = True
+        self._last_fallback_used = False
+        self._last_error = None
+        self._last_raw_output = "{}"
+        return {
+            "status": "ready",
+            "goal_type": "browser_open_url",
+            "candidate_domain_ids": [],
+            "required_capability_ids": ["browser.open_url"],
+            "missing_capability_ids": [],
+            "clarification_questions": [],
+            "constraints": [],
+            "fallback_hints": [],
+            "assumptions": [],
+            "assistant_intent": None,
+            "subgoals": [
+                {
+                    "subgoal_id": "subgoal_1",
+                    "text": utterance,
+                    "goal_type": "browser_open_url",
+                    "candidate_domain_ids": [],
+                    "required_capability_ids": ["browser.open_url"],
+                }
+            ],
+            "message": "test override",
+        }
+
+
+class MismatchedAppOpenGoalSynthesisProvider(GoalSynthesisProvider):
+    provider_name = "test_goal_synthesizer"
+    model_name = "deterministic-test"
+
+    def synthesize(self, utterance: str, analysis: UtteranceAnalysis) -> dict[str, object]:
+        self._last_parse_valid = True
+        self._last_fallback_used = False
+        self._last_error = None
+        self._last_raw_output = "{}"
+        return {
+            "status": "ready",
+            "goal_type": "app_open",
+            "candidate_domain_ids": ["browser"],
+            "required_capability_ids": ["app.open"],
+            "missing_capability_ids": [],
+            "clarification_questions": [],
+            "constraints": [],
+            "fallback_hints": [],
+            "assumptions": [],
+            "assistant_intent": {
+                "objective_kind": "open_application",
+                "target": {
+                    "entity_type": "application",
+                    "display_name": "browser",
+                    "app_name": "browser",
+                },
+                "completion": {
+                    "kind": "application_state",
+                    "success_signal": "the requested application is opened or focused",
+                },
+                "interaction_hints": ["native-open"],
+                "preferred_domains": ["apps"],
+            },
+            "subgoals": [],
+            "message": "test override",
+        }
 
 
 class StaticUnderstandingProvider(UnderstandingAnalysisProvider):
@@ -201,6 +273,39 @@ def test_plan_payload_for_clipboard_variants_returns_task_plan() -> None:
         assert payload["plan"]["steps"][0]["target"]["text"] == "VibeOS evidence"
 
 
+def test_plan_turn_uses_analysis_domains_when_goal_synthesis_omits_candidate_domains() -> None:
+    planning = plan_turn(
+        "open https://example.com",
+        goal_synthesis_provider=EmptyDomainGoalSynthesisProvider(),
+    )
+
+    assert planning.plan is not None
+    assert planning.plan.selected_route_id == "browser_open_url_route"
+    assert planning.plan.provenance["planner"] == "v0.5_domain_planner"
+    assert all(not candidate.selected_route_id.startswith("legacy_") for candidate in planning.candidates)
+
+
+def test_plan_turn_prefers_intent_aligned_domain_when_goal_synthesis_domains_drift() -> None:
+    planning = plan_turn(
+        "open browser",
+        intent_broker=StaticIntentBroker(
+            Intent(
+                action="app.open",
+                target={"name": "browser"},
+                reason="test broker resolved the app-open request",
+            )
+        ),
+        goal_synthesis_provider=MismatchedAppOpenGoalSynthesisProvider(),
+    )
+
+    assert planning.goal_synthesis is not None
+    assert planning.goal_synthesis.goal_spec is not None
+    assert planning.goal_synthesis.goal_spec.candidate_domain_ids == ("apps", "browser")
+    assert planning.plan is not None
+    assert planning.plan.selected_route_id == "apps_open_route"
+    assert planning.plan.steps[0].action == "app.open"
+
+
 def test_plan_payload_for_media_request_selects_browser_route_when_media_capabilities_absent() -> None:
     payload = plan_payload("play baby")
     assert payload["status"] == "validated"
@@ -277,9 +382,16 @@ def test_plan_payload_routes_named_web_targets_to_browser_search() -> None:
 
     assert payload["status"] == "validated"
     assert tuple(payload["analysis"]["domains"]) == ("browser",)
-    assert payload["plan"]["selected_route_id"] == "browser_search_web_route"
-    assert payload["plan"]["steps"][0]["action"] == "browser.search_web"
-    assert payload["plan"]["steps"][0]["target"]["query"] == "\u767e\u5ea6\u5b98\u7f51"
+    assert payload["plan"]["selected_route_id"] == "browser_named_direct_open_route"
+    assert payload["plan"]["steps"][0]["action"] == "browser.open_named_target"
+    assert payload["plan"]["steps"][0]["target"] == {
+        "name": "\u767e\u5ea6\u5b98\u7f51",
+        "resolution_mode": "direct",
+    }
+    assert {item["route_id"] for item in payload["candidates"]} == {
+        "browser_named_direct_open_route",
+        "browser_search_followup_route",
+    }
 
 
 def test_plan_payload_routes_app_history_search_to_app_interaction_domain() -> None:
@@ -289,7 +401,7 @@ def test_plan_payload_routes_app_history_search_to_app_interaction_domain() -> N
     assert tuple(payload["analysis"]["domains"]) == ("app_interaction",)
     assert payload["plan"]["selected_route_id"] == "app_structured_search_route"
     assert payload["plan"]["steps"][0]["action"] == "app.search_history"
-    assert payload["plan"]["steps"][0]["target"] == {"app": "WeChat", "query": "Alice"}
+    assert payload["plan"]["steps"][0]["target"] == {"app": "WeChat", "query": "Alice", "interaction_surface": "structured"}
     assert {item["route_id"] for item in payload["candidates"]} == {
         "app_structured_search_route",
         "app_shortcut_search_route",

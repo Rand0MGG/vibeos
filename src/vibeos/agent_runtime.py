@@ -7,7 +7,7 @@ from typing import Any, Literal
 from .assistant_semantics import INTERACTION_SURFACES, InteractionSurface, assistant_intent_to_payload
 from .goal_models import GoalSpec
 from .run_ledger import AttemptLedgerEntry, RunLedger
-from .strategy import RecoveryPolicy, StrategyCandidate, StrategyConstraint, make_strategy_decision_id
+from .strategy import RecoveryPolicy, StrategyCandidate, StrategyConstraint, StrategyDecision, make_strategy_decision_id
 from .tool_protocol import ToolExecutionContext, ToolInvocationEnvelope, ToolRegistry, ToolResult
 
 
@@ -109,6 +109,14 @@ class GoalRunResult:
     strategy_candidates: tuple[StrategyCandidate, ...]
     selected_strategy_id: str | None
     debug_payload: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class StepRunResult:
+    envelope: ToolInvocationEnvelope
+    result: ToolResult
+    state: dict[str, Any]
+    evidence_entry: dict[str, Any]
 
 
 class AgentRuntime:
@@ -347,6 +355,66 @@ class AgentRuntime:
             debug_payload=self._build_debug_payload(goal_runtime, turn, strategies, ledger, selected_strategy_id),
         )
 
+    def record_external_turn(
+        self,
+        *,
+        session_id: str,
+        goal_spec: GoalSpec,
+        utterance: str,
+        strategies: tuple[StrategyCandidate, ...],
+        selected_strategy_id: str | None,
+        strategy_history: tuple[tuple[StrategyDecision, str | None], ...],
+        attempts: tuple[AttemptLedgerEntry, ...],
+        terminal: TerminalOutcome,
+    ) -> GoalRunResult:
+        session = self._sessions[session_id]
+        if goal_spec.goal_id not in session.goals:
+            self.start_goal(session_id, goal_spec)
+        goal_runtime = session.goals[goal_spec.goal_id]
+        ledger = self._ledgers[(session_id, goal_spec.goal_id)]
+        turn_index = len(goal_runtime.turn_ids) + 1
+        turn_id = self._make_id("turn", f"{goal_spec.goal_id}:{turn_index}")
+        turn = GoalTurn(
+            turn_id=turn_id,
+            goal_id=goal_spec.goal_id,
+            turn_index=turn_index,
+            utterance=utterance,
+            attempt_ids=tuple(item.attempt_id for item in attempts),
+            status=terminal.status,
+        )
+        session.turns[turn_id] = turn
+        goal_runtime = replace(
+            goal_runtime,
+            turn_ids=(*goal_runtime.turn_ids, turn_id),
+            attempt_ids=(*goal_runtime.attempt_ids, *(item.attempt_id for item in attempts)),
+            current_strategy_id=selected_strategy_id,
+            status=terminal.status,
+            terminal_outcome=terminal,
+        )
+        session.goals[goal_spec.goal_id] = goal_runtime
+        for decision, attempt_id in strategy_history:
+            ledger = ledger.append_strategy_decision(decision, turn_id=turn_id, attempt_id=attempt_id)
+        for attempt in attempts:
+            ledger = ledger.append_attempt(
+                replace(
+                    attempt,
+                    turn_id=turn_id,
+                    goal_id=goal_spec.goal_id,
+                )
+            )
+        ledger = ledger.with_terminal_outcome(_terminal_payload(terminal))
+        self._ledgers[(session_id, goal_spec.goal_id)] = ledger
+        return GoalRunResult(
+            session_id=session_id,
+            goal_runtime=goal_runtime,
+            turn=turn,
+            ledger=ledger,
+            terminal_outcome=terminal,
+            strategy_candidates=strategies,
+            selected_strategy_id=selected_strategy_id,
+            debug_payload=self._build_debug_payload(goal_runtime, turn, strategies, ledger, selected_strategy_id),
+        )
+
     def _execute_strategy(
         self,
         *,
@@ -371,51 +439,32 @@ class AgentRuntime:
         step_safety_review_ids = _metadata_tuple_strings(strategy.metadata, "step_safety_review_ids")
 
         for step in strategy.steps:
-            context = ToolExecutionContext(
+            step_run = self.execute_strategy_step(
                 session_id=session_id,
                 goal_id=goal_id,
                 turn_id=turn_id,
                 attempt_id=attempt_id,
                 strategy_id=strategy.strategy_id,
+                step=step,
                 environment=environment,
-                state=dict(state),
+                state=state,
             )
-            envelope, result = self.tool_registry.invoke(step.tool_id, dict(step.input_payload), context)
+            envelope = step_run.envelope
+            result = step_run.result
+            state = dict(step_run.state)
             envelopes.append(envelope)
-            state.update(result.output)
-            state.update(result.state_updates)
+            evidence.append(step_run.evidence_entry)
             if envelope.family == "observer":
                 saw_observer = True
-                evidence.append(
-                    {
-                        "kind": "observation",
-                        "payload": ObservationEvidence(
-                            attempt_id=attempt_id,
-                            source_tool_id=envelope.tool_id,
-                            details=result.evidence or result.output,
-                        ).__dict__,
-                    }
-                )
             elif envelope.family == "verifier":
                 saw_verifier = True
-                verification = VerificationEvidence(
-                    attempt_id=attempt_id,
-                    verifier_id=envelope.tool_id,
-                    status="passed" if result.accepted else "failed",
-                    details=result.evidence or result.output,
-                )
-                verification_records.append(verification)
-                evidence.append({"kind": "verification", "payload": verification.__dict__})
-            else:
-                evidence.append(
-                    {
-                        "kind": envelope.family,
-                        "payload": {
-                            "tool_id": envelope.tool_id,
-                            "status": envelope.status,
-                            "details": result.evidence or result.output,
-                        },
-                    }
+                verification_records.append(
+                    VerificationEvidence(
+                        attempt_id=attempt_id,
+                        verifier_id=envelope.tool_id,
+                        status="passed" if result.accepted else "failed",
+                        details=result.evidence or result.output,
+                    )
                 )
             if result.status in {"failed", "blocked", "unavailable"}:
                 outcome_status = "replannable" if result.failure_class in {"semantic_mismatch", "environment_unreachable"} else ("blocked" if result.status == "blocked" else "failed")
@@ -529,6 +578,66 @@ class AgentRuntime:
             message="strategy completed without acceptable outcome evidence",
         )
         return attempt, OutcomeDecision(status="failed", reason=attempt.message, failure_class="acceptance_failed", continue_running=False), state
+
+    def execute_strategy_step(
+        self,
+        *,
+        session_id: str,
+        goal_id: str,
+        turn_id: str,
+        attempt_id: str,
+        strategy_id: str,
+        step,
+        environment: EnvironmentProfile,
+        state: dict[str, Any],
+    ) -> StepRunResult:
+        context = ToolExecutionContext(
+            session_id=session_id,
+            goal_id=goal_id,
+            turn_id=turn_id,
+            attempt_id=attempt_id,
+            strategy_id=strategy_id,
+            environment=environment,
+            state=dict(state),
+        )
+        envelope, result = self.tool_registry.invoke(step.tool_id, dict(step.input_payload), context)
+        next_state = dict(state)
+        next_state.update(result.output)
+        next_state.update(result.state_updates)
+        if envelope.family == "observer":
+            evidence_entry = {
+                "kind": "observation",
+                "payload": ObservationEvidence(
+                    attempt_id=attempt_id,
+                    source_tool_id=envelope.tool_id,
+                    details=result.evidence or result.output,
+                ).__dict__,
+            }
+        elif envelope.family == "verifier":
+            evidence_entry = {
+                "kind": "verification",
+                "payload": VerificationEvidence(
+                    attempt_id=attempt_id,
+                    verifier_id=envelope.tool_id,
+                    status="passed" if result.accepted else "failed",
+                    details=result.evidence or result.output,
+                ).__dict__,
+            }
+        else:
+            evidence_entry = {
+                "kind": envelope.family,
+                "payload": {
+                    "tool_id": envelope.tool_id,
+                    "status": envelope.status,
+                    "details": result.evidence or result.output,
+                },
+            }
+        return StepRunResult(
+            envelope=envelope,
+            result=result,
+            state=next_state,
+            evidence_entry=evidence_entry,
+        )
 
     def _build_debug_payload(
         self,

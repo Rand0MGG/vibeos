@@ -24,6 +24,8 @@ FailureClass = Literal[
     "semantic_mismatch",
     "acceptance_unverified",
     "acceptance_failed",
+    "same_action_no_progress",
+    "state_changed_externally",
     "unsupported_request",
 ]
 ReplanAction = Literal["stop", "retry_same_attempt", "replan_with_constraints", "ask_user"]
@@ -284,11 +286,26 @@ def canonicalize_target_for_action(action: str, target: dict[str, Any]) -> dict[
 
     if action == "browser.open_named_target":
         name = _first_text(target, "name", "target_name")
-        return {"name": name} if name else {}
+        canonical: dict[str, Any] = {}
+        if name:
+            canonical["name"] = name
+        resolution_mode = target.get("resolution_mode")
+        if isinstance(resolution_mode, str) and resolution_mode.strip():
+            canonical["resolution_mode"] = resolution_mode.strip()
+        return canonical
 
     if action == "browser.search_web":
         query = _first_text(target, "query", "text")
-        return {"query": query} if query else {}
+        canonical: dict[str, Any] = {}
+        if query:
+            canonical["query"] = query
+        named_target = _first_text(target, "named_target", "name")
+        if named_target:
+            canonical["named_target"] = named_target
+        follow_search_result = target.get("follow_search_result")
+        if isinstance(follow_search_result, bool):
+            canonical["follow_search_result"] = follow_search_result
+        return canonical
 
     if action == "browser.open_site_search":
         query = _first_text(target, "query", "text")
@@ -318,6 +335,9 @@ def canonicalize_target_for_action(action: str, target: dict[str, Any]) -> dict[
             canonical["app"] = app
         if query:
             canonical["query"] = query
+        interaction_surface = target.get("interaction_surface")
+        if isinstance(interaction_surface, str) and interaction_surface.strip():
+            canonical["interaction_surface"] = interaction_surface.strip()
         return canonical
 
     if action == "app.open":
