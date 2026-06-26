@@ -8,7 +8,7 @@ from vibeos.domain_registry import default_domain_registry
 from vibeos.domain_router import route_domains
 from vibeos.nlu import analyze_utterance
 from vibeos.planner import plan_payload, plan_turn, plan_utterance
-from vibeos.goal_synthesizer import GoalSynthesisProvider
+from vibeos.goal_synthesizer import GoalSynthesisProvider, OpenAICompatibleGoalSynthesisProvider, build_goal_synthesis_boundary_hint
 from vibeos.provider_client import OpenAICompatibleProviderConfig, ProviderJsonObjectResponse
 from vibeos.task_models import TaskSpan, UtteranceAnalysis
 from vibeos.understanding import (
@@ -162,6 +162,36 @@ class StaticUnderstandingProvider(UnderstandingAnalysisProvider):
                 task_spans=(),
                 provenance=None,
                 chat_response="Which site should I open exactly?",
+            ),
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+        )
+
+
+class BrowserTaskUnderstandingProvider(UnderstandingAnalysisProvider):
+    provider_name = "test_understanding"
+    model_name = "deterministic-test"
+
+    def analyze(self, *, utterance: str, broker) -> UnderstandingAnalysisDecision:
+        return UnderstandingAnalysisDecision(
+            analysis=UtteranceAnalysis(
+                utterance=utterance,
+                type="task",
+                confidence=0.93,
+                domains=("browser",),
+                explanation="test override classified the utterance as a browser task",
+                task_spans=(
+                    TaskSpan(
+                        id="span_1",
+                        text=utterance,
+                        start=0,
+                        end=len(utterance),
+                        domain="browser",
+                        confidence=0.93,
+                    ),
+                ),
+                provenance=None,
+                chat_response=None,
             ),
             provider_name=self.provider_name,
             model_name=self.model_name,
@@ -518,6 +548,10 @@ def test_plan_turn_rejects_unknown_candidate_id_from_selection_layer() -> None:
         )
 
 
+def test_replan_rejects_unknown_candidate_id() -> None:
+    test_plan_turn_rejects_unknown_candidate_id_from_selection_layer()
+
+
 def test_plan_turn_supports_bounded_route_selection_provider_override() -> None:
     planning = plan_turn(
         "open baidu.com",
@@ -631,6 +665,31 @@ def test_primary_understanding_supports_understanding_provider_override() -> Non
     assert understanding.analysis.type == "clarification"
     assert understanding.analysis.chat_response == "Which site should I open exactly?"
     assert understanding.analysis_provider_name == "test_understanding"
+
+
+def test_primary_understanding_captures_provider_intent_for_task_analysis() -> None:
+    understanding, broker = create_primary_understanding(
+        "open browser",
+        intent_broker=StaticIntentBroker(
+            Intent(
+                action="app.open",
+                target={"name": "browser"},
+                reason="test broker resolved the app-open request",
+            )
+        ),
+        analysis_provider=BrowserTaskUnderstandingProvider(),
+    )
+
+    assert understanding.provider_intent is not None
+    assert understanding.provider_intent.action == "app.open"
+    assert broker.provider_parse_count == 1
+    hint = build_goal_synthesis_boundary_hint(
+        utterance="open browser",
+        analysis=understanding.analysis,
+        intent_broker=broker,
+    )
+    assert hint["required_capability_ids"] == ["app.open"]
+    assert hint["candidate_domain_ids"] == ["apps", "browser"]
 
 
 def test_primary_understanding_main_path_no_longer_depends_on_legacy_nlu_pipeline(monkeypatch) -> None:
@@ -757,6 +816,64 @@ def test_plan_turn_main_path_no_longer_depends_on_shadow_rule_reparse(monkeypatc
         ),
     )
 
+    assert planning.plan is not None
+    assert planning.plan.selected_route_id == "apps_open_route"
+    assert planning.plan.steps[0].action == "app.open"
+
+
+def test_plan_turn_recovers_app_open_boundary_when_model_goal_synthesis_drifts(monkeypatch) -> None:
+    monkeypatch.setenv("VIBEOS_ENABLE_MODEL_GOAL_SYNTHESIS", "1")
+    shared_broker = CapturingIntentBroker(
+        StaticIntentBroker(
+            Intent(
+                action="app.open",
+                target={"name": "browser"},
+                reason="test broker resolved the app-open request",
+            )
+        )
+    )
+    understanding, _ = create_primary_understanding(
+        "open browser",
+        intent_broker=shared_broker,
+        analysis_provider=BrowserTaskUnderstandingProvider(),
+    )
+    provider = OpenAICompatibleGoalSynthesisProvider(shared_broker)
+    provider.config = OpenAICompatibleProviderConfig(
+        provider_name="test-provider",
+        model_name="test-model",
+        api_key="test-key",
+        base_url="https://example.invalid/v1",
+    )
+
+    def fake_request_json_object(**kwargs):
+        return ProviderJsonObjectResponse(
+            request_payload={"messages": []},
+            response_payload={"ok": True},
+            parsed_object={
+                "status": "ready",
+                "goal_type": "browser_open_url",
+                "domain": "browser",
+                "capability": "browser.open_url",
+                "parameters": {"url": ""},
+            },
+        )
+
+    monkeypatch.setattr("vibeos.goal_synthesizer.request_json_object", fake_request_json_object)
+
+    planning = plan_turn(
+        "open browser",
+        understanding=understanding,
+        intent_broker=shared_broker,
+        goal_synthesis_provider=provider,
+    )
+
+    assert planning.understanding.provider_intent is not None
+    assert planning.understanding.provider_intent.action == "app.open"
+    assert planning.goal_synthesis is not None
+    assert planning.goal_synthesis.exchange.fallback_used is True
+    assert planning.goal_synthesis.goal_spec is not None
+    assert planning.goal_synthesis.goal_spec.required_capability_ids == ("app.open",)
+    assert planning.goal_synthesis.goal_spec.candidate_domain_ids == ("apps", "browser")
     assert planning.plan is not None
     assert planning.plan.selected_route_id == "apps_open_route"
     assert planning.plan.steps[0].action == "app.open"

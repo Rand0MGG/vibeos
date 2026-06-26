@@ -28,7 +28,7 @@ FailureClass = Literal[
     "state_changed_externally",
     "unsupported_request",
 ]
-ReplanAction = Literal["stop", "retry_same_attempt", "replan_with_constraints", "ask_user"]
+ReplanAction = Literal["stop", "retry_same_attempt", "repair", "replan_with_constraints", "ask_user"]
 RunStatus = Literal["running", "completed", "failed", "incomplete", "blocked", "needs_review", "needs_user_input", "dry_run"]
 SemanticDecision = Literal["complete", "incomplete", "semantic_failure", "clarification_needed", "skipped"]
 

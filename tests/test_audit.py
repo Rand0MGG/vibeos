@@ -21,6 +21,7 @@ def test_audit_log_records_execution_status_fields() -> None:
         execution_status="succeeded",
         acceptance_status="passed",
         overall_status="completed",
+        trace_run_id="run_1",
         plan_id="plan_1",
         step_id="step_1",
         layer="adapter_execute",
@@ -29,6 +30,7 @@ def test_audit_log_records_execution_status_fields() -> None:
         selected_route_decision_id="rdec_1",
         selected_strategy_decision_id="sdec_1",
         semantic_acceptance_decision_id="adec_1",
+        loop_snapshot_id="lsnap_1",
     )
 
     payload = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[0])
@@ -39,9 +41,11 @@ def test_audit_log_records_execution_status_fields() -> None:
     assert payload["execution_status"] == "succeeded"
     assert payload["acceptance_status"] == "passed"
     assert payload["overall_status"] == "completed"
+    assert payload["trace_run_id"] == "run_1"
     assert payload["understanding_id"] == "und_1"
     assert payload["candidate_set_id"] == "cset_1"
     assert payload["selected_route_decision_id"] == "rdec_1"
+    assert payload["loop_snapshot_id"] == "lsnap_1"
 
 
 def make_audit_path(name: str) -> Path:

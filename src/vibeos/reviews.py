@@ -138,6 +138,11 @@ class ReviewStore:
             },
             created_at,
         )
+        enriched_snapshot_payload = dict(snapshot_payload)
+        if review_kind == "loop":
+            enriched_snapshot_payload["pending_review_id"] = review_id
+        else:
+            enriched_snapshot_payload["pending_user_input_id"] = review_id
         request = ReviewRequest(
             review_id=review_id,
             utterance=utterance,
@@ -151,7 +156,7 @@ class ReviewStore:
             plan_payload=plan_payload,
             step_reviews=(),
             layer="goal_loop",
-            snapshot_payload=snapshot_payload,
+            snapshot_payload=enriched_snapshot_payload,
             pending_reason=pending_reason,
         )
         self._append({"event": "created", **review_to_payload(request)})

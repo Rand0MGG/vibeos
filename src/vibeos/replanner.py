@@ -292,6 +292,21 @@ def build_replan_options(
             )
         return (ReplanOption(option_id="stop_transient_budget", action="stop", reason="transient retry budget exhausted"),)
 
+    if failure.failure_class == "acceptance_unverified":
+        return (
+            ReplanOption(
+                option_id="repair_acceptance_evidence",
+                action="repair",
+                reason=failure.message or "collect stronger verification evidence before replanning",
+            ),
+            *semantic_recovery_options(
+                current_plan=current_plan,
+                attempts=attempts,
+                failure=failure,
+                available_domain_ids=available_domain_ids,
+            ),
+        )
+
     if failure.failure_class in {"semantic_mismatch", "acceptance_unverified", "acceptance_failed", "same_action_no_progress"}:
         return semantic_recovery_options(
             current_plan=current_plan,

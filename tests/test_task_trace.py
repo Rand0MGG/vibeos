@@ -1,19 +1,23 @@
 import json
+from dataclasses import asdict, replace
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 from vibeos.acceptance import AcceptanceEngine
 from vibeos.audit import AuditLog
+from vibeos.browser_state import record_browser_observation
 from vibeos.broker import CapabilityBroker
+from vibeos.candidate_selection import CandidateSelectionDecision, CandidateSet
 from vibeos.cli import main
 from vibeos.intent import RuleIntentBroker
-from vibeos.models import CommandRequest
+from vibeos.loop_models import LoopState
+from vibeos.models import CommandRequest, PermissionReview
 from vibeos.planner import PlanningArtifacts
 from vibeos.portal import PortalAdapter
 from vibeos.reviews import ReviewStore
 from vibeos.runtime import LocalRuntime
-from vibeos.task_models import DisplayFields, ExpectedState, PlanExecutionResult, StepExecutionResult, StepPrecondition, StepProvenance, TaskPlan, TaskRoute, TaskSpan, TaskStep, UtteranceAnalysis
+from vibeos.task_models import DisplayFields, ExpectedState, PlanAttempt, PlanExecutionResult, StepExecutionResult, StepPrecondition, StepProvenance, StepReviewRecord, TaskPlan, TaskRoute, TaskSpan, TaskStep, UtteranceAnalysis
 from vibeos.task_trace import TaskTraceStore, bind_trace_session, make_trace_run_id
 from vibeos.understanding import UnderstandingArtifact
 
@@ -227,6 +231,314 @@ def test_trace_events_record_understanding_supersession(monkeypatch) -> None:
     assert supersession_event["data"]["artifact_role"] == "supersession"
     assert supersession_event["data"]["primary_understanding_id"] == initial_understanding.understanding_id
     assert initial_understanding.understanding_id in supersession_event["data"]["source_artifact_ids"]
+
+
+def test_user_input_resume_trace_records_loop_resume_and_completion(monkeypatch) -> None:
+    monkeypatch.setenv("VIBEOS_STATE_DIR", str(make_state_dir("loop-resume-trace")))
+    monkeypatch.setenv("VIBEOS_ENABLE_GOAL_LOOP", "1")
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        portal=ObservedPortal(),
+        audit=AuditLog(),
+        reviews=ReviewStore(),
+    )
+    resolved_understanding = replace(
+        make_understanding(
+            UtteranceAnalysis(
+                utterance="open that site we discussed yesterday\n\nAdditional user detail: browser",
+                type="task",
+                confidence=0.95,
+                domains=("browser",),
+                explanation="supplemental input resolved the browser target",
+                task_spans=(TaskSpan(id="span_1", text="browser", start=51, end=58, domain="browser", confidence=0.95),),
+            )
+        ),
+        primary_understanding_id="und_trace_identity",
+        source_understanding_id="und_trace_identity",
+        artifact_role="refinement",
+    )
+    resolved_plan = TaskPlan(
+        schema_version="v0.5",
+        plan_id="plan_trace_user_input_resume",
+        utterance=resolved_understanding.utterance,
+        display=DisplayFields(goal="search the web"),
+        selected_route_id="browser_search_web_route",
+        routes=(TaskRoute(id="browser_search_web_route", score=1.0, domain_id="browser", required_capabilities=("browser.search_web",)),),
+        steps=(
+            TaskStep(
+                id="search_web",
+                action="browser.search_web",
+                capability_id="browser.search_web",
+                target={"query": "browser"},
+                expected_state=ExpectedState(kind="search_results_available", fields={"query": "browser"}),
+                preconditions=(StepPrecondition(kind="capability_available", capability_id="browser.search_web"),),
+                provenance=StepProvenance(source_span_id="span_1", planner="test"),
+            ),
+        ),
+        provenance={"planner": "test"},
+    )
+    resolved_candidate_set = CandidateSet(
+        candidate_set_id="cset_trace_resume",
+        understanding_id=resolved_understanding.understanding_id,
+        generated_by="test",
+        candidates=(),
+    )
+    resolved_route_decision = CandidateSelectionDecision(
+        route_decision_id="rdec_trace_resume",
+        candidate_set_id="cset_trace_resume",
+        understanding_id=resolved_understanding.understanding_id,
+        action="select",
+        selected_candidate_id="cand_trace_resume",
+        reason="resolved after user input",
+        provider_name="test",
+        model_name="test",
+    )
+    review_state = LoopState(
+        loop_snapshot_id="lsnap_trace_resume",
+        trace_run_id="run_trace_resume",
+        goal_id="goal_trace_resume",
+        primary_understanding_id="und_trace_prior",
+        candidate_set_id=None,
+        selected_route_decision_id=None,
+        current_step_id="open_app",
+        completed_step_ids=("open_app",),
+        attempt_records=(
+            PlanAttempt(
+                attempt_id="attempt_trace_prior",
+                run_id="run_trace_resume",
+                attempt_index=1,
+                trigger="initial_plan",
+                selected_route_id="apps_open_route",
+                task_plan=TaskPlan(
+                    schema_version="v0.5",
+                    plan_id="plan_trace_prior_app",
+                    utterance="open browser",
+                    display=DisplayFields(goal="open browser"),
+                    selected_route_id="apps_open_route",
+                    routes=(TaskRoute(id="apps_open_route", score=1.0, domain_id="apps"),),
+                    steps=(TaskStep(id="open_app", action="app.open", capability_id="app.open", target={"name": "browser"}),),
+                ),
+                execution_result=PlanExecutionResult(
+                    plan_id="plan_trace_prior_app",
+                    status="succeeded",
+                    step_results=(
+                        StepExecutionResult(
+                            step_id="open_app",
+                            layer="adapter_execute",
+                            status="succeeded",
+                            capability_id="app.open",
+                            result={"selected_target": "firefox.desktop"},
+                        ),
+                    ),
+                    execution_status="succeeded",
+                    acceptance_status="skipped",
+                    overall_status="incomplete",
+                ),
+            ),
+        ),
+        stage="needs_user_input",
+    )
+    review = broker.reviews.create_loop_review(
+        "open that site we discussed yesterday",
+        plan_payload={"analysis": {"type": "clarification", "confidence": 0.5, "domains": ["browser"], "explanation": "need more detail", "chat_response": "which site?"}},
+        snapshot_payload=asdict(review_state),
+        pending_reason="which site?",
+        step_id=None,
+        review_kind="user_input",
+    )
+    planning = PlanningArtifacts(
+        understanding=resolved_understanding,
+        analysis=resolved_understanding.analysis,
+        goal_synthesis=None,
+        plan=resolved_plan,
+        candidates=(resolved_plan,),
+        candidate_set=resolved_candidate_set,
+        route_decision=resolved_route_decision,
+    )
+
+    monkeypatch.setattr("vibeos.broker.plan_turn", lambda *args, **kwargs: planning)
+
+    resumed = broker.handle(CommandRequest("", review_id=review.review_id, supplemental_input="browser"))
+
+    assert resumed.status == "executed"
+    assert resumed.trace_run_id
+    events = TaskTraceStore().events(resumed.trace_run_id)
+
+    assert any(item["event_type"] == "loop_resumed" and item["data"]["resume_kind"] == "user_input" for item in events)
+    assert any(item["event_type"] == "loop_completed" and item["status"] == "completed" for item in events)
+
+
+def test_review_snapshot_is_traceable(monkeypatch) -> None:
+    monkeypatch.setenv("VIBEOS_STATE_DIR", str(make_state_dir("review-snapshot-trace")))
+    monkeypatch.setenv("VIBEOS_ENABLE_GOAL_LOOP", "1")
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        portal=ObservedPortal(),
+        audit=AuditLog(),
+        reviews=ReviewStore(),
+    )
+
+    def review_step(plan, step, pre_observation=None):
+        return (
+            PermissionReview("L2", True, True, "approval required"),
+            StepReviewRecord("srev_traceable", step.id, step.action, "L2", True, True, "approval required"),
+        )
+
+    monkeypatch.setattr(broker, "review_task_step", review_step)
+
+    result = broker.handle(CommandRequest("search web for hello"))
+
+    assert result.status == "review_required"
+    assert result.trace_run_id
+    assert result.review_id
+    events = TaskTraceStore().events(result.trace_run_id)
+    suspended_event = next(item for item in events if item["event_type"] == "loop_suspended")
+    review_record = broker.reviews.get(result.review_id)
+
+    assert suspended_event["review_id"] == result.review_id
+    assert suspended_event["status"] == "needs_review"
+    assert suspended_event["data"]["loop_snapshot_id"] == result.result["loop_snapshot_id"]
+    assert suspended_event["data"]["current_step_id"] == "browser_search_web"
+    assert review_record is not None
+    assert review_record.snapshot_payload is not None
+    assert review_record.snapshot_payload["loop_snapshot_id"] == result.result["loop_snapshot_id"]
+    assert review_record.snapshot_payload["pending_step_safety_review_id"] == "srev_traceable"
+
+
+def test_loop_resume_preserves_understanding_and_goal_identity(monkeypatch) -> None:
+    monkeypatch.setenv("VIBEOS_STATE_DIR", str(make_state_dir("loop-resume-identity")))
+    monkeypatch.setenv("VIBEOS_ENABLE_GOAL_LOOP", "1")
+    record_browser_observation(active_url="about:blank", query=None, adapter="test-reset")
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        portal=ObservedPortal(),
+        audit=AuditLog(),
+        reviews=ReviewStore(),
+    )
+    resolved_understanding = make_understanding(
+        UtteranceAnalysis(
+            utterance="open that site we discussed yesterday\n\nAdditional user detail: browser",
+            type="task",
+            confidence=0.95,
+            domains=("browser",),
+            explanation="supplemental input resolved the browser target",
+            task_spans=(TaskSpan(id="span_1", text="browser", start=51, end=58, domain="browser", confidence=0.95),),
+        )
+    )
+    resolved_plan = TaskPlan(
+        schema_version="v0.5",
+        plan_id="plan_trace_resume_identity",
+        utterance=resolved_understanding.utterance,
+        display=DisplayFields(goal="search the web"),
+        selected_route_id="browser_search_web_route",
+        routes=(TaskRoute(id="browser_search_web_route", score=1.0, domain_id="browser", required_capabilities=("browser.search_web",)),),
+        steps=(
+            TaskStep(
+                id="search_web",
+                action="browser.search_web",
+                capability_id="browser.search_web",
+                target={"query": "browser"},
+                expected_state=ExpectedState(kind="search_results_available", fields={"query": "browser"}),
+                preconditions=(StepPrecondition(kind="capability_available", capability_id="browser.search_web"),),
+                provenance=StepProvenance(source_span_id="span_1", planner="test"),
+            ),
+        ),
+        provenance={"planner": "test"},
+    )
+    resolved_candidate_set = CandidateSet(
+        candidate_set_id="cset_trace_resume_identity",
+        understanding_id=resolved_understanding.understanding_id,
+        generated_by="test",
+        candidates=(),
+    )
+    resolved_route_decision = CandidateSelectionDecision(
+        route_decision_id="rdec_trace_resume_identity",
+        candidate_set_id="cset_trace_resume_identity",
+        understanding_id=resolved_understanding.understanding_id,
+        action="select",
+        selected_candidate_id="cand_trace_resume_identity",
+        reason="resolved after user input",
+        provider_name="test",
+        model_name="test",
+    )
+    review_state = LoopState(
+        loop_snapshot_id="lsnap_trace_resume_identity",
+        trace_run_id="run_trace_resume_identity",
+        goal_id="goal_trace_resume_identity",
+        primary_understanding_id="und_trace_identity",
+        candidate_set_id=None,
+        selected_route_decision_id=None,
+        current_step_id="open_app",
+        completed_step_ids=("open_app",),
+        attempt_records=(
+            PlanAttempt(
+                attempt_id="attempt_trace_identity",
+                run_id="run_trace_resume_identity",
+                attempt_index=1,
+                trigger="initial_plan",
+                understanding_id="und_trace_identity",
+                selected_route_id="apps_open_route",
+                task_plan=TaskPlan(
+                    schema_version="v0.5",
+                    plan_id="plan_trace_identity_prior",
+                    utterance="open browser",
+                    display=DisplayFields(goal="open browser"),
+                    selected_route_id="apps_open_route",
+                    routes=(TaskRoute(id="apps_open_route", score=1.0, domain_id="apps"),),
+                    steps=(TaskStep(id="open_app", action="app.open", capability_id="app.open", target={"name": "browser"}),),
+                ),
+                execution_result=PlanExecutionResult(
+                    plan_id="plan_trace_identity_prior",
+                    status="succeeded",
+                    step_results=(
+                        StepExecutionResult(
+                            step_id="open_app",
+                            layer="adapter_execute",
+                            status="succeeded",
+                            capability_id="app.open",
+                            result={"selected_target": "firefox.desktop"},
+                        ),
+                    ),
+                    execution_status="succeeded",
+                    acceptance_status="skipped",
+                    overall_status="incomplete",
+                ),
+            ),
+        ),
+        stage="needs_user_input",
+    )
+    review = broker.reviews.create_loop_review(
+        "open that site we discussed yesterday",
+        plan_payload={"analysis": {"type": "clarification", "confidence": 0.5, "domains": ["browser"], "explanation": "need more detail", "chat_response": "which site?"}},
+        snapshot_payload=asdict(review_state),
+        pending_reason="which site?",
+        step_id=None,
+        review_kind="user_input",
+    )
+    planning = PlanningArtifacts(
+        understanding=resolved_understanding,
+        analysis=resolved_understanding.analysis,
+        goal_synthesis=None,
+        plan=resolved_plan,
+        candidates=(resolved_plan,),
+        candidate_set=resolved_candidate_set,
+        route_decision=resolved_route_decision,
+    )
+
+    monkeypatch.setattr("vibeos.broker.plan_turn", lambda *args, **kwargs: planning)
+
+    resumed = broker.handle(CommandRequest("", review_id=review.review_id, supplemental_input="browser"))
+
+    assert resumed.status == "executed"
+    assert resumed.trace_run_id
+    events = TaskTraceStore().events(resumed.trace_run_id)
+    loop_resumed = next(item for item in events if item["event_type"] == "loop_resumed")
+    completion = next(item for item in events if item["event_type"] == "loop_completed")
+
+    assert loop_resumed["goal_id"] == "goal_trace_resume_identity"
+    assert loop_resumed["data"]["loop_snapshot_id"] == "lsnap_trace_resume_identity"
+    assert completion["goal_id"] == "goal_trace_resume_identity"
+    assert resumed.result["attempts"][0]["understanding_id"] == "und_trace_identity"
 
 
 def test_acceptance_trace_records_semantic_artifacts(monkeypatch) -> None:

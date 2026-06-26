@@ -63,6 +63,48 @@ class CandidateSelectionDecision:
     error: str | None = None
 
 
+def candidate_set_from_payload(payload: dict[str, object]) -> CandidateSet:
+    candidates_payload = payload.get("candidates")
+    descriptors = tuple(
+        CandidateDescriptor(
+            candidate_id=str(item["candidate_id"]),
+            plan_id=str(item["plan_id"]),
+            route_id=str(item["route_id"]),
+            domain_id=str(item["domain_id"]),
+            score=float(item["score"]),
+            satisfiable=bool(item.get("satisfiable", False)),
+            required_capabilities=tuple(str(capability) for capability in item.get("required_capabilities", ())),
+            default_verifier_ids=tuple(str(verifier) for verifier in item.get("default_verifier_ids", ())),
+            step_ids=tuple(str(step_id) for step_id in item.get("step_ids", ())),
+        )
+        for item in candidates_payload
+        if isinstance(item, dict)
+    ) if isinstance(candidates_payload, list) else ()
+    return CandidateSet(
+        candidate_set_id=str(payload["candidate_set_id"]),
+        understanding_id=str(payload["understanding_id"]),
+        generated_by=str(payload.get("generated_by", "restored_payload")),
+        candidates=descriptors,
+    )
+
+
+def candidate_selection_decision_from_payload(payload: dict[str, object]) -> CandidateSelectionDecision:
+    selected_candidate_id = payload.get("selected_candidate_id")
+    return CandidateSelectionDecision(
+        route_decision_id=str(payload["route_decision_id"]),
+        candidate_set_id=str(payload["candidate_set_id"]),
+        understanding_id=str(payload["understanding_id"]),
+        action=str(payload["action"]),
+        selected_candidate_id=str(selected_candidate_id) if selected_candidate_id is not None else None,
+        reason=str(payload.get("reason", "")),
+        provider_name=str(payload.get("provider_name", "restored_payload")),
+        model_name=str(payload.get("model_name", "restored-payload")),
+        parse_valid=bool(payload.get("parse_valid", True)),
+        fallback_used=bool(payload.get("fallback_used", False)),
+        error=str(payload["error"]) if payload.get("error") is not None else None,
+    )
+
+
 class CandidateSelectionProvider:
     provider_name = "provider"
     model_name = "structured"

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from .task_models import PlanAttempt
+
 
 LoopStage = Literal[
     "bootstrap_understanding",
@@ -79,12 +81,12 @@ class LoopState:
     current_step_id: str | None
     completed_step_ids: tuple[str, ...] = ()
     pending_review_id: str | None = None
+    pending_step_safety_review_id: str | None = None
     pending_user_input_id: str | None = None
     pre_observation_id: str | None = None
     post_observation_id: str | None = None
-    attempt_history: tuple[str, ...] = ()
     failure_history: tuple[str, ...] = ()
-    step_result_payloads: tuple[dict[str, Any], ...] = ()
+    attempt_records: tuple[PlanAttempt, ...] = ()
     model_artifact_ids: dict[str, str] = field(default_factory=dict)
     stage: LoopStage = "init_loop"
     step_count: int = 0
@@ -115,4 +117,4 @@ class GoalLoopResult:
     acceptance_status: str = "skipped"
     overall_status: str = "failed"
     payload: dict[str, Any] = field(default_factory=dict)
-    attempt_records: tuple[dict[str, Any], ...] = ()
+    attempt_records: tuple[PlanAttempt, ...] = ()

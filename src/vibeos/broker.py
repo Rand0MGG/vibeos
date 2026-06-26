@@ -6,7 +6,6 @@ from dataclasses import replace
 from dataclasses import asdict
 from hashlib import sha256
 from time import perf_counter
-from types import SimpleNamespace
 
 from .acceptance import AcceptanceEngine
 from .agent_runtime import AgentRuntime, EnvironmentProfile, TerminalOutcome
@@ -15,7 +14,7 @@ from .apps import AppRegistry
 from .assistant_semantics import AssistantIntent, InteractionSurface, assistant_intent_to_payload
 from .audit import AuditLog
 from .browser_state import browser_attempt_scope, browser_context_snapshot, record_browser_navigation
-from .candidate_selection import CandidateSelectionProvider
+from .candidate_selection import CandidateSelectionProvider, candidate_selection_decision_from_payload, candidate_set_from_payload
 from .capabilities import capability_payload, executable_actions, permission_summary
 from .clarification import ClarificationProvider
 from .clipboard import ClipboardAdapter
@@ -23,16 +22,16 @@ from .domain_models import ObservationRequest
 from .domain_registry import default_domain_registry
 from .execution_graph import execute_plan_graph, overall_status as execution_graph_overall_status
 from .failure_classifier import FailureClassifier
-from .goal_loop import GoalLoop, step_result_from_payload
+from .goal_loop import GoalLoop, loop_state_from_payload, normalize_state_for_plan, sync_loop_state_with_planning
 from .goal_models import GoalSpec, GoalSynthesisProvenance
 from .intent import IntentBroker, OpenAICompatibleIntentBroker, RuleIntentBroker
-from .loop_policy import goal_loop_enabled
-from .loop_models import LoopState
+from .loop_policy import contextualize_step_review, default_loop_policy, goal_loop_enabled
+from .loop_models import LoopObservation, LoopPolicy, LoopState
 from .notifications import NotificationAdapter
 from .models import CommandRequest, CommandResult, Intent, PermissionReview, utc_now_iso
 from .observation import resolve_post_execution_observation
 from .observation_service import ObservationService
-from .planner import browser_semantic_uri, plan_turn
+from .planner import PlanningArtifacts, browser_semantic_uri, plan_turn
 from .permissions import PermissionPolicy
 from .portal import PortalAdapter
 from .replanner import EvidenceDrivenReplanner, Replanner
@@ -67,7 +66,9 @@ from .understanding import (
     UnderstandingAnalysisProvider,
     UnderstandingArtifact,
     UnderstandingTransitionProvider,
+    create_primary_understanding,
     default_understanding_host_hint,
+    reconcile_reinterpreted_understanding,
     reconcile_understanding_transition,
     root_understanding_id,
     validated_understanding_from_payload,
@@ -100,6 +101,7 @@ class CapabilityBroker:
         verifier_harness: VerifierHarness | None = None,
         failure_classifier: FailureClassifier | None = None,
         replanner: Replanner | None = None,
+        loop_policy: LoopPolicy | None = None,
         browser_site_catalog: dict[str, str] | None = None,
         browser_search_catalog: dict[str, dict[str, object]] | None = None,
         app_fixture_catalog: dict[str, AppSearchFixture] | None = None,
@@ -127,6 +129,7 @@ class CapabilityBroker:
         self.acceptance_engine = AcceptanceEngine(provider=semantic_acceptance_provider)
         self.failure_classifier = failure_classifier or FailureClassifier()
         self.replanner = replanner or EvidenceDrivenReplanner()
+        self.loop_policy = loop_policy or default_loop_policy()
         self.browser_site_catalog = browser_site_catalog or {}
         self.browser_search_catalog = browser_search_catalog or {}
         self.app_fixture_catalog = app_fixture_catalog or {}
@@ -257,9 +260,14 @@ class CapabilityBroker:
         )
         return result
 
-    def review_task_step(self, plan: TaskPlan, step: TaskStep) -> tuple[PermissionReview, StepReviewRecord]:
+    def review_task_step(
+        self,
+        plan: TaskPlan,
+        step: TaskStep,
+        pre_observation: LoopObservation | None = None,
+    ) -> tuple[PermissionReview, StepReviewRecord]:
         self._ensure_task_plan(plan)
-        return self._step_safety_review_record(plan.plan_id, step, phase="review")
+        return self._step_safety_review_record(plan.plan_id, step, pre_observation=pre_observation, phase="review")
 
     def create_loop_review(
         self,
@@ -322,7 +330,11 @@ class CapabilityBroker:
             resolve_understanding_transition=lambda current, trigger: self._resolve_planning_understanding_transition(current, trigger=trigger),
             apply_replan_transition=lambda current, decision, failure: self._planning_from_replan_decision(current, decision=decision, failure=failure),
             plan_again=self.plan_turn_from_loop,
-            review_step=self.review_task_step,
+            review_step=lambda plan, step, pre_observation: self.review_task_step(
+                plan,
+                step,
+                pre_observation,
+            ),
             execute_step=lambda plan, step, active_request, attempt_id: self.execute_task_step(
                 plan,
                 step,
@@ -342,7 +354,7 @@ class CapabilityBroker:
             decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: self.replanner.decide(
                 utterance=utterance,
                 current_plan=current_plan,
-                attempts=self._goal_loop_attempts_from_records(run_id="loop_run", records=tuple(attempts)),
+                attempts=attempts,
                 failure=failure,
                 understanding_id=understanding_id,
                 candidate_set_id=candidate_set_id,
@@ -361,6 +373,7 @@ class CapabilityBroker:
                 loop_state=loop_state,
                 reason=reason,
             ),
+            policy=self.loop_policy,
         )
 
     def execute_task_plan(
@@ -683,11 +696,13 @@ class CapabilityBroker:
                 execution_status=result.execution_status,
                 acceptance_status=result.acceptance_status,
                 overall_status=result.overall_status,
+                trace_run_id=trace_run_id,
                 understanding_id=self._result_understanding_id(result),
                 candidate_set_id=self._result_candidate_set_id(result),
                 selected_route_decision_id=self._result_route_decision_id(result),
                 selected_strategy_decision_id=self._result_selected_strategy_decision_id(result),
                 semantic_acceptance_decision_id=self._result_semantic_acceptance_decision_id(result),
+                loop_snapshot_id=self._result_loop_snapshot_id(result),
             )
         return CommandResult(
             status=result.status,
@@ -785,6 +800,16 @@ class CapabilityBroker:
             acceptance_result = preview.get("acceptance_result")
             if isinstance(acceptance_result, dict) and acceptance_result.get("semantic_acceptance_decision_id") is not None:
                 return str(acceptance_result.get("semantic_acceptance_decision_id"))
+        return None
+
+    def _result_loop_snapshot_id(self, result: CommandResult) -> str | None:
+        if not isinstance(result.result, dict):
+            return None
+        if result.result.get("loop_snapshot_id") is not None:
+            return str(result.result.get("loop_snapshot_id"))
+        loop_snapshot = result.result.get("loop_snapshot")
+        if isinstance(loop_snapshot, dict) and loop_snapshot.get("loop_snapshot_id") is not None:
+            return str(loop_snapshot.get("loop_snapshot_id"))
         return None
 
     def _record_v06_trace(self, result, *, overall_status: str) -> None:
@@ -2372,15 +2397,16 @@ class CapabilityBroker:
         payload = dict(loop_result.payload)
         if loop_result.review_id:
             payload["review_id"] = loop_result.review_id
+        payload["loop_snapshot"] = asdict(loop_result.state)
+        payload["loop_snapshot_id"] = loop_result.state.loop_snapshot_id
         intent = Intent.unknown(loop_result.message or "goal loop result")
         if getattr(planning, "plan", None) is not None and planning.plan.steps:
             intent = self._intent_from_task_step(planning.plan.steps[0])
-        attempts = self._goal_loop_attempts_from_records(run_id=run_id, records=loop_result.attempt_records)
         return self._finalize_task_plan_result(
             request=request,
             run_id=run_id,
             goal_id=goal_id,
-            attempts=attempts,
+            attempts=loop_result.attempt_records,
             payload=payload,
             intent=intent,
             status="review_required" if loop_result.overall_status == "needs_review" else ("ambiguous" if loop_result.overall_status == "needs_user_input" else ("executed" if loop_result.overall_status == "completed" else "failed")),
@@ -2780,8 +2806,8 @@ class CapabilityBroker:
                 payload["understanding_refinement"] = asdict(planning.understanding_refinement) if planning.understanding_refinement else None
                 payload["understanding_supersession"] = asdict(planning.understanding_supersession) if planning.understanding_supersession else None
 
-            if decision.action == "retry_same_attempt":
-                trigger = "retry_same_attempt"
+            if decision.action in {"retry_same_attempt", "repair"}:
+                trigger = decision.action
                 continue
 
             excluded_route_ids = tuple(dict.fromkeys((*excluded_route_ids, *decision.do_not_repeat_route_ids)))
@@ -2854,6 +2880,25 @@ class CapabilityBroker:
             analysis,
             reason=reason,
         )
+        return self._planning_with_understanding_transition(
+            planning,
+            previous_understanding=understanding,
+            updated_understanding=updated_understanding,
+            refinement=refinement,
+            supersession=supersession,
+            analysis_decision=analysis_decision,
+        )
+
+    def _planning_with_understanding_transition(
+        self,
+        planning,
+        *,
+        previous_understanding: UnderstandingArtifact,
+        updated_understanding: UnderstandingArtifact,
+        refinement,
+        supersession,
+        analysis_decision: UnderstandingAnalysisDecision,
+    ):
         if refinement is None and supersession is None:
             return planning
         artifact_id = refinement.refinement_id if refinement is not None else supersession.supersession_id
@@ -2861,9 +2906,9 @@ class CapabilityBroker:
         changed_fields = refinement.changed_fields if refinement is not None else supersession.changed_fields
         reason = refinement.reason if refinement is not None else supersession.reason
         primary_understanding_id = root_understanding_id(updated_understanding)
-        source_artifact_ids = [understanding.understanding_id]
-        if understanding.source_understanding_id is not None:
-            source_artifact_ids.append(understanding.source_understanding_id)
+        source_artifact_ids = [previous_understanding.understanding_id]
+        if previous_understanding.source_understanding_id is not None:
+            source_artifact_ids.append(previous_understanding.source_understanding_id)
         record_model_io(
             phase="analysis",
             provider=analysis_decision.provider_name,
@@ -2878,7 +2923,7 @@ class CapabilityBroker:
             call_kind="structured_followup",
             consumed_artifacts={
                 "understanding_id": primary_understanding_id,
-                "active_understanding_id": understanding.understanding_id,
+                "active_understanding_id": previous_understanding.understanding_id,
                 "candidate_set_id": planning.candidate_set.candidate_set_id if planning.candidate_set else None,
                 "route_decision_id": planning.route_decision.route_decision_id if planning.route_decision else None,
             },
@@ -2886,7 +2931,7 @@ class CapabilityBroker:
         record_trace_event(
             phase="analysis",
             event_type="understanding_refined" if refinement is not None else "understanding_superseded",
-            status=analysis.type,
+            status=updated_understanding.analysis.type,
             actor="broker",
             data={
                 "artifact_type": "understanding_transition",
@@ -2894,7 +2939,7 @@ class CapabilityBroker:
                 "source_artifact_ids": source_artifact_ids,
                 "artifact_role": artifact_role,
                 "primary_understanding_id": updated_understanding.primary_understanding_id,
-                "previous_understanding_id": understanding.understanding_id,
+                "previous_understanding_id": previous_understanding.understanding_id,
                 "active_understanding_id": updated_understanding.understanding_id,
                 "changed_fields": list(changed_fields),
                 "reason": reason,
@@ -2937,9 +2982,11 @@ class CapabilityBroker:
             for item in candidate_payloads
             if isinstance(item, dict)
         ) if isinstance(candidate_payloads, list) else ()
+        candidate_set_payload = payload.get("candidate_set") if isinstance(payload.get("candidate_set"), dict) else None
+        route_decision_payload = payload.get("route_decision") if isinstance(payload.get("route_decision"), dict) else None
         understanding = self._understanding_from_loop_payload(utterance=utterance, payload=payload)
         analysis = understanding.analysis
-        return SimpleNamespace(
+        return PlanningArtifacts(
             understanding=understanding,
             analysis=analysis,
             goal_synthesis=None,
@@ -2947,8 +2994,8 @@ class CapabilityBroker:
             candidates=candidates,
             understanding_refinement=None,
             understanding_supersession=None,
-            candidate_set=None,
-            route_decision=None,
+            candidate_set=candidate_set_from_payload(candidate_set_payload) if candidate_set_payload is not None else None,
+            route_decision=candidate_selection_decision_from_payload(route_decision_payload) if route_decision_payload is not None else None,
             domain_routing=None,
             observation_request=None,
             observation_receipt=None,
@@ -3001,63 +3048,6 @@ class CapabilityBroker:
             analysis_parse_valid=bool(understanding_payload.get("analysis_parse_valid", True)),
             analysis_fallback_used=bool(understanding_payload.get("analysis_fallback_used", False)),
             analysis_error=str(understanding_payload["analysis_error"]) if understanding_payload.get("analysis_error") is not None else None,
-        )
-
-    def _goal_loop_attempts_from_records(self, *, run_id: str, records: tuple[dict[str, object], ...]) -> tuple[PlanAttempt, ...]:
-        attempts: list[PlanAttempt] = []
-        for index, item in enumerate(records):
-            attempts.append(
-                PlanAttempt(
-                    attempt_id=str(item.get("attempt_id") or ""),
-                    run_id=run_id,
-                    attempt_index=index + 1,
-                    trigger=str(item.get("trigger") or "goal_loop"),
-                    understanding_id=str(item["understanding_id"]) if item.get("understanding_id") is not None else None,
-                    candidate_set_id=str(item["candidate_set_id"]) if item.get("candidate_set_id") is not None else None,
-                    route_decision_id=str(item["route_decision_id"]) if item.get("route_decision_id") is not None else None,
-                    selected_route_id=str(item.get("selected_route_id") or ""),
-                    task_plan=task_plan_from_payload(item["task_plan"]) if isinstance(item.get("task_plan"), dict) else None,
-                    execution_result=self._goal_loop_execution_from_record(item),
-                    failure=FailureClassification(**item["failure"]) if isinstance(item.get("failure"), dict) else None,
-                    replan_decision=ReplanDecision(**item["replan_decision"]) if isinstance(item.get("replan_decision"), dict) else None,
-                )
-            )
-        return tuple(attempts)
-
-    def _goal_loop_execution_from_record(self, record: dict[str, object]) -> PlanExecutionResult | None:
-        step_payload = record.get("step_result")
-        plan_payload = record.get("task_plan")
-        if not isinstance(step_payload, dict) or not isinstance(plan_payload, dict):
-            return None
-        step_result = StepExecutionResult(
-            step_id=str(step_payload["step_id"]),
-            layer=str(step_payload["layer"]),
-            status=str(step_payload["status"]),
-            step_safety_review_id=str(step_payload["step_safety_review_id"]) if step_payload.get("step_safety_review_id") is not None else None,
-            adapter=str(step_payload["adapter"]) if step_payload.get("adapter") is not None else None,
-            capability_id=str(step_payload["capability_id"]) if step_payload.get("capability_id") is not None else None,
-            attempt=int(step_payload.get("attempt", 1)),
-            duration_ms=int(step_payload["duration_ms"]) if step_payload.get("duration_ms") is not None else None,
-            adapter_status=str(step_payload["adapter_status"]) if step_payload.get("adapter_status") is not None else None,
-            diagnostics=dict(step_payload.get("diagnostics", {})),
-            error_code=str(step_payload["error_code"]) if step_payload.get("error_code") is not None else None,
-            result=dict(step_payload.get("result", {})),
-            error=str(step_payload["error"]) if step_payload.get("error") is not None else None,
-            audit_id=str(step_payload["audit_id"]) if step_payload.get("audit_id") is not None else None,
-        )
-        failure = FailureClassification(**record["failure"]) if isinstance(record.get("failure"), dict) else None
-        execution_status = "failed" if step_result.status != "succeeded" else "succeeded"
-        acceptance_status = "failed" if failure is not None and failure.failure_class == "same_action_no_progress" else "skipped"
-        overall_status = "failed" if step_result.status != "succeeded" or acceptance_status == "failed" else "incomplete"
-        return PlanExecutionResult(
-            plan_id=str(plan_payload.get("plan_id", "")),
-            status="succeeded" if step_result.status == "succeeded" else "failed",
-            step_results=(step_result,),
-            execution_status=execution_status,  # type: ignore[arg-type]
-            acceptance_status=acceptance_status,  # type: ignore[arg-type]
-            overall_status=overall_status,  # type: ignore[arg-type]
-            acceptance_result={"message": failure.message} if failure is not None else None,
-            error=step_result.error,
         )
 
     @staticmethod
@@ -3151,6 +3141,7 @@ class CapabilityBroker:
                 intent=intent,
                 result=payload,
                 selected_target=selected_target,
+                trace_run_id=run_id,
                 review_id=review_id,
                 message=message,
                 review=review,
@@ -3393,10 +3384,73 @@ class CapabilityBroker:
     def _resume_loop_state(self, review_request) -> object | None:
         if not isinstance(review_request.snapshot_payload, dict):
             return None
-        return replace(
-            LoopState(**review_request.snapshot_payload),
-            pending_review_id=None,
-            pending_user_input_id=None,
+        return loop_state_from_payload(review_request.snapshot_payload)
+
+    def _planning_from_user_input_review(self, review_request, state: LoopState, supplemental_input: str) -> tuple[str, PlanningArtifacts]:
+        restored = self._planning_from_loop_payload(
+            utterance=review_request.utterance,
+            payload=review_request.plan_payload or {},
+        )
+        if state.primary_understanding_id and not isinstance((review_request.plan_payload or {}).get("understanding"), dict):
+            restored = replace(
+                restored,
+                understanding=replace(
+                    restored.understanding,
+                    understanding_id=state.primary_understanding_id,
+                    primary_understanding_id=state.primary_understanding_id,
+                    source_understanding_id=restored.understanding.source_understanding_id,
+                ),
+            )
+        resumed_utterance = self._merge_user_input_utterance(review_request.utterance, supplemental_input)
+        reinterpreted_understanding, _ = create_primary_understanding(
+            resumed_utterance,
+            self.intent_broker,
+            clarification_provider=self.clarification_provider,
+            analysis_provider=self.understanding_analysis_provider,
+        )
+        updated_understanding, refinement, supersession = reconcile_reinterpreted_understanding(
+            restored.understanding,
+            reinterpreted_understanding,
+            reason="supplemental user input refined the understanding basis",
+        )
+        transition_decision = UnderstandingAnalysisDecision(
+            analysis=updated_understanding.analysis,
+            provider_name=updated_understanding.analysis_provider_name or "resume_understanding_refiner",
+            model_name=updated_understanding.analysis_model_name or "deterministic-local",
+            request_payload={
+                "utterance": resumed_utterance,
+                "supplemental_input": supplemental_input,
+                "resume_kind": "user_input",
+            },
+            response_payload={"analysis": asdict(updated_understanding.analysis)},
+            parse_valid=updated_understanding.analysis_parse_valid,
+            fallback_used=updated_understanding.analysis_fallback_used,
+            error=updated_understanding.analysis_error,
+        )
+        transitioned = self._planning_with_understanding_transition(
+            restored,
+            previous_understanding=restored.understanding,
+            updated_understanding=updated_understanding,
+            refinement=refinement,
+            supersession=supersession,
+            analysis_decision=transition_decision,
+        )
+        planned = plan_turn(
+            resumed_utterance,
+            self.intent_broker,
+            selection_provider=self.route_selection_provider,
+            clarification_provider=self.clarification_provider,
+            analysis_provider=self.understanding_analysis_provider,
+            goal_synthesis_provider=self.goal_synthesis_provider,
+            understanding=transitioned.understanding,
+        )
+        return (
+            resumed_utterance,
+            replace(
+                planned,
+                understanding_refinement=transitioned.understanding_refinement,
+                understanding_supersession=transitioned.understanding_supersession,
+            ),
         )
 
     def _resume_loop_review(self, review_request, *, dry_run: bool, transport: str | None) -> CommandResult:
@@ -3409,6 +3463,7 @@ class CapabilityBroker:
             )
         planning_payload = review_request.plan_payload or {}
         planning = self._planning_from_loop_payload(utterance=review_request.utterance, payload=planning_payload)
+        state = sync_loop_state_with_planning(state, planning)
         plan = getattr(planning, "plan", None)
         if plan is None:
             fallback = Intent.unknown("stored loop plan is missing", {"review_id": review_request.review_id})
@@ -3454,23 +3509,9 @@ class CapabilityBroker:
                 CommandResult(status="rejected", intent=fallback, review_id=review_request.review_id, message="supplemental input is required to resume this review"),
                 transport,
             )
-        resumed_utterance = self._merge_user_input_utterance(review_request.utterance, supplemental_input)
-        planning = plan_turn(
-            resumed_utterance,
-            self.intent_broker,
-            selection_provider=self.route_selection_provider,
-            clarification_provider=self.clarification_provider,
-            analysis_provider=self.understanding_analysis_provider,
-            goal_synthesis_provider=self.goal_synthesis_provider,
-        )
+        resumed_utterance, planning = self._planning_from_user_input_review(review_request, state, supplemental_input)
         plan = getattr(planning, "plan", None)
-        if plan is not None:
-            available_step_ids = {step.id for step in plan.steps}
-            state = replace(
-                state,
-                completed_step_ids=tuple(step_id for step_id in state.completed_step_ids if step_id in available_step_ids),
-                current_step_id=state.current_step_id if state.current_step_id in available_step_ids else None,
-            )
+        state = sync_loop_state_with_planning(normalize_state_for_plan(state, plan), planning)
         request = CommandRequest(
             resumed_utterance,
             dry_run=dry_run,
@@ -3479,14 +3520,12 @@ class CapabilityBroker:
             transport=transport,
         )
         loop = self._make_goal_loop()
-        loop_result = loop.run(
+        loop_result = loop.resume_from_user_input(
             request=request,
             planning=planning,
             run_id=state.trace_run_id,
             goal_id=state.goal_id,
-            state=replace(state, stage="init_loop"),
-            step_results=tuple(step_result_from_payload(item) for item in state.step_result_payloads),
-            attempts=(),
+            state=state,
         )
         return self._finalize_goal_loop_result(
             request=request,
@@ -3563,6 +3602,8 @@ class CapabilityBroker:
             execution_status=result.execution_status,
             acceptance_status=result.acceptance_status,
             overall_status=result.overall_status,
+            trace_run_id=result.trace_run_id,
+            loop_snapshot_id=self._result_loop_snapshot_id(result),
         )
         return replace(result, audit_id=audit_id)
 
@@ -3630,6 +3671,8 @@ class CapabilityBroker:
                     execution_status=result.execution_status,
                     acceptance_status=result.acceptance_status,
                     overall_status=result.overall_status,
+                    trace_run_id=result.trace_run_id,
+                    loop_snapshot_id=self._result_loop_snapshot_id(result),
                 )
                 return replace(result, audit_id=audit_id)
             if review_request.review_kind == "user_input":
@@ -3739,6 +3782,8 @@ class CapabilityBroker:
                 execution_status=result.execution_status,
                 acceptance_status=result.acceptance_status,
                 overall_status=result.overall_status,
+                trace_run_id=result.trace_run_id,
+                loop_snapshot_id=self._result_loop_snapshot_id(result),
             )
             return replace(result, audit_id=audit_id)
         if review_request.review_kind == "user_input":
@@ -4228,9 +4273,21 @@ class CapabilityBroker:
                 return self._intent_from_task_step(candidate.steps[0])
         return Intent.unknown("planning did not yield a compatibility intent")
 
-    def _step_safety_review_record(self, plan_id: str, step: TaskStep, phase: str | None = None) -> tuple[object, StepReviewRecord]:
+    def _step_safety_review_record(
+        self,
+        plan_id: str,
+        step: TaskStep,
+        pre_observation: LoopObservation | None = None,
+        phase: str | None = None,
+    ) -> tuple[object, StepReviewRecord]:
         del phase
         review = self.policy.review(self._intent_from_task_step(step))
+        review = contextualize_step_review(
+            policy=self.loop_policy,
+            step_action=step.action,
+            review=review,
+            pre_observation=pre_observation,
+        )
         review_id = self._make_step_safety_review_id(
             plan_id=plan_id,
             step_id=step.id,
@@ -4239,6 +4296,7 @@ class CapabilityBroker:
             review_required=review.review_required,
             allowed=review.allowed,
             reason=review.reason,
+            observation_id=pre_observation.observation_id if pre_observation is not None else None,
         )
         return review, StepReviewRecord(
             step_safety_review_id=review_id,
@@ -4262,9 +4320,10 @@ class CapabilityBroker:
         review_required: bool,
         allowed: bool,
         reason: str,
+        observation_id: str | None = None,
     ) -> str:
         digest = sha256(
-            f"{plan_id}:{step_id}:{action}:{risk_level}:{review_required}:{allowed}:{reason}".encode("utf-8")
+            f"{plan_id}:{step_id}:{action}:{risk_level}:{review_required}:{allowed}:{reason}:{observation_id or ''}".encode("utf-8")
         ).hexdigest()[:12]
         return f"srev_{digest}"
 

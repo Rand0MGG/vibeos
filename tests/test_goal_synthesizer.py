@@ -223,6 +223,86 @@ def test_goal_synthesis_validation_normalizes_legacy_provider_shape_into_host_bo
     assert validated["required_capability_ids"] == ["browser.open_url"]
 
 
+def test_goal_synthesis_validation_normalizes_plural_domain_and_capability_fields() -> None:
+    utterance = "open browser"
+    analysis = UtteranceAnalysis(
+        utterance=utterance,
+        type="task",
+        confidence=0.95,
+        domains=("browser",),
+        explanation="provider classified the utterance as a browser task",
+        task_spans=(
+            TaskSpan(
+                id="span_1",
+                text=utterance,
+                start=0,
+                end=len(utterance),
+                domain="browser",
+                confidence=0.95,
+            ),
+        ),
+        provenance=None,
+    )
+    broker = CapturingIntentBroker(StaticIntentBroker(Intent(action="app.open", target={"name": "browser"}, reason="cached app-open intent")))
+    broker.remember("open browser", Intent(action="app.open", target={"name": "browser"}, reason="cached app-open intent"))
+    host_hint = build_goal_synthesis_boundary_hint(utterance=utterance, analysis=analysis, intent_broker=broker)
+    validated = validate_goal_synthesis_payload(
+        {
+            "status": "ready",
+            "goal_type": "app_open",
+            "domains": ["apps", "browser"],
+            "capabilities_required": ["app.open"],
+            "missing_capability_ids": [],
+        },
+        host_hint=host_hint,
+    )
+
+    assert validated["candidate_domain_ids"] == ["apps", "browser"]
+    assert validated["required_capability_ids"] == ["app.open"]
+
+
+def test_goal_synthesis_validation_normalizes_nested_goal_shape() -> None:
+    utterance = "open browser"
+    analysis = UtteranceAnalysis(
+        utterance=utterance,
+        type="task",
+        confidence=0.95,
+        domains=("browser",),
+        explanation="provider classified the utterance as a browser task",
+        task_spans=(
+            TaskSpan(
+                id="span_1",
+                text=utterance,
+                start=0,
+                end=len(utterance),
+                domain="browser",
+                confidence=0.95,
+            ),
+        ),
+        provenance=None,
+    )
+    broker = CapturingIntentBroker(StaticIntentBroker(Intent(action="app.open", target={"name": "browser"}, reason="cached app-open intent")))
+    broker.remember("open browser", Intent(action="app.open", target={"name": "browser"}, reason="cached app-open intent"))
+    host_hint = build_goal_synthesis_boundary_hint(utterance=utterance, analysis=analysis, intent_broker=broker)
+    validated = validate_goal_synthesis_payload(
+        {
+            "status": "ready",
+            "goal": {
+                "type": "app_open",
+                "domains": ["apps", "browser"],
+                "capabilities": ["app.open"],
+                "params": {"app_name": "browser"},
+            },
+            "subgoals": [],
+        },
+        host_hint=host_hint,
+    )
+
+    assert validated["goal_type"] == "app_open"
+    assert validated["candidate_domain_ids"] == ["apps", "browser"]
+    assert validated["required_capability_ids"] == ["app.open"]
+
+
 def test_goal_synthesis_boundary_hint_includes_intent_implied_domain_when_analysis_drifts() -> None:
     analysis = UtteranceAnalysis(
         utterance="open browser",

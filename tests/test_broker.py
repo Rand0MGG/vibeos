@@ -1,6 +1,5 @@
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
-from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
@@ -8,13 +7,15 @@ from vibeos.apps import AppRegistry
 from vibeos.audit import AuditLog
 from vibeos.browser_state import record_browser_observation
 from vibeos.broker import CapabilityBroker
+from vibeos.candidate_selection import CandidateSelectionDecision, CandidateSet
 from vibeos.intent import IntentBroker, RuleIntentBroker
-from vibeos.loop_models import LoopState
+from vibeos.loop_models import GoalLoopResult, LoopObservation, LoopPolicy, LoopState
 from vibeos.models import AppEntry, CommandRequest, Intent, PermissionReview, WindowEntry
+from vibeos.planner import PlanningArtifacts
 from vibeos.portal import PortalAdapter
 from vibeos.reviews import ReviewStore
-from vibeos.task_models import DisplayFields, StepReviewRecord, TaskPlan, TaskRoute, TaskStep
-from vibeos.understanding import UnderstandingArtifact, default_understanding_host_hint, validated_understanding_from_payload
+from vibeos.task_models import DisplayFields, PlanAttempt, PlanExecutionResult, StepExecutionResult, StepReviewRecord, TaskPlan, TaskRoute, TaskStep
+from vibeos.understanding import default_understanding_host_hint, validated_understanding_from_payload
 
 
 class FakeApps(AppRegistry):
@@ -279,7 +280,7 @@ def test_existing_capability_path_can_suspend_and_resume(monkeypatch) -> None:
     )
     gate = {"needs_review": True}
 
-    def review_step(plan, step):
+    def review_step(plan, step, pre_observation=None):
         required = gate["needs_review"]
         reason = "approval required" if required else "allowed"
         return (
@@ -305,7 +306,218 @@ def test_existing_capability_path_can_suspend_and_resume(monkeypatch) -> None:
     assert approved.result["attempts"]
 
 
+def test_review_required_still_originates_from_step_safety_boundary(monkeypatch) -> None:
+    review_path = make_review_path("goal-loop-rereview-boundary")
+    reviews = ReviewStore(review_path)
+    portal = ObservedPortal()
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        portal=portal,
+        audit=AuditLog(),
+        reviews=reviews,
+    )
+    review_calls = {"count": 0}
+
+    def review_step(plan, step, pre_observation=None):
+        review_calls["count"] += 1
+        if review_calls["count"] == 1:
+            return (
+                PermissionReview("L2", True, True, "approval required"),
+                StepReviewRecord("srev_initial", step.id, step.action, "L2", True, True, "approval required"),
+            )
+        return (
+            PermissionReview("L2", True, True, "context changed; renewed approval required"),
+            StepReviewRecord("srev_changed", step.id, step.action, "L2", True, True, "context changed; renewed approval required"),
+        )
+
+    monkeypatch.setenv("VIBEOS_ENABLE_GOAL_LOOP", "1")
+    monkeypatch.setattr(broker, "review_task_step", review_step)
+
+    first = broker.handle(CommandRequest("search web for hello"))
+    stored_first = reviews.get(first.review_id or "")
+    approved = broker.handle(CommandRequest("", review_id=first.review_id, approve=True))
+    stored_second = reviews.get(approved.review_id or "")
+
+    assert first.status == "review_required"
+    assert stored_first is not None
+    assert stored_first.snapshot_payload is not None
+    assert stored_first.snapshot_payload["pending_step_safety_review_id"] == "srev_initial"
+    assert approved.status == "review_required"
+    assert approved.review_id != first.review_id
+    assert portal.open_calls == 0
+    assert stored_second is not None
+    assert stored_second.snapshot_payload is not None
+    assert stored_second.snapshot_payload["pending_step_safety_review_id"] == "srev_changed"
+
+
+def test_sensitive_search_review_overrides_default_allow() -> None:
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        audit=AuditLog(),
+        reviews=ReviewStore(),
+    )
+    plan = TaskPlan(
+        schema_version="v0.5",
+        plan_id="plan_sensitive_search",
+        utterance="search web for account balance",
+        display=DisplayFields(goal="search the web"),
+        selected_route_id="browser_search_web_route",
+        routes=(TaskRoute(id="browser_search_web_route", score=1.0, domain_id="browser"),),
+        steps=(TaskStep(id="search_sensitive", action="browser.search_web", capability_id="browser.search_web", target={"query": "account balance"}),),
+    )
+    pre_observation = LoopObservation(
+        observation_id="obs_sensitive",
+        level="L1",
+        phase="pre",
+        packages={"browser_context": {"sensitivity_tags": ("financial",), "contains_sensitive_content": True}},
+        route_id=plan.selected_route_id,
+        step_id="search_sensitive",
+    )
+
+    review, record = broker.review_task_step(plan, plan.steps[0], pre_observation)
+
+    assert review.review_required is True
+    assert review.allowed is True
+    assert record.review_required is True
+    assert "sensitive content" in review.reason
+
+
+def test_loop_policy_can_disable_contextual_search_review_escalation() -> None:
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        audit=AuditLog(),
+        reviews=ReviewStore(),
+        loop_policy=LoopPolicy(review_escalation_enabled=False),
+    )
+    plan = TaskPlan(
+        schema_version="v0.5",
+        plan_id="plan_sensitive_search_disabled",
+        utterance="search web for account balance",
+        display=DisplayFields(goal="search the web"),
+        selected_route_id="browser_search_web_route",
+        routes=(TaskRoute(id="browser_search_web_route", score=1.0, domain_id="browser"),),
+        steps=(TaskStep(id="search_sensitive", action="browser.search_web", capability_id="browser.search_web", target={"query": "account balance"}),),
+    )
+    pre_observation = LoopObservation(
+        observation_id="obs_sensitive",
+        level="L1",
+        phase="pre",
+        packages={"browser_context": {"sensitivity_tags": ("financial",), "contains_sensitive_content": True}},
+        route_id=plan.selected_route_id,
+        step_id="search_sensitive",
+    )
+
+    review, record = broker.review_task_step(plan, plan.steps[0], pre_observation)
+
+    assert review.review_required is False
+    assert record.review_required is False
+
+
+def test_loop_decision_maps_back_to_public_runtime_statuses() -> None:
+    broker = CapabilityBroker(
+        intent_broker=RuleIntentBroker(),
+        audit=AuditLog(),
+        reviews=ReviewStore(),
+    )
+    plan = TaskPlan(
+        schema_version="v0.5",
+        plan_id="plan_status_mapping",
+        utterance="search web for hello",
+        display=DisplayFields(goal="search the web"),
+        selected_route_id="browser_search_web_route",
+        routes=(TaskRoute(id="browser_search_web_route", score=1.0, domain_id="browser"),),
+        steps=(TaskStep(id="search_web", action="browser.search_web", capability_id="browser.search_web", target={"query": "hello"}),),
+    )
+    planning = PlanningArtifacts(
+        understanding=None,
+        analysis=None,
+        goal_synthesis=None,
+        plan=plan,
+        candidates=(plan,),
+        candidate_set=None,
+        route_decision=None,
+    )
+    base_state = LoopState(
+        loop_snapshot_id="lsnap_status_mapping",
+        trace_run_id="run_status_mapping",
+        goal_id="goal_status_mapping",
+        primary_understanding_id=None,
+        candidate_set_id=None,
+        selected_route_decision_id=None,
+        current_step_id=None,
+    )
+
+    completed = broker._finalize_goal_loop_result(
+        request=CommandRequest("search web for hello"),
+        planning=planning,
+        run_id="run_status_mapping",
+        goal_id="goal_status_mapping",
+        loop_result=GoalLoopResult(
+            decision="complete",
+            state=base_state,
+            message="done",
+            execution_status="succeeded",
+            acceptance_status="passed",
+            overall_status="completed",
+        ),
+    )
+    needs_review = broker._finalize_goal_loop_result(
+        request=CommandRequest("search web for hello"),
+        planning=planning,
+        run_id="run_status_mapping",
+        goal_id="goal_status_mapping",
+        loop_result=GoalLoopResult(
+            decision="needs_review",
+            state=base_state,
+            message="review required",
+            review_id="rev_status_mapping",
+            execution_status="not_started",
+            acceptance_status="skipped",
+            overall_status="needs_review",
+        ),
+    )
+    needs_user_input = broker._finalize_goal_loop_result(
+        request=CommandRequest("search web for hello"),
+        planning=planning,
+        run_id="run_status_mapping",
+        goal_id="goal_status_mapping",
+        loop_result=GoalLoopResult(
+            decision="needs_user_input",
+            state=base_state,
+            message="need more detail",
+            review_id="rev_user_input_mapping",
+            execution_status="not_started",
+            acceptance_status="skipped",
+            overall_status="needs_user_input",
+        ),
+    )
+    blocked = broker._finalize_goal_loop_result(
+        request=CommandRequest("search web for hello"),
+        planning=planning,
+        run_id="run_status_mapping",
+        goal_id="goal_status_mapping",
+        loop_result=GoalLoopResult(
+            decision="blocked",
+            state=base_state,
+            message="blocked",
+            execution_status="failed",
+            acceptance_status="skipped",
+            overall_status="blocked",
+        ),
+    )
+
+    assert completed.status == "executed"
+    assert completed.overall_status == "completed"
+    assert needs_review.status == "review_required"
+    assert needs_review.overall_status == "needs_review"
+    assert needs_user_input.status == "ambiguous"
+    assert needs_user_input.overall_status == "needs_user_input"
+    assert blocked.status == "failed"
+    assert blocked.overall_status == "blocked"
+
+
 def test_broker_provide_input_resumes_user_input_review(monkeypatch) -> None:
+    record_browser_observation(active_url="about:blank", query=None, adapter="test-reset")
     review_path = make_review_path("goal-loop-user-input")
     reviews = ReviewStore(review_path)
     portal = ObservedPortal()
@@ -322,7 +534,42 @@ def test_broker_provide_input_resumes_user_input_review(monkeypatch) -> None:
         primary_understanding_id="und_user_input",
         candidate_set_id=None,
         selected_route_decision_id=None,
-        current_step_id=None,
+        current_step_id="open_app",
+        completed_step_ids=("open_app",),
+        attempt_records=(
+            PlanAttempt(
+                attempt_id="attempt_prior_app",
+                run_id="run_user_input",
+                attempt_index=1,
+                trigger="initial_plan",
+                selected_route_id="apps_open_route",
+                task_plan=TaskPlan(
+                    schema_version="v0.5",
+                    plan_id="plan_prior_app",
+                    utterance="open browser",
+                    display=DisplayFields(goal="open browser"),
+                    selected_route_id="apps_open_route",
+                    routes=(TaskRoute(id="apps_open_route", score=1.0, domain_id="apps"),),
+                    steps=(TaskStep(id="open_app", action="app.open", capability_id="app.open", target={"name": "browser"}),),
+                ),
+                execution_result=PlanExecutionResult(
+                    plan_id="plan_prior_app",
+                    status="succeeded",
+                    step_results=(
+                        StepExecutionResult(
+                            step_id="open_app",
+                            layer="adapter_execute",
+                            status="succeeded",
+                            capability_id="app.open",
+                            result={"selected_target": "firefox.desktop"},
+                        ),
+                    ),
+                    execution_status="succeeded",
+                    acceptance_status="skipped",
+                    overall_status="incomplete",
+                ),
+            ),
+        ),
         stage="needs_user_input",
     )
     review = reviews.create_loop_review(
@@ -335,6 +582,27 @@ def test_broker_provide_input_resumes_user_input_review(monkeypatch) -> None:
     )
 
     def fake_plan_turn(utterance, *args, **kwargs):
+        provided_understanding = kwargs.get("understanding")
+        assert provided_understanding is not None
+        assert provided_understanding.primary_understanding_id == "und_user_input"
+        assert provided_understanding.source_understanding_id == "und_user_input"
+        assert provided_understanding.artifact_role == "refinement"
+        candidate_set = CandidateSet(
+            candidate_set_id="cset_resumed",
+            understanding_id=provided_understanding.primary_understanding_id,
+            generated_by="test",
+            candidates=(),
+        )
+        route_decision = CandidateSelectionDecision(
+            route_decision_id="rdec_resumed",
+            candidate_set_id="cset_resumed",
+            understanding_id=provided_understanding.primary_understanding_id,
+            action="select",
+            selected_candidate_id="cand_resumed",
+            reason="resume with supplemental input",
+            provider_name="test",
+            model_name="test",
+        )
         plan = TaskPlan(
             schema_version="v0.5",
             plan_id="plan_user_input_resumed",
@@ -349,22 +617,16 @@ def test_broker_provide_input_resumes_user_input_review(monkeypatch) -> None:
             payload={"type": "task", "confidence": 0.9, "domains": ["browser"], "explanation": "resolved target"},
             host_hint=default_understanding_host_hint(utterance),
         )
-        understanding = UnderstandingArtifact(
-            understanding_id="und_resumed",
-            utterance=utterance,
-            analysis=analysis,
-            primary_understanding_id="und_resumed",
-        )
-        return SimpleNamespace(
-            understanding=understanding,
+        return PlanningArtifacts(
+            understanding=replace(provided_understanding, analysis=analysis),
             analysis=analysis,
             goal_synthesis=None,
             plan=plan,
             candidates=(plan,),
             understanding_refinement=None,
             understanding_supersession=None,
-            candidate_set=None,
-            route_decision=None,
+            candidate_set=candidate_set,
+            route_decision=route_decision,
             domain_routing=None,
             observation_request=None,
             observation_receipt=None,
@@ -381,9 +643,23 @@ def test_broker_provide_input_resumes_user_input_review(monkeypatch) -> None:
 
     assert result.status == "executed"
     assert result.result["attempts"]
+    assert len(result.result["attempts"]) == 2
+    assert result.result["attempts"][0]["selected_route_id"] == "apps_open_route"
+    assert result.result["attempts"][1]["selected_route_id"] == "browser_search_web_route"
+    assert result.result["attempts"][1]["understanding_id"] == "und_user_input"
+    assert result.result["attempts"][1]["candidate_set_id"] == "cset_resumed"
+    assert result.result["attempts"][1]["route_decision_id"] == "rdec_resumed"
+    assert result.result["understanding"]["primary_understanding_id"] == "und_user_input"
+    assert result.result["understanding"]["source_understanding_id"] == "und_user_input"
+    assert result.result["understanding"]["artifact_role"] == "refinement"
     assert portal.open_calls == 1
     assert loaded is not None
     assert loaded.status == "consumed"
+
+
+def test_user_input_resumes_loop_snapshot(monkeypatch) -> None:
+    record_browser_observation(active_url="about:blank", query=None, adapter="test-reset")
+    test_broker_provide_input_resumes_user_input_review(monkeypatch)
 
 
 def test_reject_review_blocks_later_approval() -> None:

@@ -618,15 +618,35 @@ def build_goal_synthesis_request_payload(*, utterance: str, analysis: UtteranceA
 
 def validate_goal_synthesis_payload(payload: dict[str, object], *, host_hint: dict[str, object]) -> dict[str, object]:
     normalized = dict(payload)
+    goal_payload = normalized.get("goal") if isinstance(normalized.get("goal"), dict) else {}
     if not normalized.get("goal_type") and isinstance(normalized.get("type"), str):
         normalized["goal_type"] = normalized["type"]
+    if not normalized.get("goal_type") and isinstance(goal_payload.get("type"), str):
+        normalized["goal_type"] = goal_payload["type"]
     if not isinstance(normalized.get("candidate_domain_ids"), list):
-        normalized_domain = normalized.get("domain_id") or normalized.get("domain")
-        if isinstance(normalized_domain, str) and normalized_domain.strip():
+        normalized_domains = normalized.get("domains")
+        if not isinstance(normalized_domains, list):
+            normalized_domains = goal_payload.get("domains")
+        if isinstance(normalized_domains, list):
+            normalized["candidate_domain_ids"] = [str(item).strip() for item in normalized_domains if str(item).strip()]
+        normalized_domain = normalized.get("domain_id") or normalized.get("domain") or goal_payload.get("domain_id") or goal_payload.get("domain")
+        if not isinstance(normalized.get("candidate_domain_ids"), list) and isinstance(normalized_domain, str) and normalized_domain.strip():
             normalized["candidate_domain_ids"] = [normalized_domain.strip()]
     if not isinstance(normalized.get("required_capability_ids"), list):
-        normalized_capability = normalized.get("capability_id") or normalized.get("capability")
-        if isinstance(normalized_capability, str) and normalized_capability.strip():
+        normalized_capabilities = normalized.get("capabilities_required")
+        if not isinstance(normalized_capabilities, list):
+            normalized_capabilities = goal_payload.get("capabilities_required")
+        if not isinstance(normalized_capabilities, list):
+            normalized_capabilities = goal_payload.get("capabilities")
+        if isinstance(normalized_capabilities, list):
+            normalized["required_capability_ids"] = [str(item).strip() for item in normalized_capabilities if str(item).strip()]
+        normalized_capability = (
+            normalized.get("capability_id")
+            or normalized.get("capability")
+            or goal_payload.get("capability_id")
+            or goal_payload.get("capability")
+        )
+        if not isinstance(normalized.get("required_capability_ids"), list) and isinstance(normalized_capability, str) and normalized_capability.strip():
             normalized["required_capability_ids"] = [normalized_capability.strip()]
     status = str(normalized.get("status") or "").strip()
     if status not in {"ready", "clarification_needed", "missing_capability", "unsupported"}:

@@ -46,11 +46,13 @@ class AuditLog:
         execution_status: str | None = None,
         acceptance_status: str | None = None,
         overall_status: str | None = None,
+        trace_run_id: str | None = None,
         understanding_id: str | None = None,
         candidate_set_id: str | None = None,
         selected_route_decision_id: str | None = None,
         selected_strategy_decision_id: str | None = None,
         semantic_acceptance_decision_id: str | None = None,
+        loop_snapshot_id: str | None = None,
     ) -> str:
         timestamp = utc_now_iso()
         audit_id = f"{timestamp}-{os.getpid()}"
@@ -74,11 +76,13 @@ class AuditLog:
             "execution_status": execution_status,
             "acceptance_status": acceptance_status,
             "overall_status": overall_status,
+            "trace_run_id": trace_run_id,
             "understanding_id": understanding_id,
             "candidate_set_id": candidate_set_id,
             "selected_route_decision_id": selected_route_decision_id,
             "selected_strategy_decision_id": selected_strategy_decision_id,
             "semantic_acceptance_decision_id": semantic_acceptance_decision_id,
+            "loop_snapshot_id": loop_snapshot_id,
             "plan_id": plan_id,
             "step_id": step_id,
             "step_safety_review_id": step_safety_review_id,

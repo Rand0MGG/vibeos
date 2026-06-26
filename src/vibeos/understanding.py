@@ -343,12 +343,13 @@ def create_primary_understanding(
     understanding_provider = analysis_provider or OpenAICompatibleUnderstandingAnalysisProvider()
     analysis_decision = understanding_provider.analyze(utterance=utterance, broker=broker)
     analysis = analysis_decision.analysis
+    provider_intent = _provider_intent_for_analysis(utterance, analysis, broker)
     artifact = UnderstandingArtifact(
         understanding_id=make_understanding_id(utterance, analysis),
         utterance=utterance,
         analysis=analysis,
         primary_understanding_id=None,
-        provider_intent=broker.cached_intent(utterance),
+        provider_intent=provider_intent,
         provider_parse_count=broker.provider_parse_count,
         provider_cache_hit_count=broker.provider_cache_hit_count,
         uncertainty_reasons=infer_uncertainty_reasons(analysis),
@@ -410,7 +411,7 @@ def create_primary_understanding(
         clarification_parse_valid=clarification_decision.parse_valid if clarification_decision else True,
         clarification_fallback_used=clarification_decision.fallback_used if clarification_decision else False,
         clarification_error=clarification_decision.error if clarification_decision else None,
-        provider_intent=broker.cached_intent(utterance),
+        provider_intent=_provider_intent_for_analysis(utterance, analysis, broker),
         provider_parse_count=broker.provider_parse_count,
         provider_cache_hit_count=broker.provider_cache_hit_count,
     )
@@ -418,6 +419,22 @@ def create_primary_understanding(
         artifact,
         broker,
     )
+
+
+def _provider_intent_for_analysis(
+    utterance: str,
+    analysis: UtteranceAnalysis,
+    broker: CapturingIntentBroker,
+) -> Intent | None:
+    cached = broker.cached_intent(utterance)
+    if cached is not None:
+        return cached
+    if analysis.type not in {"task", "mixed"}:
+        return None
+    parsed = broker.parse(utterance)
+    if parsed.action == "unknown":
+        return None
+    return parsed
 
 
 def deterministic_understanding_analysis(utterance: str, broker: CapturingIntentBroker) -> UtteranceAnalysis:
@@ -522,6 +539,53 @@ def reconcile_understanding_transition(
             refined_understanding_id=updated.understanding_id,
             reason=reason,
             changed_fields=changed_fields,
+        ),
+        None,
+    )
+
+
+def reconcile_reinterpreted_understanding(
+    previous: UnderstandingArtifact,
+    reinterpreted: UnderstandingArtifact,
+    *,
+    reason: str,
+) -> tuple[UnderstandingArtifact, UnderstandingRefinement | None, UnderstandingSupersession | None]:
+    primary_understanding_id = root_understanding_id(previous)
+    changed_fields = list(understanding_changed_fields(previous.analysis, reinterpreted.analysis))
+    if previous.utterance.strip() != reinterpreted.utterance.strip():
+        changed_fields.append("utterance")
+    if not changed_fields:
+        return previous, None, None
+
+    updated = replace(
+        reinterpreted,
+        primary_understanding_id=primary_understanding_id,
+        source_understanding_id=previous.understanding_id,
+    )
+    if previous.analysis.type != reinterpreted.analysis.type:
+        supersession_id = make_supersession_id(previous.understanding_id, updated.understanding_id)
+        return (
+            replace(updated, artifact_role="supersession", refinement_id=None, supersession_id=supersession_id),
+            None,
+            UnderstandingSupersession(
+                supersession_id=supersession_id,
+                primary_understanding_id=primary_understanding_id,
+                previous_understanding_id=previous.understanding_id,
+                superseding_understanding_id=updated.understanding_id,
+                reason=reason,
+                changed_fields=tuple(changed_fields),
+            ),
+        )
+    refinement_id = make_refinement_id(previous.understanding_id, updated.understanding_id)
+    return (
+        replace(updated, artifact_role="refinement", refinement_id=refinement_id, supersession_id=None),
+        UnderstandingRefinement(
+            refinement_id=refinement_id,
+            primary_understanding_id=primary_understanding_id,
+            previous_understanding_id=previous.understanding_id,
+            refined_understanding_id=updated.understanding_id,
+            reason=reason,
+            changed_fields=tuple(changed_fields),
         ),
         None,
     )
