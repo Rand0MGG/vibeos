@@ -114,7 +114,7 @@ class CandidateSelectionProvider:
 
 
 class DeterministicCandidateSelectionProvider(CandidateSelectionProvider):
-    provider_name = "rule_candidate_selector"
+    provider_name = "host_candidate_selector"
     model_name = "deterministic-local"
 
     def decide(self, *, understanding: UnderstandingArtifact, candidate_set: CandidateSet) -> CandidateSelectionDecision:

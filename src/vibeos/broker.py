@@ -24,7 +24,7 @@ from .execution_graph import execute_plan_graph, overall_status as execution_gra
 from .failure_classifier import FailureClassifier
 from .goal_loop import GoalLoop, loop_state_from_payload, normalize_state_for_plan, sync_loop_state_with_planning
 from .goal_models import GoalSpec, GoalSynthesisProvenance
-from .intent import IntentBroker, OpenAICompatibleIntentBroker, RuleIntentBroker
+from .intent import IntentBroker, OpenAICompatibleIntentBroker
 from .loop_policy import contextualize_step_review, default_loop_policy, goal_loop_enabled
 from .loop_models import LoopObservation, LoopPolicy, LoopState
 from .notifications import NotificationAdapter
@@ -2681,7 +2681,7 @@ class CapabilityBroker:
             )
             record_model_io(
                 phase="replanning",
-                provider=decision.provider_name or "rule_replanner",
+                provider=decision.provider_name or "host_replanner",
                 model=decision.model_name or "deterministic-local",
                 request_payload={
                     "understanding_id": primary_understanding_id,

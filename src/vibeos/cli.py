@@ -7,7 +7,6 @@ from dataclasses import asdict
 
 from .broker import CapabilityBroker
 from .doctor import SessionDoctor
-from .intent import RuleIntentBroker
 from .models import CommandRequest
 from .planner import plan_payload
 from .runtime import LocalRuntime, RuntimeSelectionError, build_runtime
@@ -22,13 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("utterance")
     ask.add_argument("--dry-run", action="store_true", help="parse and resolve without executing capabilities")
     ask.add_argument("--json", action="store_true", help="print machine-readable JSON")
-    ask.add_argument("--offline", action="store_true", help="force the deterministic local RuleIntentBroker path")
     ask.add_argument("--debug", action="store_true", help="include raw provider payloads in debug_trace")
 
     plan = subparsers.add_parser("plan", help="build a v0.3 task plan without executing it")
     plan.add_argument("utterance")
     plan.add_argument("--json", action="store_true", help="print machine-readable JSON")
-    plan.add_argument("--offline", action="store_true", help="force the deterministic local RuleIntentBroker path")
     plan.add_argument("--debug", action="store_true", help="include raw provider payloads in debug_trace")
 
     approve = subparsers.add_parser("approve", help="approve and execute a pending L2 review request")
@@ -138,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
             debug=args.debug,
         )
         with bind_trace_session(trace_session):
-            payload = plan_payload(args.utterance, intent_broker=RuleIntentBroker() if args.offline else None, debug=args.debug)
+            payload = plan_payload(args.utterance, debug=args.debug)
         goal_synthesis = payload.get("goal_synthesis") if isinstance(payload.get("goal_synthesis"), dict) else {}
         goal_spec = goal_synthesis.get("goal_spec") if isinstance(goal_synthesis.get("goal_spec"), dict) else {}
         trace_session.finalize(
@@ -151,13 +148,10 @@ def main(argv: list[str] | None = None) -> int:
         print_plan_payload(payload, json_output=args.json)
         return 0 if payload["status"] == "validated" else 1
 
-    if args.command == "ask" and args.offline:
-        runtime = LocalRuntime(CapabilityBroker(intent_broker=RuleIntentBroker()))
-    else:
-        try:
-            runtime = build_runtime()
-        except RuntimeSelectionError as exc:
-            return print_runtime_error(args, exc)
+    try:
+        runtime = build_runtime()
+    except RuntimeSelectionError as exc:
+        return print_runtime_error(args, exc)
 
     if args.command == "audit" and args.audit_command == "tail":
         print(json.dumps(runtime.audit_tail(args.count), ensure_ascii=False, indent=2))

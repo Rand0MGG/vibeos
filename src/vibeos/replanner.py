@@ -66,7 +66,7 @@ class Replanner:
 
 
 class DeterministicReplanDecisionProvider(ReplanDecisionProvider):
-    provider_name = "rule_replanner"
+    provider_name = "host_replanner"
     model_name = "deterministic-local"
 
     def select_option(

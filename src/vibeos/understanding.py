@@ -13,16 +13,7 @@ from .clarification import (
 )
 from .intent import IntentBroker, OpenAICompatibleIntentBroker
 from .models import Intent, utc_now_iso
-from .nlu import (
-    analysis_from_intent,
-    analyze_ambiguous_site_reference,
-    analyze_browser_request,
-    analyze_media_request,
-    analyze_mixed_request,
-    domain_for_action,
-    make_provenance,
-    rule_fast_path_analysis,
-)
+from .nlu import analysis_from_intent, domain_for_action, make_provenance
 from .provider_client import env_flag_enabled, load_openai_compatible_provider_config, request_json_object
 from .task_models import FailureClassification, ReplanDecision, TaskSpan, UtteranceAnalysis
 from .task_trace import record_model_io
@@ -166,65 +157,23 @@ class CapturingIntentBroker(IntentBroker):
         self._cache[utterance.strip()] = intent
 
 
-class DeterministicUnderstandingAnalysisProvider(UnderstandingAnalysisProvider):
-    provider_name = "rule_understanding_analyzer"
-    model_name = "deterministic-local"
-
-    def analyze(self, *, utterance: str, broker: CapturingIntentBroker) -> UnderstandingAnalysisDecision:
-        analysis = deterministic_understanding_analysis(utterance, broker)
-        return UnderstandingAnalysisDecision(
-            analysis=analysis,
-            provider_name=self.provider_name,
-            model_name=self.model_name,
-            request_payload={"utterance": utterance},
-            response_payload={"analysis": asdict(analysis)},
-        )
-
-
-class DeterministicUnderstandingTransitionProvider(UnderstandingTransitionProvider):
-    provider_name = "rule_understanding_refiner"
-    model_name = "deterministic-local"
-
-    def transition(
-        self,
-        *,
-        understanding: UnderstandingArtifact,
-        current_analysis: UtteranceAnalysis,
-        decision: ReplanDecision,
-        failure: FailureClassification,
-    ) -> UnderstandingAnalysisDecision:
-        analysis = analysis_from_replan_signals(current_analysis, decision=decision, failure=failure) or current_analysis
-        return UnderstandingAnalysisDecision(
-            analysis=analysis,
-            provider_name=self.provider_name,
-            model_name=self.model_name,
-            request_payload=build_understanding_transition_request_payload(
-                understanding=understanding,
-                current_analysis=current_analysis,
-                decision=decision,
-                failure=failure,
-                host_hint=analysis,
-            ),
-            response_payload={"analysis": asdict(analysis)},
-        )
-
-
 class OpenAICompatibleUnderstandingAnalysisProvider(UnderstandingAnalysisProvider):
-    def __init__(self, fallback: UnderstandingAnalysisProvider | None = None) -> None:
+    def __init__(self) -> None:
         self.config = load_openai_compatible_provider_config()
         self.provider_name = self.config.provider_name
         self.model_name = self.config.model_name or "unknown-model"
-        self.fallback = fallback or DeterministicUnderstandingAnalysisProvider()
 
     def analyze(self, *, utterance: str, broker: CapturingIntentBroker) -> UnderstandingAnalysisDecision:
         if not self.config.configured or not understanding_model_guidance_enabled("VIBEOS_ENABLE_MODEL_UNDERSTANDING"):
-            fallback = self.fallback.analyze(utterance=utterance, broker=broker)
-            return replace(
-                fallback,
+            explicit_analysis = explicit_broker_understanding(utterance, broker)
+            return UnderstandingAnalysisDecision(
+                analysis=explicit_analysis or provider_unavailable_understanding(utterance, "model provider is unavailable"),
                 provider_name=self.provider_name,
                 model_name=self.model_name,
-                parse_valid=False,
-                fallback_used=True,
+                request_payload={"utterance": utterance},
+                response_payload={"analysis": asdict(explicit_analysis)} if explicit_analysis is not None else None,
+                parse_valid=explicit_analysis is not None,
+                fallback_used=explicit_analysis is not None,
                 error="missing_api_key_or_model_or_guidance_disabled",
             )
         host_hint = default_understanding_host_hint(utterance)
@@ -246,23 +195,24 @@ class OpenAICompatibleUnderstandingAnalysisProvider(UnderstandingAnalysisProvide
                 response_payload=response.response_payload,
             )
         except (urllib.error.URLError, TimeoutError, KeyError, ValueError, json.JSONDecodeError) as exc:
-            fallback = self.fallback.analyze(utterance=utterance, broker=broker)
-            return replace(
-                fallback,
+            explicit_analysis = explicit_broker_understanding(utterance, broker)
+            return UnderstandingAnalysisDecision(
+                analysis=explicit_analysis or provider_unavailable_understanding(utterance, "model provider is unavailable"),
                 provider_name=self.provider_name,
                 model_name=self.model_name,
-                parse_valid=False,
-                fallback_used=True,
+                request_payload=request_payload,
+                response_payload={"analysis": asdict(explicit_analysis)} if explicit_analysis is not None else None,
+                parse_valid=explicit_analysis is not None,
+                fallback_used=explicit_analysis is not None,
                 error=str(exc),
             )
 
 
 class OpenAICompatibleUnderstandingTransitionProvider(UnderstandingTransitionProvider):
-    def __init__(self, fallback: UnderstandingTransitionProvider | None = None) -> None:
+    def __init__(self) -> None:
         self.config = load_openai_compatible_provider_config()
         self.provider_name = self.config.provider_name
         self.model_name = self.config.model_name or "unknown-model"
-        self.fallback = fallback or DeterministicUnderstandingTransitionProvider()
 
     def transition(
         self,
@@ -273,18 +223,11 @@ class OpenAICompatibleUnderstandingTransitionProvider(UnderstandingTransitionPro
         failure: FailureClassification,
     ) -> UnderstandingAnalysisDecision:
         if not self.config.configured or not understanding_model_guidance_enabled("VIBEOS_ENABLE_MODEL_UNDERSTANDING_TRANSITION"):
-            fallback = self.fallback.transition(
+            return self._fallback_transition(
                 understanding=understanding,
                 current_analysis=current_analysis,
                 decision=decision,
                 failure=failure,
-            )
-            return replace(
-                fallback,
-                provider_name=self.provider_name,
-                model_name=self.model_name,
-                parse_valid=False,
-                fallback_used=True,
                 error="missing_api_key_or_model_or_guidance_disabled",
             )
         host_hint = understanding_transition_host_hint(current_analysis, decision=decision, failure=failure)
@@ -317,20 +260,41 @@ class OpenAICompatibleUnderstandingTransitionProvider(UnderstandingTransitionPro
                 response_payload=response.response_payload,
             )
         except (urllib.error.URLError, TimeoutError, KeyError, ValueError, json.JSONDecodeError) as exc:
-            fallback = self.fallback.transition(
+            return self._fallback_transition(
                 understanding=understanding,
                 current_analysis=current_analysis,
                 decision=decision,
                 failure=failure,
-            )
-            return replace(
-                fallback,
-                provider_name=self.provider_name,
-                model_name=self.model_name,
-                parse_valid=False,
-                fallback_used=True,
                 error=str(exc),
             )
+
+    def _fallback_transition(
+        self,
+        *,
+        understanding: UnderstandingArtifact,
+        current_analysis: UtteranceAnalysis,
+        decision: ReplanDecision,
+        failure: FailureClassification,
+        error: str,
+    ) -> UnderstandingAnalysisDecision:
+        analysis = analysis_from_replan_signals(current_analysis, decision=decision, failure=failure) or current_analysis
+        host_hint = understanding_transition_host_hint(current_analysis, decision=decision, failure=failure)
+        return UnderstandingAnalysisDecision(
+            analysis=analysis,
+            provider_name=self.provider_name,
+            model_name=self.model_name,
+            request_payload=build_understanding_transition_request_payload(
+                understanding=understanding,
+                current_analysis=current_analysis,
+                decision=decision,
+                failure=failure,
+                host_hint=host_hint,
+            ),
+            response_payload={"analysis": asdict(analysis)},
+            parse_valid=False,
+            fallback_used=True,
+            error=error,
+        )
 
 
 def create_primary_understanding(
@@ -437,36 +401,35 @@ def _provider_intent_for_analysis(
     return parsed
 
 
-def deterministic_understanding_analysis(utterance: str, broker: CapturingIntentBroker) -> UtteranceAnalysis:
+def explicit_broker_understanding(utterance: str, broker: CapturingIntentBroker) -> UtteranceAnalysis | None:
+    wrapped = getattr(broker, "wrapped", None)
+    if wrapped is None or isinstance(wrapped, OpenAICompatibleIntentBroker):
+        return None
+    parsed = broker.parse(utterance)
+    if parsed.action == "unknown":
+        return None
+    return analysis_from_intent(utterance.strip(), parsed, confidence=0.88, provenance_parser="explicit_intent_broker")
+
+
+def provider_unavailable_understanding(utterance: str, message: str) -> UtteranceAnalysis:
     stripped = utterance.strip()
-    fast_path = rule_fast_path_analysis(
-        stripped,
-        broker=broker,
-        provenance_parser="rule_understanding_analysis",
-    )
-    if fast_path is not None:
-        return fast_path
-    intent = broker.parse(stripped)
-    if intent.action != "unknown":
-        return analysis_from_intent(stripped, intent, confidence=0.88, provenance_parser="provider_understanding_analysis")
-    browser_analysis = analyze_browser_request(stripped)
-    if browser_analysis is not None:
-        return replace(
-            browser_analysis,
-            provenance=make_provenance(stripped, "rule_understanding_analysis", browser_analysis.confidence),
-        )
-    media_analysis = analyze_media_request(stripped)
-    if media_analysis is not None:
-        return replace(
-            media_analysis,
-            provenance=make_provenance(stripped, "rule_understanding_analysis", media_analysis.confidence),
+    if not stripped:
+        return UtteranceAnalysis(
+            utterance=utterance,
+            type="clarification",
+            confidence=1.0,
+            domains=(),
+            explanation="The request is empty.",
+            task_spans=(),
+            provenance=None,
+            chat_response="Please provide a task.",
         )
     return UtteranceAnalysis(
         utterance=utterance,
         type="rejected",
         confidence=0.0,
         domains=(),
-        explanation=intent.reason or "Unsupported request.",
+        explanation=message,
         task_spans=(),
         provenance=None,
         chat_response=None,
@@ -683,10 +646,10 @@ def analysis_from_replan_signals(
         return replace(
             current_analysis,
             type="clarification",
-            domains=current_analysis.domains or ("browser",),
+            domains=current_analysis.domains,
             explanation=decision.reason or failure.message or current_analysis.explanation,
             task_spans=(),
-            chat_response=decision.reason or failure.message or "Which target should I use to continue?",
+            chat_response=decision.reason or failure.message or "What detail should I use to continue?",
         )
     return None
 

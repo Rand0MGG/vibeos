@@ -118,7 +118,7 @@ class StrategySelectionProvider:
 
 
 class DeterministicStrategySelectionProvider(StrategySelectionProvider):
-    provider_name = "rule_strategy_selector"
+    provider_name = "host_strategy_selector"
     model_name = "deterministic-local"
 
     def decide(

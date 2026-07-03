@@ -41,27 +41,11 @@ class ClarificationProvider:
         raise NotImplementedError
 
 
-class DeterministicClarificationProvider(ClarificationProvider):
-    provider_name = "rule_clarification_generator"
-    model_name = "deterministic-local"
-
-    def generate(self, *, utterance: str, analysis: UtteranceAnalysis) -> ClarificationDecision:
-        question = fallback_question(utterance=utterance, analysis=analysis)
-        return ClarificationDecision(
-            clarification_question_id=make_clarification_question_id(utterance, question),
-            question=question,
-            reason="generated the minimal clarification question from host-owned ambiguity signals",
-            provider_name=self.provider_name,
-            model_name=self.model_name,
-        )
-
-
 class OpenAICompatibleClarificationProvider(ClarificationProvider):
-    def __init__(self, fallback: ClarificationProvider | None = None) -> None:
+    def __init__(self) -> None:
         self.config = load_openai_compatible_provider_config()
         self.provider_name = self.config.provider_name
         self.model_name = self.config.model_name or "unknown-model"
-        self.fallback = fallback or DeterministicClarificationProvider()
 
     def generate(self, *, utterance: str, analysis: UtteranceAnalysis) -> ClarificationDecision:
         if not self.config.configured or not model_guidance_enabled("VIBEOS_ENABLE_MODEL_CLARIFICATION"):
@@ -93,11 +77,11 @@ class OpenAICompatibleClarificationProvider(ClarificationProvider):
             return self._fallback(utterance=utterance, analysis=analysis, error=str(exc))
 
     def _fallback(self, *, utterance: str, analysis: UtteranceAnalysis, error: str) -> ClarificationDecision:
-        fallback = self.fallback.generate(utterance=utterance, analysis=analysis)
+        question = host_hint_question(analysis)
         return ClarificationDecision(
-            clarification_question_id=make_clarification_question_id(utterance, fallback.question),
-            question=fallback.question,
-            reason=fallback.reason,
+            clarification_question_id=make_clarification_question_id(utterance, question),
+            question=question,
+            reason="generated the minimal clarification question from host-owned ambiguity signals",
             provider_name=self.provider_name,
             model_name=self.model_name,
             parse_valid=False,
@@ -112,23 +96,14 @@ def build_clarification_request_payload(*, utterance: str, analysis: UtteranceAn
         "analysis_type": analysis.type,
         "domains": list(analysis.domains),
         "explanation": analysis.explanation,
-        "host_hint_question": fallback_question(utterance=utterance, analysis=analysis),
+        "host_hint_question": host_hint_question(analysis),
         "requirement": "Ask for the smallest missing detail only.",
     }
 
 
-def fallback_question(*, utterance: str, analysis: UtteranceAnalysis) -> str:
+def host_hint_question(analysis: UtteranceAnalysis) -> str:
     if analysis.chat_response:
         return analysis.chat_response
-    lowered = utterance.strip().lower()
-    if analysis.domains == ("browser",):
-        if "search" in lowered or "搜索" in utterance:
-            return "What would you like to search for?"
-        return "Which site do you mean?"
-    if analysis.domains == ("media",):
-        return "What would you like to play?"
-    if not utterance.strip():
-        return "Please provide a task."
     return "What detail should I use to continue?"
 
 

@@ -1,13 +1,13 @@
 from vibeos.audit import AuditLog
 from vibeos.broker import CapabilityBroker
-from vibeos.intent import RuleIntentBroker
 from vibeos.models import CommandRequest, CommandResult, Intent
 from vibeos.reviews import ReviewStore
+from tests.support_intent_broker import FixtureIntentBroker
 
 
 def test_feature_flag_switches_to_goal_loop_path(monkeypatch) -> None:
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         audit=AuditLog(),
         reviews=ReviewStore(),
     )
@@ -35,7 +35,7 @@ def test_feature_flag_switches_to_goal_loop_path(monkeypatch) -> None:
 
 def test_legacy_task_plan_loop_remains_default_when_goal_loop_disabled(monkeypatch) -> None:
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         audit=AuditLog(),
         reviews=ReviewStore(),
     )

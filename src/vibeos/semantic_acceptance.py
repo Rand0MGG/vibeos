@@ -84,7 +84,7 @@ class SemanticAcceptanceProvider:
 
 
 class DeterministicSemanticAcceptanceProvider(SemanticAcceptanceProvider):
-    provider_name = "rule_semantic_acceptance"
+    provider_name = "host_semantic_acceptance"
     model_name = "deterministic-local"
 
     def summarize(self, *, input_payload: dict[str, Any]) -> SemanticEvidenceSummary:

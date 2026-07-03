@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 from urllib.parse import quote_plus, urlparse
@@ -23,7 +22,7 @@ from .domain_registry import DomainRegistry, RouteDefinition, default_domain_reg
 from .domain_router import route_domains
 from .goal_models import GoalSpec, GoalSynthesisResult
 from .goal_synthesizer import GoalSynthesisProvider, GoalSynthesizer, OpenAICompatibleGoalSynthesisProvider, goal_synthesis_payload
-from .intent import IntentBroker, OpenAICompatibleIntentBroker, infer_browser_intent_from_open_request
+from .intent import IntentBroker, OpenAICompatibleIntentBroker
 from .models import Intent, utc_now_iso
 from .nlu import domain_for_action
 from .observation import build_capability_exposure, planner_context_payload, resolve_observation_request
@@ -56,9 +55,6 @@ from .understanding import (
 from .verifiers import default_verifier_registry
 
 
-OPEN_CN_PREFIX = "\u6253\u5f00 "
-SEARCH_CN_PREFIX = "\u641c\u7d22 "
-LISTEN_CN_PREFIX = "\u6211\u60f3\u542c "
 UNAVAILABLE_LOCAL_CAPABILITIES = {"media.search", "media.play", "media.pause"}
 
 
@@ -618,13 +614,6 @@ def normalize_intent_to_task_plan(
     )
 
 
-def media_candidate_plans(utterance: str, span: TaskSpan) -> list[TaskPlan]:
-    query = extract_media_query(span.text)
-    if not query:
-        return []
-    return [music_app_media_plan(utterance, span, query), browser_media_plan(utterance, span, query)]
-
-
 def music_app_media_plan(utterance: str, span: TaskSpan, query: str) -> TaskPlan:
     route = TaskRoute(
         id="media_play_route",
@@ -753,11 +742,9 @@ def build_browser_open_url_plan(
     intent_broker: IntentBroker | None = None,
 ) -> TaskPlan | None:
     intent = structured_capability_intent(span.text, intent_broker)
-    uri = ""
-    if intent.action == "browser.open_url":
-        uri = str(canonicalize_target_for_action(intent.action, intent.target).get("uri") or "")
-    if not uri:
-        uri = extract_browser_url(span.text)
+    if intent.action != "browser.open_url":
+        return None
+    uri = str(canonicalize_target_for_action(intent.action, intent.target).get("uri") or "")
     if not uri:
         return None
     route = task_route_from_definition(route_definition, "Open a URL in the browser.")
@@ -791,11 +778,9 @@ def build_browser_search_web_plan(
     intent_broker: IntentBroker | None = None,
 ) -> TaskPlan | None:
     intent = structured_capability_intent(span.text, intent_broker)
-    query = ""
-    if intent.action == "browser.search_web":
-        query = str(canonicalize_target_for_action(intent.action, intent.target).get("query") or "")
-    if not query:
-        query = extract_browser_search_query(span.text)
+    if intent.action != "browser.search_web":
+        return None
+    query = str(canonicalize_target_for_action(intent.action, intent.target).get("query") or "")
     if not query:
         return None
     route = task_route_from_definition(route_definition, "Search the web in the browser.")
@@ -829,17 +814,13 @@ def build_browser_site_search_plan(
     intent_broker: IntentBroker | None = None,
 ) -> TaskPlan | None:
     intent = structured_capability_intent(span.text, intent_broker)
-    site = ""
-    query = ""
-    if intent.action == "browser.open_site_search":
-        target = canonicalize_target_for_action(intent.action, intent.target)
-        site = str(target.get("site") or "")
-        query = str(target.get("query") or "")
+    if intent.action != "browser.open_site_search":
+        return None
+    target = canonicalize_target_for_action(intent.action, intent.target)
+    site = str(target.get("site") or "")
+    query = str(target.get("query") or "")
     if not site or not query:
-        site_search = extract_site_search(span.text)
-        if site_search is None:
-            return None
-        site, query = site_search
+        return None
     route = task_route_from_definition(route_definition, "Search a site in the browser.")
     step = TaskStep(
         id="browser_site_search",
@@ -870,8 +851,10 @@ def build_media_play_plan(
     route_definition: RouteDefinition,
     intent_broker: IntentBroker | None = None,
 ) -> TaskPlan | None:
-    del intent_broker
-    query = extract_media_query(span.text)
+    intent = structured_capability_intent(span.text, intent_broker)
+    if intent.action != "media.play":
+        return None
+    query = str(canonicalize_target_for_action(intent.action, intent.target).get("query") or "")
     if not query:
         return None
     del route_definition
@@ -884,8 +867,10 @@ def build_media_search_plan(
     route_definition: RouteDefinition,
     intent_broker: IntentBroker | None = None,
 ) -> TaskPlan | None:
-    del intent_broker
-    query = extract_media_search_query(span.text)
+    intent = structured_capability_intent(span.text, intent_broker)
+    if intent.action != "media.search":
+        return None
+    query = str(canonicalize_target_for_action(intent.action, intent.target).get("query") or "")
     if not query:
         return None
     route = task_route_from_definition(route_definition, "Search media through the explicit media domain.")
@@ -909,8 +894,8 @@ def build_media_pause_plan(
     route_definition: RouteDefinition,
     intent_broker: IntentBroker | None = None,
 ) -> TaskPlan | None:
-    del intent_broker
-    if not is_media_pause_request(span.text):
+    intent = structured_capability_intent(span.text, intent_broker)
+    if intent.action != "media.pause":
         return None
     route = task_route_from_definition(route_definition, "Pause media through the explicit media domain.")
     step = TaskStep(
@@ -933,8 +918,10 @@ def build_browser_media_fallback_plan(
     route_definition: RouteDefinition,
     intent_broker: IntentBroker | None = None,
 ) -> TaskPlan | None:
-    del intent_broker
-    query = extract_media_query(span.text)
+    intent = structured_capability_intent(span.text, intent_broker)
+    if intent.action != "media.play":
+        return None
+    query = str(canonicalize_target_for_action(intent.action, intent.target).get("query") or "")
     if not query:
         return None
     del route_definition
@@ -1473,63 +1460,6 @@ def expected_state_for_intent(intent: Intent) -> ExpectedState:
     if intent.action == "media.play":
         return ExpectedState(kind="media_playing", fields={"query": str(intent.target.get("query") or "")})
     return ExpectedState(kind="system_status_requested")
-
-
-def extract_media_query(text: str) -> str:
-    lowered = text.lower().strip()
-    prefixes = ("play ", "listen to ", LISTEN_CN_PREFIX, "\u64ad\u653e ", "\u653e\u4e00\u9996 ")
-    for prefix in prefixes:
-        if lowered.startswith(prefix.lower()) or text.startswith(prefix):
-            return text[len(prefix) :].strip()
-    return ""
-
-
-def extract_media_search_query(text: str) -> str:
-    lowered = text.lower().strip()
-    prefixes = ("search media for ", "search music for ", "find media ", "find music ")
-    for prefix in prefixes:
-        if lowered.startswith(prefix):
-            return text[len(prefix) :].strip()
-    return ""
-
-
-def is_media_pause_request(text: str) -> bool:
-    lowered = text.lower().strip()
-    return lowered in {"pause", "pause music", "pause playback"} or lowered.startswith("pause ")
-
-
-def extract_browser_url(text: str) -> str:
-    stripped = text.strip()
-    lowered = stripped.lower()
-    if lowered.startswith("open https://"):
-        return stripped.split(maxsplit=1)[1].strip()
-    if stripped.startswith(OPEN_CN_PREFIX + "https://"):
-        return stripped[len(OPEN_CN_PREFIX) :].strip()
-    browser_intent = infer_browser_intent_from_open_request(stripped)
-    if browser_intent is not None and browser_intent.action == "browser.open_url":
-        return str(browser_intent.target.get("uri") or "")
-    return ""
-
-
-def extract_browser_search_query(text: str) -> str:
-    stripped = text.strip()
-    lowered = stripped.lower()
-    if lowered.startswith("search web for "):
-        return stripped[len("search web for ") :].strip()
-    if stripped.startswith(SEARCH_CN_PREFIX):
-        return stripped[len(SEARCH_CN_PREFIX) :].strip()
-    browser_intent = infer_browser_intent_from_open_request(stripped)
-    if browser_intent is not None and browser_intent.action == "browser.search_web":
-        return str(browser_intent.target.get("query") or "")
-    return ""
-
-
-def extract_site_search(text: str) -> tuple[str, str] | None:
-    stripped = text.strip()
-    match = re.match(r"^search\s+([A-Za-z0-9.-]+\.[A-Za-z]{2,})\s+for\s+(.+)$", stripped, re.IGNORECASE)
-    if not match:
-        return None
-    return match.group(1), match.group(2).strip()
 
 
 def infer_browser_query_uri(query: str) -> str:

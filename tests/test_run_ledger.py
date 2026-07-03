@@ -9,7 +9,7 @@ def test_run_ledger_appends_strategy_decision_and_attempt() -> None:
         reason="selected highest scoring strategy candidate",
         selected_strategy_id="strategy_1",
         strategy_decision_id="sdec_1",
-        provider_name="rule_strategy_selector",
+        provider_name="host_strategy_selector",
         model_name="deterministic-local",
         constraints=StrategyConstraint(do_not_repeat_route_ids=("route_old",)),
         failure_class="semantic_mismatch",
@@ -39,7 +39,7 @@ def test_run_ledger_appends_strategy_decision_and_attempt() -> None:
 
     assert updated.strategy_history[0].strategy_id == "strategy_1"
     assert updated.strategy_history[0].strategy_decision_id == "sdec_1"
-    assert updated.strategy_history[0].provider_name == "rule_strategy_selector"
+    assert updated.strategy_history[0].provider_name == "host_strategy_selector"
     assert updated.strategy_history[0].constraints.do_not_repeat_route_ids == ("route_old",)
     assert updated.attempts[0].interaction_surface == "structured_ui_action"
     assert updated.attempts[0].understanding_id == "und_1"

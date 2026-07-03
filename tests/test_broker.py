@@ -8,7 +8,7 @@ from vibeos.audit import AuditLog
 from vibeos.browser_state import record_browser_observation
 from vibeos.broker import CapabilityBroker
 from vibeos.candidate_selection import CandidateSelectionDecision, CandidateSet
-from vibeos.intent import IntentBroker, RuleIntentBroker
+from vibeos.intent import IntentBroker
 from vibeos.loop_models import GoalLoopResult, LoopObservation, LoopPolicy, LoopState
 from vibeos.models import AppEntry, CommandRequest, Intent, PermissionReview, WindowEntry
 from vibeos.planner import PlanningArtifacts
@@ -16,6 +16,7 @@ from vibeos.portal import PortalAdapter
 from vibeos.reviews import ReviewStore
 from vibeos.task_models import DisplayFields, PlanAttempt, PlanExecutionResult, StepExecutionResult, StepReviewRecord, TaskPlan, TaskRoute, TaskStep
 from vibeos.understanding import default_understanding_host_hint, validated_understanding_from_payload
+from tests.support_intent_broker import FixtureIntentBroker
 
 
 class FakeApps(AppRegistry):
@@ -89,7 +90,7 @@ class StaticIntentBroker(IntentBroker):
 
 def test_broker_dry_run_open_app() -> None:
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         apps=FakeApps(),
         audit=AuditLog(),
     )
@@ -103,7 +104,7 @@ def test_broker_dry_run_open_app() -> None:
 
 def test_broker_rejects_delete_request() -> None:
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         apps=FakeApps(),
         audit=AuditLog(),
     )
@@ -115,7 +116,7 @@ def test_broker_rejects_delete_request() -> None:
 def test_l2_window_close_requires_review() -> None:
     review_path = make_review_path("review-required")
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         apps=FakeApps(),
         windows=FakeWindows(),
         audit=AuditLog(),
@@ -130,7 +131,7 @@ def test_l2_window_close_requires_review() -> None:
 
 def test_l2_direct_approval_without_review_id_is_rejected() -> None:
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         apps=FakeApps(),
         windows=FakeWindows(),
         audit=AuditLog(),
@@ -159,7 +160,7 @@ def test_audit_records_review_and_approval() -> None:
     audit = AuditLog()
     reviews = ReviewStore(make_review_path("audit-review"))
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         apps=FakeApps(),
         windows=FakeWindows(),
         audit=audit,
@@ -177,7 +178,7 @@ def test_audit_records_review_and_approval() -> None:
 def test_audit_records_request_transport() -> None:
     audit = AuditLog(make_review_path("audit-transport"))
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         apps=FakeApps(),
         audit=audit,
     )
@@ -192,7 +193,7 @@ def test_audit_records_request_transport() -> None:
 def test_approve_review_executes_stored_intent_without_reparse() -> None:
     review_path = make_review_path("approve-review")
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         apps=FakeApps(),
         windows=FakeWindows(),
         audit=AuditLog(),
@@ -210,7 +211,7 @@ def test_approve_review_executes_stored_intent_without_reparse() -> None:
 def test_approve_review_is_consumed_after_execution() -> None:
     review_path = make_review_path("consume-review")
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         apps=FakeApps(),
         windows=FakeWindows(),
         audit=AuditLog(),
@@ -230,7 +231,7 @@ def test_failed_approved_review_is_not_consumed_and_can_retry() -> None:
     windows = RetryWindows()
     reviews = ReviewStore(review_path)
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         apps=FakeApps(),
         windows=windows,
         audit=AuditLog(),
@@ -251,7 +252,7 @@ def test_approve_review_dry_run_does_not_consume() -> None:
     review_path = make_review_path("dry-run-review")
     reviews = ReviewStore(review_path)
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         apps=FakeApps(),
         windows=FakeWindows(),
         audit=AuditLog(),
@@ -273,7 +274,7 @@ def test_existing_capability_path_can_suspend_and_resume(monkeypatch) -> None:
     reviews = ReviewStore(review_path)
     portal = ObservedPortal()
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         portal=portal,
         audit=AuditLog(),
         reviews=reviews,
@@ -311,7 +312,7 @@ def test_review_required_still_originates_from_step_safety_boundary(monkeypatch)
     reviews = ReviewStore(review_path)
     portal = ObservedPortal()
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         portal=portal,
         audit=AuditLog(),
         reviews=reviews,
@@ -352,7 +353,7 @@ def test_review_required_still_originates_from_step_safety_boundary(monkeypatch)
 
 def test_sensitive_search_review_overrides_default_allow() -> None:
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         audit=AuditLog(),
         reviews=ReviewStore(),
     )
@@ -384,7 +385,7 @@ def test_sensitive_search_review_overrides_default_allow() -> None:
 
 def test_loop_policy_can_disable_contextual_search_review_escalation() -> None:
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         audit=AuditLog(),
         reviews=ReviewStore(),
         loop_policy=LoopPolicy(review_escalation_enabled=False),
@@ -415,7 +416,7 @@ def test_loop_policy_can_disable_contextual_search_review_escalation() -> None:
 
 def test_loop_decision_maps_back_to_public_runtime_statuses() -> None:
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         audit=AuditLog(),
         reviews=ReviewStore(),
     )
@@ -522,7 +523,7 @@ def test_broker_provide_input_resumes_user_input_review(monkeypatch) -> None:
     reviews = ReviewStore(review_path)
     portal = ObservedPortal()
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         portal=portal,
         audit=AuditLog(),
         reviews=reviews,
@@ -586,7 +587,7 @@ def test_broker_provide_input_resumes_user_input_review(monkeypatch) -> None:
         assert provided_understanding is not None
         assert provided_understanding.primary_understanding_id == "und_user_input"
         assert provided_understanding.source_understanding_id == "und_user_input"
-        assert provided_understanding.artifact_role == "refinement"
+        assert provided_understanding.artifact_role == "supersession"
         candidate_set = CandidateSet(
             candidate_set_id="cset_resumed",
             understanding_id=provided_understanding.primary_understanding_id,
@@ -651,7 +652,7 @@ def test_broker_provide_input_resumes_user_input_review(monkeypatch) -> None:
     assert result.result["attempts"][1]["route_decision_id"] == "rdec_resumed"
     assert result.result["understanding"]["primary_understanding_id"] == "und_user_input"
     assert result.result["understanding"]["source_understanding_id"] == "und_user_input"
-    assert result.result["understanding"]["artifact_role"] == "refinement"
+    assert result.result["understanding"]["artifact_role"] == "supersession"
     assert portal.open_calls == 1
     assert loaded is not None
     assert loaded.status == "consumed"
@@ -665,7 +666,7 @@ def test_user_input_resumes_loop_snapshot(monkeypatch) -> None:
 def test_reject_review_blocks_later_approval() -> None:
     review_path = make_review_path("reject-review")
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         apps=FakeApps(),
         windows=FakeWindows(),
         audit=AuditLog(),
@@ -684,7 +685,7 @@ def test_reject_review_blocks_later_approval() -> None:
 def test_expired_review_cannot_be_approved() -> None:
     review_path = make_review_path("expired-review")
     broker = CapabilityBroker(
-        intent_broker=RuleIntentBroker(),
+        intent_broker=FixtureIntentBroker(),
         apps=FakeApps(),
         windows=FakeWindows(),
         audit=AuditLog(),
