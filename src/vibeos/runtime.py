@@ -81,9 +81,15 @@ class LocalRuntime:
 class DBusDaemonRuntime:
     transport_name = "dbus"
 
-    def __init__(self, client: "DBusDaemonClient", audit: AuditLog | None = None) -> None:
+    def __init__(
+        self,
+        client: "DBusDaemonClient",
+        audit: AuditLog | None = None,
+        http_fallback_client: "HTTPDaemonClient | None" = None,
+    ) -> None:
         self.client = client
         self.audit = audit or AuditLog()
+        self.http_fallback_client = http_fallback_client
 
     def handle(self, request: CommandRequest) -> CommandResult:
         payload = {
@@ -100,6 +106,9 @@ class DBusDaemonRuntime:
         try:
             response = self.client.request_payload(payload)
         except RuntimeError as exc:
+            fallback = self._maybe_fallback_to_http(request, str(exc))
+            if fallback is not None:
+                return fallback
             return self._record_transport_failure(request, str(exc))
         return with_transport(command_result_from_payload(response), self.transport_name)
 
@@ -119,7 +128,11 @@ class DBusDaemonRuntime:
         try:
             response = self.client.request_payload({"review_id": review_id, "reject": True})
         except RuntimeError as exc:
-            return self._record_transport_failure(CommandRequest("", review_id=review_id, transport=self.transport_name), str(exc))
+            request = CommandRequest("", review_id=review_id, transport=self.transport_name)
+            fallback = self._maybe_fallback_to_http(request, str(exc))
+            if fallback is not None:
+                return fallback
+            return self._record_transport_failure(request, str(exc))
         return with_transport(command_result_from_payload(response), self.transport_name)
 
     def audit_tail(self, count: int = 20) -> list[dict[str, Any]]:
@@ -145,6 +158,16 @@ class DBusDaemonRuntime:
             overall_status=result.overall_status,
         )
         return replace(result, audit_id=audit_id)
+
+    def _maybe_fallback_to_http(self, request: CommandRequest, message: str) -> CommandResult | None:
+        if runtime_mode() != "auto":
+            return None
+        client = self.http_fallback_client
+        if client is None:
+            client = HTTPDaemonClient()
+            if not client.is_available():
+                return None
+        return HTTPDaemonRuntime(client, audit=self.audit).handle(replace(request, transport="http"))
 
 
 class HTTPDaemonRuntime:

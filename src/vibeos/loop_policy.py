@@ -1,19 +1,10 @@
 from __future__ import annotations
 
-import os
 from dataclasses import replace
 
 from .loop_models import LoopObservation, LoopPolicy, LoopState, ObservationLevel
 from .models import PermissionReview
 from .task_models import FailureClassification, ReplanDecision
-
-
-TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
-
-
-def goal_loop_enabled() -> bool:
-    raw = os.environ.get("VIBEOS_ENABLE_GOAL_LOOP", "0").strip().lower()
-    return raw in TRUTHY_ENV_VALUES
 
 
 def default_loop_policy() -> LoopPolicy:

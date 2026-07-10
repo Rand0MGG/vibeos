@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
@@ -22,6 +23,22 @@ def test_review_store_round_trips_pending_review() -> None:
     assert loaded.status == "pending"
     assert loaded.intent.action == "clipboard.write"
     assert loaded.expires_at
+
+
+def test_review_state_uses_sqlite_as_the_authoritative_store() -> None:
+    path = make_review_path("sqlite-authority")
+    store = ReviewStore(path)
+    request = store.create(
+        "close Firefox",
+        Intent(action="window.close", target={"name": "Firefox"}),
+        PermissionPolicy().review(Intent(action="window.close", target={"name": "Firefox"})),
+    )
+
+    assert store.db_path.exists()
+    assert not path.exists()
+    reloaded = ReviewStore(path).get(request.review_id)
+    assert reloaded
+    assert reloaded.status == "pending"
 
 
 def test_review_store_marks_approved() -> None:
@@ -132,6 +149,33 @@ def test_review_store_treats_legacy_reviews_without_expiration_as_expired() -> N
 
     assert loaded
     assert loaded.status == "expired"
+
+
+def test_review_execution_claim_is_atomic_across_store_instances() -> None:
+    path = make_review_path("execution-claim")
+    store = ReviewStore(path)
+    request = store.create(
+        "close Firefox",
+        Intent(action="window.close", target={"name": "Firefox"}),
+        PermissionPolicy().review(Intent(action="window.close", target={"name": "Firefox"})),
+    )
+    assert store.approve(request.review_id)
+
+    def claim() -> bool:
+        return ReviewStore(path).claim_execution(request.review_id)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        claims = list(executor.map(lambda _index: claim(), range(8)))
+
+    assert claims.count(True) == 1
+    loaded = store.get(request.review_id)
+    assert loaded
+    assert loaded.status == "executing"
+
+    released = store.release_execution(request.review_id)
+    assert released
+    assert released.status == "approved"
+    assert store.claim_execution(request.review_id) is True
 
 
 def make_review_path(name: str) -> Path:

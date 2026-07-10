@@ -149,6 +149,7 @@ def with_scheduler_batch(result: StepExecutionResult, batch: tuple[TaskStep, ...
         adapter=result.adapter,
         capability_id=result.capability_id,
         attempt=result.attempt,
+        attempt_id=result.attempt_id,
         duration_ms=result.duration_ms,
         adapter_status=result.adapter_status,
         diagnostics=diagnostics,

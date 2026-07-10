@@ -1,10 +1,49 @@
 import asyncio
 import json
+import traceback
 from dataclasses import asdict
 from typing import Callable
 
 from .broker import CapabilityBroker
-from .models import CommandRequest
+from .models import CommandRequest, CommandResult, Intent
+
+
+def serialize_command_result(result: CommandResult) -> str:
+    return json.dumps(asdict(result), ensure_ascii=False)
+
+
+def safe_command_result(
+    builder: Callable[[], CommandResult],
+    *,
+    request: CommandRequest | None = None,
+) -> str:
+    try:
+        return serialize_command_result(builder())
+    except Exception as exc:
+        traceback.print_exc()
+        message = f"daemon command failed: {exc}"
+        detail: dict[str, object] = {
+            "error": "daemon_internal_error",
+            "transport": "dbus",
+            "exception_type": type(exc).__name__,
+        }
+        if request is not None:
+            if request.utterance:
+                detail["utterance"] = request.utterance
+            if request.review_id is not None:
+                detail["review_id"] = request.review_id
+        return serialize_command_result(
+            CommandResult(
+                status="failed",
+                intent=Intent.unknown("daemon command failed"),
+                result=detail,
+                transport="dbus",
+                message=message,
+                execution_status="failed",
+                acceptance_status="skipped",
+                overall_status="failed",
+            )
+        )
 
 
 def run_dbus_service(
@@ -25,8 +64,8 @@ def run_dbus_service(
 
         @method()
         def Command(self, text: "s") -> "s":
-            result = broker.handle(CommandRequest(text, transport="dbus"))
-            return json.dumps(asdict(result), ensure_ascii=False)
+            request = CommandRequest(text, transport="dbus")
+            return safe_command_result(lambda: broker.handle(request), request=request)
 
         @method()
         def CommandRequest(self, payload_json: "s") -> "s":
@@ -38,21 +77,20 @@ def run_dbus_service(
             review_id = payload.get("review_id")
             supplemental_input = payload.get("supplemental_input")
             if review_id and payload.get("reject"):
-                result = broker.reject_review(str(review_id), transport="dbus")
+                request = CommandRequest("", review_id=str(review_id), transport="dbus")
+                return safe_command_result(lambda: broker.reject_review(str(review_id), transport="dbus"), request=request)
             else:
-                result = broker.handle(
-                    CommandRequest(
-                        utterance=utterance,
-                        mode=str(payload.get("mode", "auto_low_risk")),
-                        dry_run=bool(payload.get("dry_run", False)),
-                        approve=bool(payload.get("approve", False)),
-                        review_id=str(review_id) if review_id is not None else None,
-                        supplemental_input=str(supplemental_input) if supplemental_input is not None else None,
-                        debug=bool(payload.get("debug", False)),
-                        transport="dbus",
-                    )
+                request = CommandRequest(
+                    utterance=utterance,
+                    mode=str(payload.get("mode", "auto_low_risk")),
+                    dry_run=bool(payload.get("dry_run", False)),
+                    approve=bool(payload.get("approve", False)),
+                    review_id=str(review_id) if review_id is not None else None,
+                    supplemental_input=str(supplemental_input) if supplemental_input is not None else None,
+                    debug=bool(payload.get("debug", False)),
+                    transport="dbus",
                 )
-            return json.dumps(asdict(result), ensure_ascii=False)
+                return safe_command_result(lambda: broker.handle(request), request=request)
 
         @method()
         def AppsList(self) -> "s":
@@ -64,13 +102,13 @@ def run_dbus_service(
 
         @method()
         def ApproveReview(self, review_id: "s") -> "s":
-            result = broker.handle(CommandRequest("", review_id=review_id, approve=True, transport="dbus"))
-            return json.dumps(asdict(result), ensure_ascii=False)
+            request = CommandRequest("", review_id=review_id, approve=True, transport="dbus")
+            return safe_command_result(lambda: broker.handle(request), request=request)
 
         @method()
         def RejectReview(self, review_id: "s") -> "s":
-            result = broker.reject_review(review_id, transport="dbus")
-            return json.dumps(asdict(result), ensure_ascii=False)
+            request = CommandRequest("", review_id=review_id, transport="dbus")
+            return safe_command_result(lambda: broker.reject_review(review_id, transport="dbus"), request=request)
 
         @method()
         def Capabilities(self) -> "s":

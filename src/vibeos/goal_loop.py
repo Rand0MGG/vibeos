@@ -23,6 +23,7 @@ class GoalLoop:
         plan_again: Callable[[Any, CommandRequest, tuple[str, ...], tuple[str, ...], tuple[str, ...]], Any],
         review_step: Callable[[TaskPlan, TaskStep, Any | None], tuple[PermissionReview, Any]],
         execute_step: Callable[[TaskPlan, TaskStep, CommandRequest, str], StepExecutionResult],
+        step_progressed: Callable[[TaskPlan, TaskStep, StepExecutionResult, Any, Any, CommandRequest], bool] | None = None,
         assess_plan_execution: Callable[[TaskPlan, tuple[StepExecutionResult, ...], CommandRequest, str, str | None, str | None, str | None], PlanExecutionResult],
         classify_failure: Callable[[TaskPlan, PlanExecutionResult], FailureClassification],
         decide_replan: Callable[[str, TaskPlan, tuple[Any, ...], FailureClassification, str | None, str | None, tuple[str, ...]], ReplanDecision],
@@ -37,6 +38,7 @@ class GoalLoop:
         self.plan_again = plan_again
         self.review_step = review_step
         self.execute_step = execute_step
+        self.step_progressed = step_progressed or _default_step_progressed
         self.assess_plan_execution = assess_plan_execution
         self.classify_failure = classify_failure
         self.decide_replan = decide_replan
@@ -434,7 +436,14 @@ class GoalLoop:
             )
 
             state = replace(state, stage="verify")
-            progress_made = step_result.status == "succeeded" and observation_progressed(pre_observation, post_observation)
+            progress_made = self.step_progressed(
+                plan,
+                next_step,
+                step_result,
+                pre_observation,
+                post_observation,
+                request,
+            )
             if step_result.status == "succeeded" and progress_made:
                 attempts_list.append(
                     _attempt_record(
@@ -630,6 +639,26 @@ def _next_step(plan: TaskPlan, completed_step_ids: tuple[str, ...]) -> TaskStep 
     return None
 
 
+def _default_step_progressed(
+    _plan: TaskPlan,
+    _step: TaskStep,
+    step_result: StepExecutionResult,
+    pre_observation: Any,
+    post_observation: Any,
+    request: CommandRequest,
+) -> bool:
+    """Default to evidence from observation, with dry-runs completing by design.
+
+    The broker may provide a narrower route-aware policy. Keeping this default
+    strict is important for direct GoalLoop users that do not declare a route
+    acceptance contract.
+    """
+
+    return step_result.status == "succeeded" and (
+        request.dry_run or observation_progressed(pre_observation, post_observation)
+    )
+
+
 def _partial_execution(plan: TaskPlan, step_result: StepExecutionResult, progress_made: bool) -> PlanExecutionResult:
     acceptance_result: dict[str, Any] | None = None
     acceptance_status = "skipped"
@@ -655,7 +684,11 @@ def _partial_execution(plan: TaskPlan, step_result: StepExecutionResult, progres
 
 def _selected_target(step_results: list[StepExecutionResult]) -> str | None:
     for step in reversed(step_results):
-        target = step.result.get("selected_target") or step.result.get("uri")
+        target = (
+            step.diagnostics.get("selected_target")
+            or step.result.get("selected_target")
+            or step.result.get("uri")
+        )
         if target is not None:
             return str(target)
     return None
@@ -676,7 +709,7 @@ def _make_snapshot_id(run_id: str, goal_id: str) -> str:
 
 
 def _make_attempt_id(run_id: str, attempt_index: int, step_id: str) -> str:
-    digest = sha256(f"{run_id}:{attempt_index}:{step_id}:{utc_now_iso()}".encode("utf-8")).hexdigest()[:10]
+    digest = sha256(f"{run_id}:{attempt_index}:{step_id}".encode("utf-8")).hexdigest()[:10]
     return f"attempt_{digest}"
 
 
@@ -910,6 +943,7 @@ def step_result_from_payload(payload: dict[str, Any]) -> StepExecutionResult:
         adapter=str(payload["adapter"]) if payload.get("adapter") is not None else None,
         capability_id=str(payload["capability_id"]) if payload.get("capability_id") is not None else None,
         attempt=int(payload.get("attempt", 1)),
+        attempt_id=str(payload["attempt_id"]) if payload.get("attempt_id") is not None else None,
         duration_ms=int(payload["duration_ms"]) if payload.get("duration_ms") is not None else None,
         adapter_status=str(payload["adapter_status"]) if payload.get("adapter_status") is not None else None,
         diagnostics=dict(payload.get("diagnostics", {})),

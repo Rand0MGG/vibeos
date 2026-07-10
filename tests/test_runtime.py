@@ -442,6 +442,36 @@ def test_dbus_runtime_returns_structured_transport_timeout() -> None:
     assert runtime.audit_tail(5)[-1]["audit_id"] == result.audit_id
 
 
+def test_dbus_runtime_falls_back_to_http_in_auto_mode(monkeypatch) -> None:
+    monkeypatch.delenv("VIBEOS_RUNTIME", raising=False)
+    runtime = DBusDaemonRuntime(
+        FailingDaemonClient(),
+        audit=AuditLog(make_audit_path("dbus-http-fallback")),
+        http_fallback_client=FakeHttpClient(),
+    )
+
+    result = runtime.handle(CommandRequest("list windows"))
+
+    assert result.status == "executed"
+    assert result.transport == "http"
+    assert result.intent.action == "window.list"
+
+
+def test_dbus_runtime_does_not_fall_back_when_dbus_explicit(monkeypatch) -> None:
+    monkeypatch.setenv("VIBEOS_RUNTIME", "dbus")
+    runtime = DBusDaemonRuntime(
+        FailingDaemonClient(),
+        audit=AuditLog(make_audit_path("dbus-no-http-fallback")),
+        http_fallback_client=FakeHttpClient(),
+    )
+
+    result = runtime.handle(CommandRequest("open browser"))
+
+    assert result.status == "failed"
+    assert result.transport == "dbus"
+    assert result.result["error"] == "transport_timeout"
+
+
 def test_http_runtime_returns_structured_transport_failure() -> None:
     runtime = HTTPDaemonRuntime(FailingHttpClient(), audit=AuditLog(make_audit_path("http-transport-failure")))
 

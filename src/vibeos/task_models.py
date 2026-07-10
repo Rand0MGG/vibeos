@@ -179,6 +179,7 @@ class StepExecutionResult:
     adapter: str | None = None
     capability_id: str | None = None
     attempt: int = 1
+    attempt_id: str | None = None
     duration_ms: int | None = None
     adapter_status: str | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)

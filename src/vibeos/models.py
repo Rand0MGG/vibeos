@@ -92,7 +92,7 @@ class ReviewRequest:
     intent: Intent
     review: PermissionReview
     created_at: str
-    status: Literal["pending", "approved", "rejected", "consumed", "expired", "provided"] = "pending"
+    status: Literal["pending", "approved", "executing", "rejected", "consumed", "expired", "provided"] = "pending"
     expires_at: str | None = None
     review_kind: Literal["intent", "plan", "loop", "user_input"] = "intent"
     plan_id: str | None = None

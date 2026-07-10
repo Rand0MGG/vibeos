@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from contextlib import contextmanager
 from dataclasses import asdict
 
 from .broker import CapabilityBroker
 from .doctor import SessionDoctor
+from .intent import RuleIntentBroker
 from .models import CommandRequest
 from .planner import plan_payload
 from .runtime import LocalRuntime, RuntimeSelectionError, build_runtime
@@ -21,11 +24,13 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("utterance")
     ask.add_argument("--dry-run", action="store_true", help="parse and resolve without executing capabilities")
     ask.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    ask.add_argument("--offline", action="store_true", help="force the deterministic local parser path")
     ask.add_argument("--debug", action="store_true", help="include raw provider payloads in debug_trace")
 
     plan = subparsers.add_parser("plan", help="build a v0.3 task plan without executing it")
     plan.add_argument("utterance")
     plan.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    plan.add_argument("--offline", action="store_true", help="force the deterministic local parser path")
     plan.add_argument("--debug", action="store_true", help="include raw provider payloads in debug_trace")
 
     approve = subparsers.add_parser("approve", help="approve and execute a pending L2 review request")
@@ -78,8 +83,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+OFFLINE_MODEL_GUIDANCE_FLAGS = (
+    "VIBEOS_ENABLE_MODEL_UNDERSTANDING",
+    "VIBEOS_ENABLE_MODEL_UNDERSTANDING_TRANSITION",
+    "VIBEOS_ENABLE_MODEL_GOAL_SYNTHESIS",
+    "VIBEOS_ENABLE_MODEL_ROUTE_SELECTION",
+    "VIBEOS_ENABLE_MODEL_CLARIFICATION",
+    "VIBEOS_ENABLE_MODEL_REPLANNING",
+    "VIBEOS_ENABLE_MODEL_SEMANTIC_ACCEPTANCE",
+    "VIBEOS_ENABLE_MODEL_STRATEGY_SELECTION",
+)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    with offline_model_guidance_disabled(getattr(args, "offline", False)):
+        return _run(args)
+
+
+def _run(args: argparse.Namespace) -> int:
 
     if args.command == "doctor":
         report = SessionDoctor().run()
@@ -135,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
             debug=args.debug,
         )
         with bind_trace_session(trace_session):
-            payload = plan_payload(args.utterance, debug=args.debug)
+            payload = plan_payload(args.utterance, intent_broker=RuleIntentBroker() if args.offline else None, debug=args.debug)
         goal_synthesis = payload.get("goal_synthesis") if isinstance(payload.get("goal_synthesis"), dict) else {}
         goal_spec = goal_synthesis.get("goal_spec") if isinstance(goal_synthesis.get("goal_spec"), dict) else {}
         trace_session.finalize(
@@ -148,10 +170,13 @@ def main(argv: list[str] | None = None) -> int:
         print_plan_payload(payload, json_output=args.json)
         return 0 if payload["status"] == "validated" else 1
 
-    try:
-        runtime = build_runtime()
-    except RuntimeSelectionError as exc:
-        return print_runtime_error(args, exc)
+    if args.command == "ask" and args.offline:
+        runtime = LocalRuntime(CapabilityBroker(intent_broker=RuleIntentBroker()))
+    else:
+        try:
+            runtime = build_runtime()
+        except RuntimeSelectionError as exc:
+            return print_runtime_error(args, exc)
 
     if args.command == "audit" and args.audit_command == "tail":
         print(json.dumps(runtime.audit_tail(args.count), ensure_ascii=False, indent=2))
@@ -205,6 +230,24 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.message == "review request rejected by user" else 1
 
     return 2
+
+
+@contextmanager
+def offline_model_guidance_disabled(enabled: bool):
+    if not enabled:
+        yield
+        return
+    previous = {name: os.environ.get(name) for name in OFFLINE_MODEL_GUIDANCE_FLAGS}
+    try:
+        for name in OFFLINE_MODEL_GUIDANCE_FLAGS:
+            os.environ[name] = "0"
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def repl(runtime) -> int:

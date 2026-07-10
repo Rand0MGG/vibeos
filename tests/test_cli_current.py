@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -85,6 +86,22 @@ def test_ask_json_executes_app_open_with_explicit_broker(monkeypatch, capsys) ->
     assert exit_code == 0
     assert payload["status"] == "executed"
     assert payload["result"]["selected_strategy_id"] == "strategy_apps_open_route"
+
+
+def test_offline_dry_run_uses_the_local_parser_without_building_default_runtime(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("VIBEOS_ENABLE_MODEL_UNDERSTANDING", "1")
+    monkeypatch.setattr(
+        "vibeos.cli.build_runtime",
+        lambda: (_ for _ in ()).throw(AssertionError("offline requests must not select a daemon or provider-backed runtime")),
+    )
+
+    exit_code = main(["ask", "search web for hello", "--offline", "--dry-run", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert payload["intent"]["action"] == "browser.search_web"
+    assert payload["overall_status"] == "dry_run"
+    assert os.environ["VIBEOS_ENABLE_MODEL_UNDERSTANDING"] == "1"
 
 
 def test_approve_json_executes_window_close(monkeypatch, capsys) -> None:

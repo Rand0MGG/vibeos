@@ -1,6 +1,14 @@
 # VibeOS Current Status
 
-Last updated: 2026-06-21
+Last updated: 2026-07-10
+
+## Runtime Convergence
+
+- supported-task execution now uses `GoalLoop` as the sole default orchestration path;
+- the legacy Broker-owned task loop and its `VIBEOS_ENABLE_GOAL_LOOP` split-path flag have been removed;
+- review state is durable in local SQLite, with atomic in-process claim/release/consume transitions for the multi-threaded daemon;
+- normal traces omit raw user/provider content, while debug artifacts remain credential-redacted and bounded;
+- see [runtime_convergence.md](runtime_convergence.md) for the current ownership boundaries and verification coverage.
 
 ## In Progress
 
@@ -144,27 +152,22 @@ The local verification checks:
 
 On Windows, `vibe doctor` is expected to report `overall: warn` because GNOME Wayland, D-Bus session services, XDG portal, and GNOME Shell extension are not available.
 
-Latest local verification command:
+Latest local verification commands, run on 2026-07-10:
 
 ```powershell
-python scripts/verify_local.py
+python -m pytest -q
+vibe doctor --json
+vibe capabilities --json
+vibe ask "search web for hello" --json --offline --dry-run
 ```
 
 Expected current result:
 
 ```text
-overall: ok
-pytest: 276 passed
-doctor: overall warn on Windows
-capabilities: ok
-L1 dry-run: ok
-L2 review_required: ok
-reviews pending: ok
-approve review dry-run: ok
-one-time approval/reject tests: ok
-review expiration tests: ok
-L3 rejection: ok
-VM evidence safe mode: ok
+pytest: 229 passed in the configured WSL environment
+doctor: overall warn, 0 failures (desktop-session integration is not configured in WSL)
+capabilities: 19 registered actions; L0/L1/L2/L3 policy boundary intact
+offline dry-run: completed locally with overall_status=dry_run and no provider request
 ```
 
 Additional targeted suites run after the run-loop and transport changes:
@@ -186,18 +189,18 @@ Additional v0.6 runtime-slice verification:
 python -m pytest tests/test_v06_agent_runtime.py -q
 ```
 
-Latest direct bridge checks run on 2026-06-09:
+Historical direct bridge checks from 2026-06-09:
 
 ```powershell
 $env:PYTHONPATH='E:\codex_project\vibeos\src'; python -m vibeos.cli doctor --json
 $env:PYTHONPATH='E:\codex_project\vibeos\src'; python -m vibeos.cli ask "search web for hello" --json --offline --dry-run
 ```
 
-Observed current result:
+Historical result:
 
 ```text
 python -m pytest tests/test_v06_agent_runtime.py -q -> 15 passed
-python -m pytest -q -> 276 passed
+python -m pytest -q -> 276 passed at that point in time
 python scripts/verify_local.py -> overall ok
 python -m vibeos.cli doctor --json -> overall warn on Windows host, no failures
 python -m vibeos.cli ask "search web for hello" --json --offline --dry-run -> structured dry-run output with v0.6 goal_runtime, strategy_candidates, run_ledger, and passed verification evidence

@@ -13,6 +13,28 @@ from .audit import default_audit_path
 from .models import utc_now_iso
 
 
+TRACE_MAX_STRING_CHARS = 2_048
+_SENSITIVE_TRACE_KEYS = {
+    "api_key",
+    "authorization",
+    "cookie",
+    "cookies",
+    "credential",
+    "credentials",
+    "password",
+    "secret",
+    "token",
+}
+_CONTENT_TRACE_KEYS = {
+    "content",
+    "raw_output",
+    "response_payload",
+    "request_payload",
+    "supplemental_input",
+    "utterance",
+}
+
+
 def default_trace_root() -> Path:
     return default_audit_path().with_name("runs")
 
@@ -28,6 +50,38 @@ def _jsonable(value: Any) -> Any:
         return [_jsonable(item) for item in value]
     if isinstance(value, Path):
         return str(value)
+    return value
+
+
+def _trace_payload(value: Any, *, allow_content: bool) -> Any:
+    """Serialize trace data with bounded sensitive-data retention.
+
+    Normal traces retain structure and operational metadata but omit raw user
+    and provider content. Debug traces may retain content for diagnosis, while
+    credentials are always redacted and large strings are always truncated.
+    """
+
+    if is_dataclass(value):
+        value = asdict(value)
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized_key = str(key).lower()
+            if normalized_key in _SENSITIVE_TRACE_KEYS or any(token in normalized_key for token in _SENSITIVE_TRACE_KEYS):
+                sanitized[str(key)] = "[REDACTED]"
+            elif not allow_content and normalized_key in _CONTENT_TRACE_KEYS:
+                sanitized[str(key)] = "[OMITTED]"
+            else:
+                sanitized[str(key)] = _trace_payload(item, allow_content=allow_content)
+        return sanitized
+    if isinstance(value, (list, tuple)):
+        return [_trace_payload(item, allow_content=allow_content) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, str):
+        if len(value) <= TRACE_MAX_STRING_CHARS:
+            return value
+        return value[:TRACE_MAX_STRING_CHARS] + "...[TRUNCATED]"
     return value
 
 
@@ -78,6 +132,7 @@ class TaskTraceSession:
     ) -> None:
         self.root = root
         self.run_id = run_id
+        self.debug = debug
         self.started_at = utc_now_iso()
         self.run_dir = self.root / self.started_at[:10] / run_id
         self.artifacts_dir = self.run_dir / "artifacts"
@@ -100,13 +155,17 @@ class TaskTraceSession:
             self.artifacts_dir = self.run_dir / "artifacts"
             self.run_dir.mkdir(parents=True, exist_ok=True)
             self.artifacts_dir.mkdir(parents=True, exist_ok=True)
+        trace_utterance = _trace_payload(utterance, allow_content=True) if debug else None
+        utterance_digest = sha256(utterance.encode("utf-8")).hexdigest()
         self._write_json(
             self.run_dir / "manifest.json",
             {
                 "trace_version": self.trace_version,
                 "run_id": run_id,
                 "command": command_name,
-                "utterance": utterance,
+                "utterance": trace_utterance,
+                "utterance_sha256": utterance_digest,
+                "utterance_length": len(utterance),
                 "mode": mode,
                 "transport": transport,
                 "dry_run": dry_run,
@@ -122,7 +181,9 @@ class TaskTraceSession:
                 "trace_version": self.trace_version,
                 "run_id": run_id,
                 "command": command_name,
-                "utterance": utterance,
+                "utterance": trace_utterance,
+                "utterance_sha256": utterance_digest,
+                "utterance_length": len(utterance),
                 "transport": transport,
                 "dry_run": dry_run,
                 "started_at": self.started_at,
@@ -172,7 +233,7 @@ class TaskTraceSession:
             "status": status,
             "actor": actor,
             "selected_strategy_id": selected_strategy_id,
-            "data": _jsonable(data or {}),
+            "data": _trace_payload(data or {}, allow_content=self.debug),
         }
         self._append_jsonl(self.run_dir / "events.jsonl", entry)
         return entry
@@ -213,8 +274,16 @@ class TaskTraceSession:
             self._semantic_summary_cache_hit_count += 1
         if escalation:
             self._escalation_count += 1
-        request_artifact = self._write_artifact("request", provider, request_payload)
-        response_artifact = self._write_artifact("response", provider, response_payload)
+        request_artifact = (
+            self._write_artifact("request", provider, _trace_payload(request_payload, allow_content=True))
+            if self.debug
+            else None
+        )
+        response_artifact = (
+            self._write_artifact("response", provider, _trace_payload(response_payload, allow_content=True))
+            if self.debug
+            else None
+        )
         entry = {
             "ts": utc_now_iso(),
             "record_id": f"mdl_{uuid4().hex[:12]}",
@@ -229,10 +298,10 @@ class TaskTraceSession:
             "request_artifact": request_artifact,
             "response_artifact": response_artifact,
             "call_kind": call_kind,
-            "consumed_artifacts": _jsonable(consumed_artifacts or {}),
+            "consumed_artifacts": _trace_payload(consumed_artifacts or {}, allow_content=self.debug),
             "cache_hit": cache_hit,
             "escalation": escalation,
-            "normalized_output": _jsonable(normalized_output),
+            "normalized_output": _trace_payload(normalized_output, allow_content=self.debug),
         }
         self._append_jsonl(self.run_dir / "model_io.jsonl", entry)
         return entry

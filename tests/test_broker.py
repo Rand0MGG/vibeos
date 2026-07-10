@@ -1,5 +1,7 @@
 from dataclasses import asdict, replace
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
@@ -77,6 +79,19 @@ class RetryWindows(FakeWindows):
         self.close_calls += 1
         if self.close_calls == 1:
             return {"status": "not_found", "window_id": window.window_id}
+        return {"status": "closed", "window_id": window.window_id}
+
+
+class BlockingWindows(FakeWindows):
+    def __init__(self):
+        self.close_calls = 0
+        self.entered = Event()
+        self.release = Event()
+
+    def close(self, window):
+        self.close_calls += 1
+        self.entered.set()
+        assert self.release.wait(timeout=3)
         return {"status": "closed", "window_id": window.window_id}
 
 
@@ -248,6 +263,37 @@ def test_failed_approved_review_is_not_consumed_and_can_retry() -> None:
     assert second.status == "executed"
 
 
+def test_concurrent_approval_dispatches_a_reviewed_side_effect_once() -> None:
+    review_path = make_review_path("concurrent-approval")
+    windows = BlockingWindows()
+    reviews = ReviewStore(review_path)
+    broker = CapabilityBroker(
+        intent_broker=FixtureIntentBroker(),
+        apps=FakeApps(),
+        windows=windows,
+        audit=AuditLog(),
+        reviews=reviews,
+    )
+    pending = broker.handle(CommandRequest("关闭Firefox"))
+
+    def approve_once(_index: int):
+        return broker.handle(CommandRequest("", review_id=pending.review_id, approve=True))
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        first = executor.submit(approve_once, 0)
+        assert windows.entered.wait(timeout=3)
+        others = [executor.submit(approve_once, index) for index in range(1, 6)]
+        windows.release.set()
+        results = [first.result(), *(future.result() for future in others)]
+
+    assert windows.close_calls == 1
+    assert [result.status for result in results].count("executed") == 1
+    assert all(result.status in {"executed", "rejected"} for result in results)
+    loaded = reviews.get(pending.review_id or "")
+    assert loaded
+    assert loaded.status == "consumed"
+
+
 def test_approve_review_dry_run_does_not_consume() -> None:
     review_path = make_review_path("dry-run-review")
     reviews = ReviewStore(review_path)
@@ -289,7 +335,6 @@ def test_existing_capability_path_can_suspend_and_resume(monkeypatch) -> None:
             StepReviewRecord(f"srev_{step.id}", step.id, step.action, "L2" if required else "L1", required, True, reason),
         )
 
-    monkeypatch.setenv("VIBEOS_ENABLE_GOAL_LOOP", "1")
     monkeypatch.setattr(broker, "review_task_step", review_step)
 
     pending = broker.handle(CommandRequest("search web for hello"))
@@ -331,7 +376,6 @@ def test_review_required_still_originates_from_step_safety_boundary(monkeypatch)
             StepReviewRecord("srev_changed", step.id, step.action, "L2", True, True, "context changed; renewed approval required"),
         )
 
-    monkeypatch.setenv("VIBEOS_ENABLE_GOAL_LOOP", "1")
     monkeypatch.setattr(broker, "review_task_step", review_step)
 
     first = broker.handle(CommandRequest("search web for hello"))
@@ -636,7 +680,6 @@ def test_broker_provide_input_resumes_user_input_review(monkeypatch) -> None:
             debug_trace=None,
         )
 
-    monkeypatch.setenv("VIBEOS_ENABLE_GOAL_LOOP", "1")
     monkeypatch.setattr("vibeos.broker.plan_turn", fake_plan_turn)
 
     result = broker.handle(CommandRequest("", review_id=review.review_id, supplemental_input="browser"))

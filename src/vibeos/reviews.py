@@ -3,8 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
+import threading
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -14,10 +17,31 @@ from .task_trace import record_trace_event
 from .task_models import StepReviewRecord, TaskPlanReviewResult
 
 DEFAULT_REVIEW_TTL_SECONDS = 600
+_REVIEW_LOCKS_GUARD = threading.Lock()
+_REVIEW_LOCKS: dict[str, threading.RLock] = {}
+
+
+def _synchronized(method):
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 def default_review_path() -> Path:
     return default_audit_path().with_name("reviews.jsonl")
+
+
+def _review_lock_for(path: Path) -> threading.RLock:
+    key = str(path.expanduser().resolve())
+    with _REVIEW_LOCKS_GUARD:
+        lock = _REVIEW_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _REVIEW_LOCKS[key] = lock
+        return lock
 
 
 def default_review_ttl_seconds() -> int:
@@ -39,74 +63,83 @@ class ReviewStore:
 
     def __init__(self, path: Path | None = None, ttl_seconds: int | None = None) -> None:
         self.path = path or default_review_path()
+        self.db_path = self.path.with_suffix(".sqlite3")
         self.ttl_seconds = default_review_ttl_seconds() if ttl_seconds is None else ttl_seconds
+        self._lock = _review_lock_for(self.path)
+        self._connection = self._open_state_connection()
+        self._import_legacy_jsonl_if_needed()
 
+    @_synchronized
     def create(self, utterance: str, intent: Intent, review: PermissionReview) -> ReviewRequest:
-        now = datetime.now(UTC)
-        created_at = isoformat_utc(now)
-        expires_at = isoformat_utc(now + timedelta(seconds=self.ttl_seconds))
-        review_id = make_review_id(utterance, intent, created_at)
-        request = ReviewRequest(
-            review_id=review_id,
-            utterance=utterance,
-            intent=intent,
-            review=review,
-            created_at=created_at,
-            status="pending",
-            expires_at=expires_at,
-        )
-        self._append({"event": "created", **review_to_payload(request)})
-        record_trace_event(
-            phase="review",
-            event_type="review_created",
-            status="pending",
-            actor="review_store",
-            review_id=review_id,
-            data=review_to_payload(request),
-        )
-        return request
+        with self._lock:
+            now = datetime.now(UTC)
+            created_at = isoformat_utc(now)
+            expires_at = isoformat_utc(now + timedelta(seconds=self.ttl_seconds))
+            review_id = make_review_id(utterance, intent, created_at)
+            request = ReviewRequest(
+                review_id=review_id,
+                utterance=utterance,
+                intent=intent,
+                review=review,
+                created_at=created_at,
+                status="pending",
+                expires_at=expires_at,
+            )
+            self._append({"event": "created", **review_to_payload(request)})
+            record_trace_event(
+                phase="review",
+                event_type="review_created",
+                status="pending",
+                actor="review_store",
+                review_id=review_id,
+                data=review_to_payload(request),
+            )
+            return request
 
+    @_synchronized
     def create_plan_review(self, utterance: str, plan_payload: dict[str, Any], plan_review: TaskPlanReviewResult) -> ReviewRequest:
-        now = datetime.now(UTC)
-        created_at = isoformat_utc(now)
-        expires_at = isoformat_utc(now + timedelta(seconds=self.ttl_seconds))
-        placeholder_intent = Intent.unknown("stored task plan approval", {"plan_id": plan_review.plan_id})
-        review = PermissionReview(
-            risk_level=plan_review.max_risk_level,
-            review_required=True,
-            allowed=True,
-            reason="Stored task plan requires approval before execution.",
-            effects=("May execute one or more reviewed task plan steps.",),
-            reversible=False,
-        )
-        review_id = make_plan_review_id(plan_payload, created_at)
-        request = ReviewRequest(
-            review_id=review_id,
-            utterance=utterance,
-            intent=placeholder_intent,
-            review=review,
-            created_at=created_at,
-            status="pending",
-            expires_at=expires_at,
-            review_kind="plan",
-            plan_id=plan_review.plan_id,
-            plan_payload=plan_payload,
-            step_reviews=tuple(asdict(item) for item in plan_review.step_reviews),
-            layer="permission_review",
-            snapshot_payload=plan_payload.get("loop_snapshot") if isinstance(plan_payload.get("loop_snapshot"), dict) else None,
-        )
-        self._append({"event": "created", **review_to_payload(request)})
-        record_trace_event(
-            phase="review",
-            event_type="review_created",
-            status="pending",
-            actor="review_store",
-            plan_id=plan_review.plan_id,
-            review_id=review_id,
-            data=review_to_payload(request),
-        )
-        return request
+        with self._lock:
+            now = datetime.now(UTC)
+            created_at = isoformat_utc(now)
+            expires_at = isoformat_utc(now + timedelta(seconds=self.ttl_seconds))
+            placeholder_intent = Intent.unknown("stored task plan approval", {"plan_id": plan_review.plan_id})
+            review = PermissionReview(
+                risk_level=plan_review.max_risk_level,
+                review_required=True,
+                allowed=True,
+                reason="Stored task plan requires approval before execution.",
+                effects=("May execute one or more reviewed task plan steps.",),
+                reversible=False,
+            )
+            review_id = make_plan_review_id(plan_payload, created_at)
+            request = ReviewRequest(
+                review_id=review_id,
+                utterance=utterance,
+                intent=placeholder_intent,
+                review=review,
+                created_at=created_at,
+                status="pending",
+                expires_at=expires_at,
+                review_kind="plan",
+                plan_id=plan_review.plan_id,
+                plan_payload=plan_payload,
+                step_reviews=tuple(asdict(item) for item in plan_review.step_reviews),
+                layer="permission_review",
+                snapshot_payload=plan_payload.get("loop_snapshot") if isinstance(plan_payload.get("loop_snapshot"), dict) else None,
+            )
+            self._append({"event": "created", **review_to_payload(request)})
+            record_trace_event(
+                phase="review",
+                event_type="review_created",
+                status="pending",
+                actor="review_store",
+                plan_id=plan_review.plan_id,
+                review_id=review_id,
+                data=review_to_payload(request),
+            )
+            return request
 
+    @_synchronized
     def create_loop_review(
         self,
         utterance: str,
@@ -171,6 +204,7 @@ class ReviewStore:
         )
         return request
 
+    @_synchronized
     def approve(self, review_id: str) -> ReviewRequest | None:
         request = self.get(review_id)
         if not request or request.status != "pending":
@@ -203,6 +237,7 @@ class ReviewStore:
             supplemental_input=request.supplemental_input,
         )
 
+    @_synchronized
     def reject(self, review_id: str) -> ReviewRequest | None:
         request = self.get(review_id)
         if not request or request.status != "pending":
@@ -235,9 +270,10 @@ class ReviewStore:
             supplemental_input=request.supplemental_input,
         )
 
+    @_synchronized
     def consume(self, review_id: str) -> ReviewRequest | None:
         request = self.get(review_id)
-        if not request or request.status not in {"approved", "provided"}:
+        if not request or request.status not in {"approved", "executing", "provided"}:
             return request
         self._append({"event": "consumed", "review_id": review_id, "timestamp": utc_now_iso()})
         record_trace_event(
@@ -267,6 +303,50 @@ class ReviewStore:
             supplemental_input=request.supplemental_input,
         )
 
+    @_synchronized
+    def claim_execution(self, review_id: str) -> bool:
+        """Atomically reserve an approved review for one real execution.
+
+        A second HTTP worker may observe an approved review while the first
+        worker is already dispatching its desktop side effect. The claim event
+        prevents both workers from treating that approval as executable.
+        """
+
+        request = self.get(review_id)
+        if request is None or request.status != "approved":
+            return False
+        self._append({"event": "executing", "review_id": review_id, "timestamp": utc_now_iso()})
+        record_trace_event(
+            phase="review",
+            event_type="review_execution_claimed",
+            status="executing",
+            actor="review_store",
+            plan_id=request.plan_id,
+            review_id=review_id,
+            data={"review_kind": request.review_kind},
+        )
+        return True
+
+    @_synchronized
+    def release_execution(self, review_id: str) -> ReviewRequest | None:
+        """Make a failed execution retryable without replaying a successful one."""
+
+        request = self.get(review_id)
+        if request is None or request.status != "executing":
+            return request
+        self._append({"event": "approved", "review_id": review_id, "timestamp": utc_now_iso()})
+        record_trace_event(
+            phase="review",
+            event_type="review_execution_released",
+            status="approved",
+            actor="review_store",
+            plan_id=request.plan_id,
+            review_id=review_id,
+            data={"review_kind": request.review_kind},
+        )
+        return self.get(review_id)
+
+    @_synchronized
     def provide_input(self, review_id: str, supplemental_input: str) -> ReviewRequest | None:
         request = self.get(review_id)
         if not request or request.status != "pending":
@@ -306,6 +386,7 @@ class ReviewStore:
             supplemental_input=supplemental_input,
         )
 
+    @_synchronized
     def get(self, review_id: str) -> ReviewRequest | None:
         latest: dict[str, Any] | None = None
         status = "pending"
@@ -317,6 +398,8 @@ class ReviewStore:
                 status = "pending"
             elif entry.get("event") == "approved":
                 status = "approved"
+            elif entry.get("event") == "executing":
+                status = "executing"
             elif entry.get("event") == "rejected":
                 status = "rejected"
             elif entry.get("event") == "consumed":
@@ -331,6 +414,7 @@ class ReviewStore:
             status = "expired"
         return review_from_payload(latest, status=status)
 
+    @_synchronized
     def list_pending(self) -> list[ReviewRequest]:
         created: dict[str, dict[str, Any]] = {}
         statuses: dict[str, str] = {}
@@ -344,6 +428,8 @@ class ReviewStore:
                 statuses[review_id] = "pending"
             elif event == "approved":
                 statuses[review_id] = "approved"
+            elif event == "executing":
+                statuses[review_id] = "executing"
             elif event == "rejected":
                 statuses[review_id] = "rejected"
             elif event == "consumed":
@@ -359,6 +445,23 @@ class ReviewStore:
         return sorted(pending, key=lambda request: request.created_at)
 
     def _entries(self) -> list[dict[str, Any]]:
+        if self._connection is not None:
+            try:
+                rows = self._connection.execute("SELECT payload FROM review_events ORDER BY event_id").fetchall()
+            except sqlite3.Error:
+                rows = []
+            entries: list[dict[str, Any]] = []
+            for row in rows:
+                try:
+                    entry = json.loads(str(row[0]))
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(entry, dict):
+                    entries.append(entry)
+            return entries
+        return self._legacy_entries()
+
+    def _legacy_entries(self) -> list[dict[str, Any]]:
         if not self.path.exists():
             return []
         entries = []
@@ -369,10 +472,29 @@ class ReviewStore:
         for line in lines:
             if not line.strip():
                 continue
-            entries.append(json.loads(line))
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                # Audit-style storage must not turn one interrupted append into
+                # a denial of service for unrelated pending approvals.
+                continue
+            if isinstance(entry, dict):
+                entries.append(entry)
         return entries
 
     def _append(self, entry: dict[str, Any]) -> None:
+        if self._connection is not None:
+            try:
+                self._connection.execute(
+                    "INSERT INTO review_events (payload) VALUES (?)",
+                    (json.dumps(entry, ensure_ascii=False),),
+                )
+                self._connection.commit()
+                return
+            except sqlite3.Error:
+                # Preserve availability on a damaged local state database. The
+                # JSONL fallback is retained for recovery and diagnostics only.
+                self._connection = None
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
@@ -383,6 +505,42 @@ class ReviewStore:
             with fallback.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
             self.path = fallback
+
+    def _open_state_connection(self) -> sqlite3.Connection | None:
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            connection = sqlite3.connect(self.db_path, check_same_thread=False)
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=FULL")
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS review_events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT NOT NULL)"
+            )
+            connection.commit()
+            return connection
+        except sqlite3.Error:
+            return None
+
+    def _import_legacy_jsonl_if_needed(self) -> None:
+        if self._connection is None:
+            return
+        try:
+            has_events = self._connection.execute("SELECT 1 FROM review_events LIMIT 1").fetchone() is not None
+        except sqlite3.Error:
+            self._connection = None
+            return
+        if has_events:
+            return
+        legacy_entries = self._legacy_entries()
+        if not legacy_entries:
+            return
+        try:
+            self._connection.executemany(
+                "INSERT INTO review_events (payload) VALUES (?)",
+                [(json.dumps(entry, ensure_ascii=False),) for entry in legacy_entries],
+            )
+            self._connection.commit()
+        except sqlite3.Error:
+            self._connection = None
 
 
 def make_review_id(utterance: str, intent: Intent, created_at: str) -> str:

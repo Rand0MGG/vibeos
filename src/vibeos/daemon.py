@@ -5,6 +5,7 @@ import json
 import signal
 import sys
 import threading
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from dataclasses import asdict
@@ -12,7 +13,35 @@ from urllib.parse import parse_qs, urlparse
 
 from .broker import CapabilityBroker
 from .dbus_service import run_dbus_service
-from .models import CommandRequest
+from .models import CommandRequest, CommandResult, Intent
+
+
+def safe_http_command_result(builder: Callable[[], CommandResult], *, request: CommandRequest) -> CommandResult:
+    """Turn an unexpected broker exception into the HTTP result contract."""
+
+    try:
+        return builder()
+    except Exception as exc:
+        traceback.print_exc()
+        detail: dict[str, object] = {
+            "error": "daemon_internal_error",
+            "transport": "http",
+            "exception_type": type(exc).__name__,
+        }
+        if request.utterance:
+            detail["utterance"] = request.utterance
+        if request.review_id is not None:
+            detail["review_id"] = request.review_id
+        return CommandResult(
+            status="failed",
+            intent=Intent.unknown("daemon command failed"),
+            result=detail,
+            transport="http",
+            message=f"daemon command failed: {exc}",
+            execution_status="failed",
+            acceptance_status="skipped",
+            overall_status="failed",
+        )
 
 
 class VibeRequestHandler(BaseHTTPRequestHandler):
@@ -66,7 +95,11 @@ class VibeRequestHandler(BaseHTTPRequestHandler):
             self.send_error(400, "missing utterance or review_id")
             return
         if review_id and reject:
-            result = self.broker.reject_review(str(review_id), transport="http")
+            request = CommandRequest("", review_id=str(review_id), transport="http")
+            result = safe_http_command_result(
+                lambda: self.broker.reject_review(str(review_id), transport="http"),
+                request=request,
+            )
             self._write_json(dataclass_to_jsonable(result))
             return
         request = CommandRequest(
@@ -79,7 +112,7 @@ class VibeRequestHandler(BaseHTTPRequestHandler):
             debug=bool(payload.get("debug", False)),
             transport="http",
         )
-        result = self.broker.handle(request)
+        result = safe_http_command_result(lambda: self.broker.handle(request), request=request)
         self._write_json(dataclass_to_jsonable(result))
 
     def log_message(self, format: str, *args: Any) -> None:
