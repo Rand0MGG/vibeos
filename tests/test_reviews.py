@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
@@ -39,6 +40,48 @@ def test_review_state_uses_sqlite_as_the_authoritative_store() -> None:
     reloaded = ReviewStore(path).get(request.review_id)
     assert reloaded
     assert reloaded.status == "pending"
+
+
+def test_current_state_row_tracks_status_and_version_alongside_events() -> None:
+    path = make_review_path("current-state")
+    store = ReviewStore(path)
+    request = store.create(
+        "close Firefox",
+        Intent(action="window.close", target={"name": "Firefox"}),
+        PermissionPolicy().review(Intent(action="window.close", target={"name": "Firefox"})),
+    )
+    assert store.approve(request.review_id)
+
+    with sqlite3.connect(store.db_path) as connection:
+        row = connection.execute("SELECT status, version FROM reviews WHERE review_id = ?", (request.review_id,)).fetchone()
+        event_count = connection.execute("SELECT COUNT(*) FROM review_events WHERE payload LIKE ?", (f'%"review_id": "{request.review_id}"%',)).fetchone()[0]
+
+    assert row == ("approved", 1)
+    assert event_count == 2
+
+
+def test_event_only_sqlite_is_migrated_to_current_state_idempotently() -> None:
+    path = make_review_path("event-migration")
+    db_path = path.with_suffix(".sqlite3")
+    intent = Intent(action="window.close", target={"name": "Firefox"})
+    review = PermissionPolicy().review(intent)
+    created = {
+        "event": "created",
+        "review_id": "rev_event_only",
+        "utterance": "close Firefox",
+        "intent": asdict(intent),
+        "review": asdict(review),
+        "created_at": "2099-01-01T00:00:00.000Z",
+        "expires_at": "2099-01-01T00:10:00.000Z",
+    }
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("CREATE TABLE review_events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT NOT NULL)")
+        connection.execute("INSERT INTO review_events (payload) VALUES (?)", (json.dumps(created),))
+        connection.execute("INSERT INTO review_events (payload) VALUES (?)", (json.dumps({"event": "approved", "review_id": "rev_event_only"}),))
+
+    assert ReviewStore(path).get("rev_event_only").status == "approved"
+    assert ReviewStore(path).get("rev_event_only").status == "approved"
 
 
 def test_review_store_marks_approved() -> None:

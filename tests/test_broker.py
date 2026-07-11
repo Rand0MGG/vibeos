@@ -12,11 +12,11 @@ from vibeos.broker import CapabilityBroker
 from vibeos.candidate_selection import CandidateSelectionDecision, CandidateSet
 from vibeos.intent import IntentBroker
 from vibeos.loop_models import GoalLoopResult, LoopObservation, LoopPolicy, LoopState
-from vibeos.models import AppEntry, CommandRequest, Intent, PermissionReview, WindowEntry
+from vibeos.models import AppEntry, CommandRequest, CommandResult, Intent, PermissionReview, WindowEntry
 from vibeos.planner import PlanningArtifacts
 from vibeos.portal import PortalAdapter
 from vibeos.reviews import ReviewStore
-from vibeos.task_models import DisplayFields, PlanAttempt, PlanExecutionResult, StepExecutionResult, StepReviewRecord, TaskPlan, TaskRoute, TaskStep
+from vibeos.task_models import DisplayFields, ExpectedState, PlanAttempt, PlanExecutionResult, StepExecutionResult, StepPrecondition, StepProvenance, StepReviewRecord, TaskPlan, TaskRoute, TaskStep
 from vibeos.understanding import default_understanding_host_hint, validated_understanding_from_payload
 from tests.support_intent_broker import FixtureIntentBroker
 
@@ -115,6 +115,36 @@ def test_broker_dry_run_open_app() -> None:
     assert result.selected_target == "firefox.desktop"
     assert result.audit_id
     assert result.transport is None
+
+
+def test_default_goal_loop_projection_does_not_mutate_broker_session() -> None:
+    broker = CapabilityBroker(
+        intent_broker=FixtureIntentBroker(),
+        portal=ObservedPortal(),
+        audit=AuditLog(),
+        reviews=ReviewStore(make_review_path("pure-projection")),
+    )
+    original_goals = dict(broker.agent_session.goals)
+    original_turns = dict(broker.agent_session.turns)
+
+    result = broker.handle(CommandRequest("search web for hello", dry_run=True))
+
+    assert result.overall_status == "dry_run"
+    assert result.result["goal_runtime"]["session_id"] != broker.agent_session.session_id
+    assert broker.agent_session.goals == original_goals
+    assert broker.agent_session.turns == original_turns
+
+
+def test_handle_delegates_to_command_service(monkeypatch) -> None:
+    broker = CapabilityBroker(intent_broker=FixtureIntentBroker(), audit=AuditLog())
+    expected = CommandResult(status="dry_run", intent=Intent(action="system.status"), overall_status="dry_run")
+    calls = []
+    monkeypatch.setattr(broker.command_service, "handle", lambda request: calls.append(request) or expected)
+
+    result = broker.handle(CommandRequest("status", dry_run=True))
+
+    assert result is expected
+    assert calls == [CommandRequest("status", dry_run=True)]
 
 
 def test_broker_rejects_delete_request() -> None:
@@ -313,6 +343,45 @@ def test_approve_review_dry_run_does_not_consume() -> None:
     assert loaded
     assert loaded.status == "pending"
     assert approved.status == "executed"
+
+
+def test_historical_plan_review_dry_run_remains_isolated_from_fresh_goal_loop() -> None:
+    reviews = ReviewStore(make_review_path("historical-plan-review"))
+    broker = CapabilityBroker(
+        intent_broker=FixtureIntentBroker(),
+        audit=AuditLog(),
+        reviews=reviews,
+    )
+    plan = TaskPlan(
+        schema_version="v0.5",
+        plan_id="plan_historical_clipboard",
+        utterance="copy hello to clipboard",
+        display=DisplayFields(goal="copy hello"),
+        selected_route_id="clipboard_write_route",
+        routes=(TaskRoute(id="clipboard_write_route", score=1.0, domain_id="clipboard"),),
+        steps=(
+            TaskStep(
+                id="clipboard_write",
+                action="clipboard.write",
+                capability_id="clipboard.write",
+                target={"text": "hello"},
+                expected_state=ExpectedState(kind="clipboard_content_requested", fields={"text": "hello"}),
+                preconditions=(StepPrecondition(kind="capability_available", capability_id="clipboard.write"),),
+                provenance=StepProvenance(source_span_id="span_historical", planner="historical-plan-review-test"),
+            ),
+        ),
+    )
+
+    pending = broker.review_task_plan(plan)
+    preview = broker.approve_review(pending.review_id or "", dry_run=True)
+    stored = reviews.get(pending.review_id or "")
+
+    assert pending.status == "review_required"
+    assert preview.status == "dry_run"
+    assert preview.overall_status == "dry_run"
+    assert preview.result["plan_id"] == plan.plan_id
+    assert stored is not None
+    assert stored.status == "pending"
 
 
 def test_existing_capability_path_can_suspend_and_resume(monkeypatch) -> None:

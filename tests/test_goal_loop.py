@@ -6,6 +6,8 @@ from uuid import uuid4
 from vibeos.agent_runtime import AgentRuntime, EnvironmentProfile
 from vibeos.failure_classifier import FailureClassifier
 from vibeos.goal_loop import GoalLoop, loop_state_from_payload
+from vibeos.goal_ports import GoalLoopPorts
+from vibeos.loop_policy import default_loop_policy
 from vibeos.loop_models import LoopObservation, LoopPolicy, LoopState
 from vibeos.models import CommandRequest, PermissionReview
 from vibeos.observation_service import observation_progressed
@@ -40,6 +42,74 @@ class FakeObservationService:
         )
 
 
+class CallbackGoalLoopPorts:
+    """Test-only adapter for exercising the typed GoalLoop boundary."""
+
+    def __init__(self, callbacks: dict[str, object]) -> None:
+        self.callbacks = callbacks
+
+    def payload(self, planning):
+        return self.callbacks["planning_payload"](planning)
+
+    def resolve_understanding_transition(self, planning, *, trigger):
+        return self.callbacks["resolve_understanding_transition"](planning, trigger)
+
+    def apply_replan_transition(self, planning, *, decision, failure):
+        return self.callbacks["apply_replan_transition"](planning, decision, failure)
+
+    def replan(self, planning, request, excluded_route_ids, excluded_capability_ids, candidate_domain_ids):
+        return self.callbacks["plan_again"](planning, request, excluded_route_ids, excluded_capability_ids, candidate_domain_ids)
+
+    def observe(self, *, plan, step, phase, level):
+        return self.callbacks["observation_service"].observe(plan=plan, step=step, phase=phase, level=level)
+
+    def progressed(self, plan, step, step_result, pre_observation, post_observation, request):
+        callback = self.callbacks.get("step_progressed")
+        if callback is not None:
+            return callback(plan, step, step_result, pre_observation, post_observation, request)
+        return step_result.status == "succeeded" and (request.dry_run or observation_progressed(pre_observation, post_observation))
+
+    def review_step(self, plan, step, observation):
+        return self.callbacks["review_step"](plan, step, observation)
+
+    def persist_step_review(self, utterance, planning, state, step, reason):
+        return self.callbacks["persist_review"](utterance, planning, state, step, reason)
+
+    def persist_user_input(self, utterance, planning, state, reason):
+        return self.callbacks["persist_user_input"](utterance, planning, state, reason)
+
+    def execute_step(self, plan, step, request, attempt_id):
+        return self.callbacks["execute_step"](plan, step, request, attempt_id)
+
+    def assess(self, plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id):
+        return self.callbacks["assess_plan_execution"](
+            plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id
+        )
+
+    def classify(self, plan, execution):
+        return self.callbacks["classify_failure"](plan, execution)
+
+    def decide(self, utterance, plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids):
+        return self.callbacks["decide_replan"](
+            utterance, plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids
+        )
+
+
+def make_goal_loop(**callbacks) -> GoalLoop:
+    adapter = CallbackGoalLoopPorts(callbacks)
+    return GoalLoop(
+        ports=GoalLoopPorts(
+            planning=adapter,
+            observation=adapter,
+            review=adapter,
+            execution=adapter,
+            acceptance=adapter,
+            recovery=adapter,
+            policy=callbacks.get("policy") or default_loop_policy(),
+        )
+    )
+
+
 def test_review_store_persists_loop_snapshot_and_user_input() -> None:
     path = make_review_path("loop")
     store = ReviewStore(path)
@@ -68,7 +138,7 @@ def test_goal_loop_suspends_for_review_with_real_review_store() -> None:
     plan = make_plan("plan_review", ("step_1",))
     store = ReviewStore(make_review_path("goal-loop-review"))
 
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [{"observation_id": "obs_pre", "packages": {"browser_context": {"active_url": ""}}}]
         ),
@@ -125,7 +195,7 @@ def test_goal_loop_suspends_for_user_input_with_real_review_store() -> None:
         understanding=None,
         candidate_set=None,
     )
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService([]),
         planning_payload=lambda current: {"analysis": {"type": "clarification"}},
         resolve_understanding_transition=lambda current, trigger: current,
@@ -173,7 +243,7 @@ def test_review_approval_resumes_from_pending_step_without_reexecuting_completed
     review_gate = {"approved": False}
     execution_counts = {"step_1": 0, "step_2": 0}
 
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs1_pre", "packages": {"browser_context": {"active_url": ""}}},
@@ -263,7 +333,7 @@ def test_review_resume_uses_real_review_store_persistence() -> None:
     execution_counts = {"step_1": 0, "step_2": 0}
 
     def build_loop() -> GoalLoop:
-        return GoalLoop(
+        return make_goal_loop(
             observation_service=FakeObservationService(
                 [
                     {"observation_id": "obs1_pre", "packages": {"browser_context": {"active_url": ""}}},
@@ -344,7 +414,7 @@ def test_review_resume_uses_real_review_store_persistence() -> None:
 
 def test_goal_loop_classifies_same_action_no_progress() -> None:
     plan = make_plan("plan_no_progress", ("step_1",))
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs_pre", "packages": {"browser_context": {"active_url": "https://example.com"}}},
@@ -399,7 +469,7 @@ def test_goal_loop_records_pre_and_post_observation(monkeypatch) -> None:
     plan = make_plan("plan_observe", ("step_1",))
     monkeypatch.setattr("vibeos.goal_loop.record_trace_event", lambda **kwargs: events.append(kwargs))
 
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs_pre", "packages": {"session_context": {"status": "loaded"}}},
@@ -459,7 +529,7 @@ def test_goal_loop_executes_one_step_at_a_time(monkeypatch) -> None:
     execution_counts = {"step_1": 0, "step_2": 0}
     monkeypatch.setattr("vibeos.goal_loop.record_trace_event", lambda **kwargs: events.append(kwargs))
 
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs1_pre", "packages": {"browser_context": {"active_url": ""}}},
@@ -538,7 +608,7 @@ def test_goal_loop_stops_on_budget_exhausted() -> None:
     plan = make_plan("plan_budget_exhausted", ("step_1", "step_2"), depends_on={"step_2": ("step_1",)})
     execution_counts = {"step_1": 0, "step_2": 0}
 
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs1_pre", "packages": {"browser_context": {"active_url": ""}}},
@@ -578,7 +648,7 @@ def test_goal_loop_can_finish_after_multiple_step_ticks() -> None:
     plan = make_plan("plan_multiple_ticks", ("step_1", "step_2"), depends_on={"step_2": ("step_1",)})
     execution_counts = {"step_1": 0, "step_2": 0}
 
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs1_pre", "packages": {"browser_context": {"active_url": ""}}},
@@ -625,7 +695,7 @@ def test_goal_loop_can_finish_after_multiple_step_ticks() -> None:
 
 def test_goal_loop_escalates_observation_level_after_failed_attempt() -> None:
     plan = make_plan("plan_observe_escalation", ("step_1",))
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs_pre", "packages": {"session_context": {"status": "loaded"}}},
@@ -669,7 +739,7 @@ def test_goal_loop_escalates_observation_level_after_failed_attempt() -> None:
 def test_goal_loop_passes_pre_observation_into_step_review() -> None:
     captured = {}
     plan = make_plan("plan_context_review", ("step_1",))
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs_pre", "packages": {"browser_context": {"active_url": "https://example.com"}}},
@@ -725,7 +795,7 @@ def test_goal_loop_passes_pre_observation_into_step_review() -> None:
 def test_goal_loop_retries_same_attempt_without_replanning() -> None:
     execution_attempts = {"count": 0}
     plan = make_plan("plan_retry_same_attempt", ("step_1",))
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs1_pre", "packages": {"session_context": {"status": "loaded"}}},
@@ -778,7 +848,7 @@ def test_goal_loop_repairs_after_terminal_acceptance_unverified(monkeypatch) -> 
     assessment_attempts = {"count": 0}
     monkeypatch.setattr("vibeos.goal_loop.record_trace_event", lambda **kwargs: events.append(kwargs))
 
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs1_pre", "packages": {"browser_context": {"active_url": ""}}},
@@ -842,7 +912,7 @@ def test_goal_loop_replans_after_terminal_acceptance_failure() -> None:
     planning_states = [make_planning(first_plan), make_planning(second_plan)]
     execution_counts = {"step_1": 0, "step_2": 0}
 
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs1_pre", "packages": {"browser_context": {"active_url": ""}}},
@@ -889,7 +959,7 @@ def test_goal_loop_replans_after_terminal_acceptance_failure() -> None:
 
 def test_goal_loop_policy_stops_retry_same_attempt_after_failure_limit() -> None:
     plan = make_plan("plan_policy_retry_limit", ("step_1",))
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs1_pre", "packages": {"session_context": {"status": "loaded"}}},
@@ -949,7 +1019,7 @@ def test_same_action_no_progress_stops_or_replans() -> None:
     planning_states = [make_planning(first_plan), make_planning(second_plan)]
     execution_counts = {"step_1": 0, "step_2": 0}
 
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs1_pre", "packages": {"browser_context": {"active_url": "https://example.com"}}},
@@ -1003,7 +1073,7 @@ def test_acceptance_failed_triggers_replan_with_evidence() -> None:
     captured = {}
     plan = make_plan("plan_acceptance_failed_replan", ("step_1",))
 
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs1_pre", "packages": {"browser_context": {"active_url": ""}}},
@@ -1063,7 +1133,7 @@ def test_replan_consumes_prior_failures_and_completed_steps() -> None:
     planning_states = [make_planning(first_plan), make_planning(second_plan)]
     execution_counts = {"step_1": 0, "step_2": 0, "step_3": 0}
 
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs1_pre", "packages": {"browser_context": {"active_url": ""}}},
@@ -1133,7 +1203,7 @@ def test_acceptance_failed_replan_consumes_bounded_candidate_set() -> None:
     )
     planning_states = [second_planning]
 
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs1_pre", "packages": {"browser_context": {"active_url": ""}}},
@@ -1202,7 +1272,7 @@ def test_acceptance_failed_replan_consumes_bounded_candidate_set() -> None:
 
 def test_goal_loop_semantic_result_uses_semantic_acceptance_decision() -> None:
     plan = make_plan("plan_semantic_result", ("step_1",))
-    loop = GoalLoop(
+    loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
                 {"observation_id": "obs_pre", "packages": {"browser_context": {"active_url": ""}}},

@@ -55,7 +55,7 @@ def default_review_ttl_seconds() -> int:
 
 
 class ReviewStore:
-    """Append-only review store.
+    """Durable review store with an authoritative current-state row and audit events.
 
     Review approval is keyed by a review id so the user approves the exact
     intent that was reviewed, not a fresh model parse of the same utterance.
@@ -206,10 +206,9 @@ class ReviewStore:
 
     @_synchronized
     def approve(self, review_id: str) -> ReviewRequest | None:
-        request = self.get(review_id)
-        if not request or request.status != "pending":
+        request = self._transition(review_id, from_statuses=("pending",), event="approved")
+        if not request or request.status != "approved":
             return request
-        self._append({"event": "approved", "review_id": review_id, "timestamp": utc_now_iso()})
         record_trace_event(
             phase="review",
             event_type="review_approved",
@@ -219,30 +218,13 @@ class ReviewStore:
             review_id=review_id,
             data={"utterance": request.utterance, "review_kind": request.review_kind},
         )
-        return ReviewRequest(
-            review_id=request.review_id,
-            utterance=request.utterance,
-            intent=request.intent,
-            review=request.review,
-            created_at=request.created_at,
-            status="approved",
-            expires_at=request.expires_at,
-            review_kind=request.review_kind,
-            plan_id=request.plan_id,
-            plan_payload=request.plan_payload,
-            step_reviews=request.step_reviews,
-            layer=request.layer,
-            snapshot_payload=request.snapshot_payload,
-            pending_reason=request.pending_reason,
-            supplemental_input=request.supplemental_input,
-        )
+        return request
 
     @_synchronized
     def reject(self, review_id: str) -> ReviewRequest | None:
-        request = self.get(review_id)
-        if not request or request.status != "pending":
+        request = self._transition(review_id, from_statuses=("pending",), event="rejected")
+        if not request or request.status != "rejected":
             return request
-        self._append({"event": "rejected", "review_id": review_id, "timestamp": utc_now_iso()})
         record_trace_event(
             phase="review",
             event_type="review_rejected",
@@ -252,30 +234,13 @@ class ReviewStore:
             review_id=review_id,
             data={"utterance": request.utterance, "review_kind": request.review_kind},
         )
-        return ReviewRequest(
-            review_id=request.review_id,
-            utterance=request.utterance,
-            intent=request.intent,
-            review=request.review,
-            created_at=request.created_at,
-            status="rejected",
-            expires_at=request.expires_at,
-            review_kind=request.review_kind,
-            plan_id=request.plan_id,
-            plan_payload=request.plan_payload,
-            step_reviews=request.step_reviews,
-            layer=request.layer,
-            snapshot_payload=request.snapshot_payload,
-            pending_reason=request.pending_reason,
-            supplemental_input=request.supplemental_input,
-        )
+        return request
 
     @_synchronized
     def consume(self, review_id: str) -> ReviewRequest | None:
-        request = self.get(review_id)
-        if not request or request.status not in {"approved", "executing", "provided"}:
+        request = self._transition(review_id, from_statuses=("approved", "executing", "provided"), event="consumed")
+        if not request or request.status != "consumed":
             return request
-        self._append({"event": "consumed", "review_id": review_id, "timestamp": utc_now_iso()})
         record_trace_event(
             phase="review",
             event_type="review_consumed",
@@ -285,23 +250,7 @@ class ReviewStore:
             review_id=review_id,
             data={"utterance": request.utterance, "review_kind": request.review_kind},
         )
-        return ReviewRequest(
-            review_id=request.review_id,
-            utterance=request.utterance,
-            intent=request.intent,
-            review=request.review,
-            created_at=request.created_at,
-            status="consumed",
-            expires_at=request.expires_at,
-            review_kind=request.review_kind,
-            plan_id=request.plan_id,
-            plan_payload=request.plan_payload,
-            step_reviews=request.step_reviews,
-            layer=request.layer,
-            snapshot_payload=request.snapshot_payload,
-            pending_reason=request.pending_reason,
-            supplemental_input=request.supplemental_input,
-        )
+        return request
 
     @_synchronized
     def claim_execution(self, review_id: str) -> bool:
@@ -312,10 +261,31 @@ class ReviewStore:
         prevents both workers from treating that approval as executable.
         """
 
-        request = self.get(review_id)
-        if request is None or request.status != "approved":
+        if self._connection is None:
+            request = self._transition(review_id, from_statuses=("approved",), event="executing")
+            return request is not None and request.status == "executing"
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            cursor = self._connection.execute(
+                "UPDATE reviews SET status = 'executing', version = version + 1 WHERE review_id = ? AND status = 'approved'",
+                (review_id,),
+            )
+            claimed = cursor.rowcount == 1
+            if claimed:
+                self._connection.execute(
+                    "INSERT INTO review_events (payload) VALUES (?)",
+                    (json.dumps({"event": "executing", "review_id": review_id, "timestamp": utc_now_iso()}, ensure_ascii=False),),
+                )
+            self._connection.commit()
+        except sqlite3.Error:
+            self._connection.rollback()
+            self._connection = None
             return False
-        self._append({"event": "executing", "review_id": review_id, "timestamp": utc_now_iso()})
+        if not claimed:
+            return False
+        request = self.get(review_id)
+        if request is None:
+            return False
         record_trace_event(
             phase="review",
             event_type="review_execution_claimed",
@@ -331,10 +301,9 @@ class ReviewStore:
     def release_execution(self, review_id: str) -> ReviewRequest | None:
         """Make a failed execution retryable without replaying a successful one."""
 
-        request = self.get(review_id)
-        if request is None or request.status != "executing":
+        request = self._transition(review_id, from_statuses=("executing",), event="approved")
+        if request is None or request.status != "approved":
             return request
-        self._append({"event": "approved", "review_id": review_id, "timestamp": utc_now_iso()})
         record_trace_event(
             phase="review",
             event_type="review_execution_released",
@@ -344,21 +313,18 @@ class ReviewStore:
             review_id=review_id,
             data={"review_kind": request.review_kind},
         )
-        return self.get(review_id)
+        return request
 
     @_synchronized
     def provide_input(self, review_id: str, supplemental_input: str) -> ReviewRequest | None:
-        request = self.get(review_id)
-        if not request or request.status != "pending":
-            return request
-        self._append(
-            {
-                "event": "provided",
-                "review_id": review_id,
-                "timestamp": utc_now_iso(),
-                "supplemental_input": supplemental_input,
-            }
+        request = self._transition(
+            review_id,
+            from_statuses=("pending",),
+            event="provided",
+            supplemental_input=supplemental_input,
         )
+        if not request or request.status != "provided":
+            return request
         record_trace_event(
             phase="review",
             event_type="review_input_provided",
@@ -368,26 +334,27 @@ class ReviewStore:
             review_id=review_id,
             data={"supplemental_input": supplemental_input, "review_kind": request.review_kind},
         )
-        return ReviewRequest(
-            review_id=request.review_id,
-            utterance=request.utterance,
-            intent=request.intent,
-            review=request.review,
-            created_at=request.created_at,
-            status="provided",
-            expires_at=request.expires_at,
-            review_kind=request.review_kind,
-            plan_id=request.plan_id,
-            plan_payload=request.plan_payload,
-            step_reviews=request.step_reviews,
-            layer=request.layer,
-            snapshot_payload=request.snapshot_payload,
-            pending_reason=request.pending_reason,
-            supplemental_input=supplemental_input,
-        )
+        return request
 
     @_synchronized
     def get(self, review_id: str) -> ReviewRequest | None:
+        if self._connection is not None:
+            try:
+                now = utc_now_iso()
+                self._connection.execute(
+                    "UPDATE reviews SET status = 'expired', version = version + 1 WHERE review_id = ? AND status = 'pending' AND (expires_at IS NULL OR expires_at <= ?)",
+                    (review_id, now),
+                )
+                self._connection.commit()
+                row = self._connection.execute("SELECT status, payload, supplemental_input FROM reviews WHERE review_id = ?", (review_id,)).fetchone()
+                if row is None:
+                    return None
+                payload = json.loads(str(row[1]))
+                if row[2] is not None:
+                    payload["supplemental_input"] = str(row[2])
+                return review_from_payload(payload, status=str(row[0]))
+            except (sqlite3.Error, json.JSONDecodeError, KeyError):
+                self._connection = None
         latest: dict[str, Any] | None = None
         status = "pending"
         for entry in self._entries():
@@ -416,6 +383,21 @@ class ReviewStore:
 
     @_synchronized
     def list_pending(self) -> list[ReviewRequest]:
+        if self._connection is not None:
+            try:
+                now = utc_now_iso()
+                self._connection.execute("UPDATE reviews SET status = 'expired', version = version + 1 WHERE status = 'pending' AND (expires_at IS NULL OR expires_at <= ?)", (now,))
+                self._connection.commit()
+                rows = self._connection.execute("SELECT payload, supplemental_input FROM reviews WHERE status = 'pending' ORDER BY created_at").fetchall()
+                pending = []
+                for payload_text, supplemental_input in rows:
+                    payload = json.loads(str(payload_text))
+                    if supplemental_input is not None:
+                        payload["supplemental_input"] = str(supplemental_input)
+                    pending.append(review_from_payload(payload, status="pending"))
+                return pending
+            except (sqlite3.Error, json.JSONDecodeError, KeyError):
+                self._connection = None
         created: dict[str, dict[str, Any]] = {}
         statuses: dict[str, str] = {}
         for entry in self._entries():
@@ -482,16 +464,50 @@ class ReviewStore:
                 entries.append(entry)
         return entries
 
+    def _transition(self, review_id: str, *, from_statuses: tuple[str, ...], event: str, supplemental_input: str | None = None) -> ReviewRequest | None:
+        if self._connection is None:
+            request = self.get(review_id)
+            if request is None or request.status not in from_statuses:
+                return request
+            entry: dict[str, Any] = {"event": event, "review_id": review_id, "timestamp": utc_now_iso()}
+            if supplemental_input is not None:
+                entry["supplemental_input"] = supplemental_input
+            self._append(entry)
+            return self.get(review_id)
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            now = utc_now_iso()
+            self._connection.execute(
+                "UPDATE reviews SET status = 'expired', version = version + 1 WHERE review_id = ? AND status = 'pending' AND (expires_at IS NULL OR expires_at <= ?)",
+                (review_id, now),
+            )
+            placeholders = ", ".join("?" for _ in from_statuses)
+            target_status = {"approved": "approved", "rejected": "rejected", "executing": "executing", "consumed": "consumed", "provided": "provided"}[event]
+            cursor = self._connection.execute(
+                f"UPDATE reviews SET status = ?, supplemental_input = COALESCE(?, supplemental_input), version = version + 1 WHERE review_id = ? AND status IN ({placeholders})",
+                (target_status, supplemental_input, review_id, *from_statuses),
+            )
+            if cursor.rowcount == 1:
+                entry: dict[str, Any] = {"event": event, "review_id": review_id, "timestamp": now}
+                if supplemental_input is not None:
+                    entry["supplemental_input"] = supplemental_input
+                self._connection.execute("INSERT INTO review_events (payload) VALUES (?)", (json.dumps(entry, ensure_ascii=False),))
+            self._connection.commit()
+        except sqlite3.Error:
+            self._connection.rollback()
+            self._connection = None
+        return self.get(review_id)
+
     def _append(self, entry: dict[str, Any]) -> None:
         if self._connection is not None:
             try:
-                self._connection.execute(
-                    "INSERT INTO review_events (payload) VALUES (?)",
-                    (json.dumps(entry, ensure_ascii=False),),
-                )
+                self._connection.execute("BEGIN IMMEDIATE")
+                self._connection.execute("INSERT INTO review_events (payload) VALUES (?)", (json.dumps(entry, ensure_ascii=False),))
+                self._apply_event_to_current_state(entry)
                 self._connection.commit()
                 return
             except sqlite3.Error:
+                self._connection.rollback()
                 # Preserve availability on a damaged local state database. The
                 # JSONL fallback is retained for recovery and diagnostics only.
                 self._connection = None
@@ -506,6 +522,49 @@ class ReviewStore:
                 handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
             self.path = fallback
 
+    def _apply_event_to_current_state(self, entry: dict[str, Any]) -> None:
+        """Apply one historic event while an SQLite transaction is active."""
+        if self._connection is None:
+            return
+        event = str(entry.get("event") or "")
+        review_id = entry.get("review_id")
+        if not isinstance(review_id, str):
+            return
+        if event == "created":
+            payload = json.dumps(entry, ensure_ascii=False)
+            self._connection.execute(
+                """INSERT OR IGNORE INTO reviews (
+                    review_id, status, review_kind, plan_id, step_id, utterance,
+                    intent_payload, review_payload, plan_payload, snapshot_payload,
+                    supplemental_input, pending_reason, created_at, expires_at, version, payload
+                ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+                (
+                    review_id,
+                    str(entry.get("review_kind") or "intent"),
+                    str(entry["plan_id"]) if entry.get("plan_id") is not None else None,
+                    _step_id_from_payload(entry),
+                    str(entry.get("utterance") or ""),
+                    json.dumps(entry.get("intent") or {}, ensure_ascii=False),
+                    json.dumps(entry.get("review") or {}, ensure_ascii=False),
+                    json.dumps(entry.get("plan_payload"), ensure_ascii=False) if entry.get("plan_payload") is not None else None,
+                    json.dumps(entry.get("snapshot_payload"), ensure_ascii=False) if entry.get("snapshot_payload") is not None else None,
+                    str(entry["supplemental_input"]) if entry.get("supplemental_input") is not None else None,
+                    str(entry["pending_reason"]) if entry.get("pending_reason") is not None else None,
+                    str(entry.get("created_at") or utc_now_iso()),
+                    str(entry["expires_at"]) if entry.get("expires_at") is not None else None,
+                    payload,
+                ),
+            )
+            return
+        status = {"approved": "approved", "executing": "executing", "rejected": "rejected", "consumed": "consumed", "provided": "provided"}.get(event)
+        if status is None:
+            return
+        supplemental_input = entry.get("supplemental_input") if event == "provided" else None
+        self._connection.execute(
+            "UPDATE reviews SET status = ?, supplemental_input = COALESCE(?, supplemental_input), version = version + 1 WHERE review_id = ?",
+            (status, supplemental_input, review_id),
+        )
+
     def _open_state_connection(self) -> sqlite3.Connection | None:
         try:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -514,6 +573,28 @@ class ReviewStore:
             connection.execute("PRAGMA synchronous=FULL")
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS review_events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT NOT NULL)"
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS reviews (
+                    review_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    review_kind TEXT NOT NULL,
+                    plan_id TEXT,
+                    step_id TEXT,
+                    utterance TEXT NOT NULL,
+                    intent_payload TEXT NOT NULL,
+                    review_payload TEXT NOT NULL,
+                    plan_payload TEXT,
+                    snapshot_payload TEXT,
+                    supplemental_input TEXT,
+                    pending_reason TEXT,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    version INTEGER NOT NULL DEFAULT 0,
+                    payload TEXT NOT NULL
+                )
+                """
             )
             connection.commit()
             return connection
@@ -528,19 +609,38 @@ class ReviewStore:
         except sqlite3.Error:
             self._connection = None
             return
-        if has_events:
-            return
-        legacy_entries = self._legacy_entries()
-        if not legacy_entries:
-            return
+        if not has_events:
+            legacy_entries = self._legacy_entries()
+            if legacy_entries:
+                try:
+                    self._connection.executemany(
+                        "INSERT INTO review_events (payload) VALUES (?)",
+                        [(json.dumps(entry, ensure_ascii=False),) for entry in legacy_entries],
+                    )
+                    self._connection.commit()
+                except sqlite3.Error:
+                    self._connection = None
+                    return
         try:
-            self._connection.executemany(
-                "INSERT INTO review_events (payload) VALUES (?)",
-                [(json.dumps(entry, ensure_ascii=False),) for entry in legacy_entries],
-            )
-            self._connection.commit()
+            has_current_state = self._connection.execute("SELECT 1 FROM reviews LIMIT 1").fetchone() is not None
+            if not has_current_state:
+                self._rebuild_current_state_from_events()
         except sqlite3.Error:
             self._connection = None
+
+    def _rebuild_current_state_from_events(self) -> None:
+        if self._connection is None:
+            return
+        entries = self._entries()
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            self._connection.execute("DELETE FROM reviews")
+            for entry in entries:
+                self._apply_event_to_current_state(entry)
+            self._connection.commit()
+        except sqlite3.Error:
+            self._connection.rollback()
+            raise
 
 
 def make_review_id(utterance: str, intent: Intent, created_at: str) -> str:
@@ -552,6 +652,17 @@ def make_review_id(utterance: str, intent: Intent, created_at: str) -> str:
         ).encode("utf-8")
     ).hexdigest()[:12]
     return f"rev_{digest}"
+
+
+def _step_id_from_payload(payload: dict[str, Any]) -> str | None:
+    snapshot = payload.get("snapshot_payload")
+    if isinstance(snapshot, dict) and snapshot.get("current_step_id") is not None:
+        return str(snapshot["current_step_id"])
+    target = payload.get("intent")
+    if isinstance(target, dict) and target.get("target") and isinstance(target["target"], dict):
+        step_id = target["target"].get("step_id")
+        return str(step_id) if step_id is not None else None
+    return None
 
 
 def make_plan_review_id(plan_payload: dict[str, Any], created_at: str) -> str:

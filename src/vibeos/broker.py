@@ -14,8 +14,9 @@ from .app_fixtures import AppSearchFixture
 from .apps import AppRegistry
 from .assistant_semantics import AssistantIntent, InteractionSurface, assistant_intent_to_payload
 from .audit import AuditLog
-from .browser_state import browser_attempt_scope, browser_context_snapshot, record_browser_navigation
+from .browser_state import browser_attempt_scope, record_browser_navigation
 from .candidate_selection import CandidateSelectionProvider, candidate_selection_decision_from_payload, candidate_set_from_payload
+from .command_service import CommandPorts, CommandService
 from .capabilities import capability_payload, executable_actions, permission_summary
 from .clarification import ClarificationProvider
 from .clipboard import ClipboardAdapter
@@ -24,6 +25,15 @@ from .domain_registry import default_domain_registry
 from .execution_graph import execute_plan_graph, overall_status as execution_graph_overall_status
 from .failure_classifier import FailureClassifier
 from .goal_loop import GoalLoop, loop_state_from_payload, normalize_state_for_plan, sync_loop_state_with_planning
+from .goal_loop_adapters import (
+    BrokerAcceptancePort,
+    BrokerExecutionPort,
+    BrokerObservationPort,
+    BrokerPlanningPort,
+    BrokerRecoveryPort,
+    BrokerReviewPort,
+)
+from .goal_ports import GoalLoopPorts
 from .goal_models import GoalSpec, GoalSynthesisProvenance
 from .intent import IntentBroker, OpenAICompatibleIntentBroker
 from .loop_policy import contextualize_step_review, default_loop_policy
@@ -37,6 +47,8 @@ from .permissions import PermissionPolicy
 from .portal import PortalAdapter
 from .replanner import EvidenceDrivenReplanner, Replanner
 from .reviews import ReviewStore, review_to_payload
+from .projections import project_legacy_runtime_payload
+from .run_context import RunContext
 from .run_ledger import AttemptLedgerEntry
 from .strategy import RecoveryPolicy, StrategyCandidate, StrategyConstraint, StrategySelectionProvider, StrategyStep
 from .task_models import (
@@ -60,7 +72,14 @@ from .task_models import (
 )
 from .task_trace import TaskTraceStore, bind_trace_session, current_trace_session, record_model_io, record_trace_event
 from .task_validation import validate_plan
-from .tool_protocol import ToolRegistry, ToolResult, ToolSpec
+from .tool_protocol import ToolRegistry
+from .tools.apps import app_tool_specs
+from .tools.browser import browser_tool_specs
+from .tools.clipboard import clipboard_tool_specs
+from .tools.fixtures import fixture_tool_specs
+from .tools.notifications import notification_tool_specs
+from .tools.system import system_tool_specs
+from .tools.windows import window_tool_specs
 from .understanding import (
     OpenAICompatibleUnderstandingTransitionProvider,
     UnderstandingAnalysisDecision,
@@ -137,6 +156,17 @@ class CapabilityBroker:
         recovery_policy = RecoveryPolicy(provider=strategy_selection_provider) if strategy_selection_provider is not None else None
         self.agent_runtime = AgentRuntime(self._build_v06_tool_registry(), recovery_policy=recovery_policy)
         self.agent_session = self.agent_runtime.create_session("broker_session")
+        self.command_service = CommandService(
+            trace_store=self.trace_store,
+            ports=CommandPorts(
+                make_run_id=self._make_run_id,
+                plan=self._handle_task_plan_request,
+                approve_review=lambda review_id, dry_run, transport: self.approve_review(review_id, dry_run=dry_run, transport=transport),
+                provide_review_input=lambda review_id, supplemental_input, dry_run, transport: self.provide_review_input(review_id, supplemental_input, dry_run=dry_run, transport=transport),
+                record_result=self._record_command_result,
+                result_metadata=self._command_result_metadata,
+            ),
+        )
 
     def capabilities(self) -> dict[str, object]:
         return {
@@ -326,57 +356,15 @@ class CapabilityBroker:
 
     def _make_goal_loop(self) -> GoalLoop:
         return GoalLoop(
-            observation_service=ObservationService(self.verifier_registry, self.verifier_harness),
-            planning_payload=self._planning_payload,
-            resolve_understanding_transition=lambda current, trigger: self._resolve_planning_understanding_transition(current, trigger=trigger),
-            apply_replan_transition=lambda current, decision, failure: self._planning_from_replan_decision(current, decision=decision, failure=failure),
-            plan_again=self.plan_turn_from_loop,
-            review_step=lambda plan, step, pre_observation: self.review_task_step(
-                plan,
-                step,
-                pre_observation,
+            ports=GoalLoopPorts(
+                planning=BrokerPlanningPort(self),
+                observation=BrokerObservationPort(self, ObservationService(self.verifier_registry, self.verifier_harness)),
+                review=BrokerReviewPort(self),
+                execution=BrokerExecutionPort(self),
+                acceptance=BrokerAcceptancePort(self),
+                recovery=BrokerRecoveryPort(self),
+                policy=self.loop_policy,
             ),
-            execute_step=lambda plan, step, active_request, attempt_id: self.execute_task_step(
-                plan,
-                step,
-                dry_run=active_request.dry_run,
-                transport=active_request.transport,
-                review_id=active_request.review_id,
-                attempt_id=attempt_id,
-            ),
-            step_progressed=self._step_progressed,
-            assess_plan_execution=lambda plan, step_results, active_request, run_id, understanding_id, candidate_set_id, route_decision_id: self.assess_task_plan_execution(
-                plan,
-                step_results,
-                dry_run=active_request.dry_run,
-                understanding_id=understanding_id,
-                candidate_set_id=candidate_set_id,
-                route_decision_id=route_decision_id,
-            ),
-            classify_failure=self.failure_classifier.classify,
-            decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: self.replanner.decide(
-                utterance=utterance,
-                current_plan=current_plan,
-                attempts=attempts,
-                failure=failure,
-                understanding_id=understanding_id,
-                candidate_set_id=candidate_set_id,
-                available_domain_ids=available_domain_ids,
-            ),
-            persist_review=lambda utterance, current, loop_state, step, reason: self.create_loop_review(
-                utterance=utterance,
-                planning=current,
-                loop_state=loop_state,
-                step=step,
-                reason=reason,
-            ),
-            persist_user_input=lambda utterance, current, loop_state, reason: self.create_user_input_review(
-                utterance=utterance,
-                planning=current,
-                loop_state=loop_state,
-                reason=reason,
-            ),
-            policy=self.loop_policy,
         )
 
     def _step_progressed(
@@ -599,119 +587,14 @@ class CapabilityBroker:
         )
 
     def handle(self, request: CommandRequest) -> CommandResult:
-        trace_session = current_trace_session()
-        created_trace = False
-        if trace_session is None:
-            run_seed = request.utterance or request.review_id or "command"
-            trace_session = self.trace_store.start_run(
-                run_id=self._make_run_id(run_seed),
-                command_name="approve" if request.review_id else "ask",
-                utterance=request.utterance,
-                mode=request.mode,
-                transport=request.transport,
-                dry_run=request.dry_run,
-                debug=request.debug,
-                review_id=request.review_id,
-            )
-            created_trace = True
-        scope = bind_trace_session(trace_session) if created_trace else nullcontext(trace_session)
-        with scope:
-            record_trace_event(
-                phase="ingress",
-                event_type="request_received",
-                status="ok",
-                actor="broker",
-                review_id=request.review_id,
-                data={
-                    "utterance": request.utterance,
-                    "mode": request.mode,
-                    "dry_run": request.dry_run,
-                    "approve": request.approve,
-                    "transport": request.transport,
-                    "debug": request.debug,
-                },
-            )
-            if request.review_id and request.supplemental_input is not None and request.approve:
-                fallback = Intent.unknown("review resume cannot combine approval and supplemental input")
-                result = self._with_transport(
-                    CommandResult(
-                        status="rejected",
-                        intent=fallback,
-                        review_id=request.review_id,
-                        message="supplemental input resumes a user-input review; do not combine it with explicit approval",
-                    ),
-                    request.transport,
-                )
-            elif request.review_id and request.supplemental_input is not None:
-                result = self.provide_review_input(
-                    request.review_id,
-                    request.supplemental_input,
-                    dry_run=request.dry_run,
-                    transport=request.transport,
-                )
-            elif request.review_id:
-                result = self.approve_review(request.review_id, dry_run=request.dry_run, transport=request.transport)
-            elif request.approve:
-                fallback = Intent.unknown("approval requires a stored review id")
-                result = self._with_transport(
-                    CommandResult(
-                        status="rejected",
-                        intent=fallback,
-                        message="L2 approval must use a stored review id; run without approval first, then `vibe approve <review_id>`",
-                    ),
-                    request.transport,
-                )
-            else:
-                planned = self._handle_task_plan_request(request)
-                if planned is not None:
-                    result = self._with_transport(planned, request.transport)
-                else:
-                    intent = self.intent_broker.parse(request.utterance)
-                    review = self.policy.review(intent)
-                    if not review.allowed:
-                        result = CommandResult(status="rejected", intent=intent, message=review.reason, review=review)
-                    elif review.review_required and not request.dry_run:
-                        review_request = self.reviews.create(request.utterance, intent, review)
-                        result = CommandResult(
-                            status="review_required",
-                            intent=intent,
-                            result={"review_id": review_request.review_id, "review": asdict(review)},
-                            review_id=review_request.review_id,
-                            message=f"explicit approval is required; run `vibe approve {review_request.review_id}` after reviewing the request",
-                            review=review,
-                        )
-                    else:
-                        result = self._execute(request, intent, review)
-                    result = self._with_transport(result, request.transport)
-            final_result = self._record_command_result(request, result, trace_session.run_id)
-            record_trace_event(
-                phase="completion",
-                event_type="command_result_emitted",
-                status=final_result.status,
-                actor="broker",
-                goal_id=self._result_goal_id(final_result),
-                plan_id=self._result_plan_id(final_result),
-                review_id=final_result.review_id,
-                selected_strategy_id=self._result_selected_strategy_id(final_result),
-                data={
-                    "overall_status": final_result.overall_status,
-                    "execution_status": final_result.execution_status,
-                    "acceptance_status": final_result.acceptance_status,
-                    "message": final_result.message,
-                },
-            )
-            if created_trace:
-                trace_session.finalize(
-                    status=final_result.status,
-                    goal_id=self._result_goal_id(final_result),
-                    review_id=final_result.review_id,
-                    message=final_result.message,
-                    overall_status=final_result.overall_status,
-                    selected_strategy_id=self._result_selected_strategy_id(final_result),
-                    selected_target=final_result.selected_target,
-                    plan_id=self._result_plan_id(final_result),
-                )
-            return final_result
+        return self.command_service.handle(request)
+
+    def _command_result_metadata(self, result: CommandResult) -> dict[str, object]:
+        return {
+            "goal_id": self._result_goal_id(result),
+            "plan_id": self._result_plan_id(result),
+            "selected_strategy_id": self._result_selected_strategy_id(result),
+        }
 
     def _record_command_result(self, request: CommandRequest, result: CommandResult, trace_run_id: str) -> CommandResult:
         audit_id = result.audit_id
@@ -992,167 +875,6 @@ class CapabilityBroker:
         )
         return self._run_task_plan_goal_loop(request, planning)
 
-    def _run_v06_runtime_bridge(self, request: CommandRequest, planning) -> CommandResult | None:
-        if planning.goal_synthesis is None or planning.goal_synthesis.goal_spec is None:
-            return None
-        if planning.plan is None:
-            return None
-        if planning.route_decision is not None and planning.route_decision.action != "select":
-            return None
-        goal_spec = planning.goal_synthesis.goal_spec
-        semantic_metadata = self._semantic_strategy_metadata(planning)
-        strategies = self._build_v06_strategy_candidates((planning.plan,), goal_spec, semantic_metadata=semantic_metadata)
-        if not strategies:
-            return None
-        environment = self._build_v06_environment_profile(request, planning)
-        if goal_spec.goal_id not in self.agent_session.goals:
-            self.agent_runtime.start_goal(self.agent_session.session_id, goal_spec)
-        selection = self.agent_runtime.recovery_policy.select_strategy(
-            utterance=request.utterance,
-            strategies=strategies,
-            constraints=StrategyConstraint(),
-            environment=environment,
-            attempts=(),
-            last_failure_class="none",
-        )
-        selected_strategy = next((candidate for candidate in strategies if candidate.strategy_id == selection.selected_strategy_id), None)
-        selected_plan = selected_strategy.task_plan if selected_strategy is not None else planning.plan
-        if selected_plan is None:
-            return None
-        stored_review_payload = self._v06_stored_review_payload(
-            plan=selected_plan,
-            goal_id=goal_spec.goal_id,
-            strategies=strategies,
-            selected_strategy_id=selected_strategy.strategy_id if selected_strategy is not None else "",
-            environment=environment,
-            semantic_metadata=semantic_metadata,
-        )
-        plan_review = self.review_task_plan(selected_plan, stored_payload=stored_review_payload)
-        if plan_review.status in {"review_required", "rejected"}:
-            gate_result = self.agent_runtime.gate_goal(
-                session_id=self.agent_session.session_id,
-                goal_id=goal_spec.goal_id,
-                utterance=request.utterance,
-                strategies=strategies,
-                selected_strategy_id=selected_strategy.strategy_id if selected_strategy is not None else "",
-                reason=plan_review.message,
-                terminal_status="needs_review" if plan_review.status == "review_required" else "failed",
-            )
-            payload = self._planning_payload(planning)
-            payload["environment_profile"] = asdict(environment)
-            payload["goal_runtime"] = asdict(gate_result.goal_runtime)
-            payload["goal_turn"] = asdict(gate_result.turn)
-            payload["strategy_candidates"] = [self._strategy_payload(item) for item in strategies]
-            payload["selected_strategy_id"] = gate_result.selected_strategy_id
-            payload["run_ledger"] = asdict(gate_result.ledger)
-            payload["plan"] = asdict(selected_plan)
-            payload["plan_review"] = asdict(plan_review)
-            if request.debug:
-                runtime_debug = dict(gate_result.debug_payload)
-                runtime_debug["environment_profile"] = asdict(environment)
-                runtime_debug["provider_artifacts"] = list(payload["debug_trace"].get("model_exchange", ()))
-                payload["debug_trace"]["runtime_v0_6"] = runtime_debug
-            payload["run"] = asdict(
-                AgentRun(
-                    run_id=self._make_run_id(request.utterance),
-                    goal_id=gate_result.goal_runtime.goal_id,
-                    utterance=request.utterance,
-                    status=self._run_status_for_overall("needs_review" if plan_review.status == "review_required" else "failed"),
-                    selected_transport=request.transport,
-                    attempt_ids=(),
-                    final_outcome="needs_review" if plan_review.status == "review_required" else "failed",
-                )
-            )
-            payload["attempts"] = []
-            review_request = self.reviews.get(plan_review.review_id or "") if plan_review.status == "review_required" else None
-            intent = self._intent_from_task_step(selected_plan.steps[0]) if selected_plan.steps else Intent.unknown("task plan contains no executable steps")
-            record_trace_event(
-                phase="completion",
-                event_type="goal_gated",
-                status=plan_review.status,
-                actor="broker",
-                goal_id=gate_result.goal_runtime.goal_id,
-                turn_id=gate_result.turn.turn_id,
-                plan_id=selected_plan.plan_id,
-                review_id=plan_review.review_id,
-                selected_strategy_id=gate_result.selected_strategy_id,
-                data={"reason": plan_review.message, "terminal_status": gate_result.goal_runtime.status},
-            )
-            return self._with_transport(
-                CommandResult(
-                    status="review_required" if plan_review.status == "review_required" else "rejected",
-                    intent=intent,
-                    result=payload,
-                    review_id=plan_review.review_id,
-                    review=review_request.review if review_request else None,
-                    message=plan_review.message,
-                    execution_status="not_started",
-                    acceptance_status="skipped",
-                    overall_status="needs_review" if plan_review.status == "review_required" else "failed",
-                ),
-                request.transport,
-            )
-        result = self.agent_runtime.continue_goal(
-            session_id=self.agent_session.session_id,
-            goal_id=goal_spec.goal_id,
-            utterance=request.utterance,
-            strategies=strategies,
-            environment=environment,
-        )
-        selected_strategy = next((candidate for candidate in strategies if candidate.strategy_id == result.selected_strategy_id), None)
-        selected_plan = selected_strategy.task_plan if selected_strategy is not None else planning.plan
-        payload = self._planning_payload(planning)
-        payload["environment_profile"] = asdict(environment)
-        payload["goal_runtime"] = asdict(result.goal_runtime)
-        payload["goal_turn"] = asdict(result.turn)
-        payload["strategy_candidates"] = [self._strategy_payload(item) for item in strategies]
-        payload["selected_strategy_id"] = result.selected_strategy_id
-        payload["run_ledger"] = asdict(result.ledger)
-        payload["plan"] = asdict(selected_plan) if selected_plan is not None else None
-        if request.debug:
-            runtime_debug = dict(result.debug_payload)
-            runtime_debug["environment_profile"] = asdict(environment)
-            runtime_debug["provider_artifacts"] = list(payload["debug_trace"].get("model_exchange", ()))
-            payload["debug_trace"]["runtime_v0_6"] = runtime_debug
-        if selected_plan is not None:
-            payload["plan_review"] = asdict(plan_review)
-        execution_payload, selected_target = self._v06_execution_payload(result, selected_strategy)
-        payload["preview" if request.dry_run else "execution"] = execution_payload
-        overall_status = self._v06_overall_status(request, result)
-        self._record_v06_trace(result, overall_status=overall_status)
-        execution_status = "dry_run" if request.dry_run else execution_payload["execution_status"]
-        acceptance_status = str(execution_payload.get("acceptance_status", "skipped"))
-        status = self._v06_command_status(request, overall_status)
-        message = self._v06_result_message(request, result, overall_status)
-        run_id = self._make_run_id(request.utterance)
-        current_turn_attempts = tuple(attempt for attempt in result.ledger.attempts if attempt.turn_id == result.turn.turn_id)
-        payload["run"] = asdict(
-            AgentRun(
-                run_id=run_id,
-                goal_id=result.goal_runtime.goal_id,
-                utterance=request.utterance,
-                status=self._run_status_for_overall(overall_status),
-                selected_transport=request.transport,
-                attempt_ids=tuple(item.attempt_id for item in current_turn_attempts),
-                final_outcome=overall_status,
-            )
-        )
-        payload["attempts"] = [self._v06_attempt_payload(item) for item in current_turn_attempts]
-        intent = self._intent_from_task_step(selected_plan.steps[0]) if selected_plan and selected_plan.steps else Intent.unknown("task plan contains no executable steps")
-        return self._with_transport(
-            CommandResult(
-                status=status,
-                intent=intent,
-                result=payload,
-                selected_target=selected_target,
-                message=message,
-                execution_status=execution_status,
-                acceptance_status=acceptance_status,
-                overall_status=overall_status,
-            ),
-            request.transport,
-        )
-
     def _build_v06_environment_profile(self, request: CommandRequest, planning) -> EnvironmentProfile:
         has_app_candidates = any(
             candidate.routes and candidate.routes[0].domain_id == "apps"
@@ -1173,17 +895,6 @@ class CapabilityBroker:
             browser_site_catalog=dict(self.browser_site_catalog),
             browser_search_catalog={key: dict(value) for key, value in self.browser_search_catalog.items()},
             app_fixture_catalog=dict(self.app_fixture_catalog),
-        )
-
-    def _should_use_legacy_strategy_bridge(self, planning) -> bool:
-        goal_synthesis = getattr(planning, "goal_synthesis", None)
-        goal_spec = getattr(goal_synthesis, "goal_spec", None)
-        assistant_intent = getattr(goal_spec, "assistant_intent", None)
-        if assistant_intent is None:
-            return False
-        return bool(
-            assistant_intent.objective_kind == "open_named_website"
-            and (self.browser_site_catalog or self.browser_search_catalog)
         )
 
     def _compatibility_goal_spec(self, planning, plan: TaskPlan, goal_id: str) -> GoalSpec:
@@ -1233,7 +944,16 @@ class CapabilityBroker:
             semantic_metadata=self._semantic_strategy_metadata(planning),
         )
 
-    def _compatibility_runtime_result(self, request: CommandRequest, planning, attempts: tuple[PlanAttempt, ...], *, overall_status: str, message: str):
+    def _compatibility_runtime_result(
+        self,
+        request: CommandRequest,
+        planning,
+        attempts: tuple[PlanAttempt, ...],
+        *,
+        context: RunContext,
+        overall_status: str,
+        message: str,
+    ):
         plan = attempts[-1].task_plan if attempts and attempts[-1].task_plan is not None else planning.plan
         if plan is None:
             return None, None
@@ -1306,8 +1026,8 @@ class CapabilityBroker:
             failure_class=last_failure_class if last_failure_class != "none" else ("none" if overall_status in {"completed", "incomplete", "needs_user_input", "needs_review"} else "task_plan_failed"),
             verifier_confirmed=overall_status == "completed",
         )
-        result = self.agent_runtime.record_external_turn(
-            session_id=self.agent_session.session_id,
+        result = project_legacy_runtime_payload(
+            context=context,
             goal_spec=goal_spec,
             utterance=request.utterance,
             strategies=tuple(strategies),
@@ -1317,23 +1037,6 @@ class CapabilityBroker:
             terminal=terminal,
         )
         return result, environment
-
-    def _build_v06_strategy_candidates(
-        self,
-        candidates: tuple[TaskPlan, ...],
-        goal_spec: GoalSpec,
-        semantic_metadata: dict[str, object] | None = None,
-    ) -> tuple[StrategyCandidate, ...]:
-        strategies: list[StrategyCandidate] = []
-        for index, candidate in enumerate(candidates):
-            strategy = self._task_plan_to_v06_strategy(candidate, goal_spec, index, semantic_metadata=semantic_metadata)
-            if strategy is None:
-                continue
-            strategies.append(strategy)
-        strategies.extend(self._synthetic_v07_strategies(goal_spec, strategies))
-        if semantic_metadata:
-            strategies = [replace(item, metadata={**dict(semantic_metadata), **dict(item.metadata)}) for item in strategies]
-        return tuple(strategies)
 
     def _task_plan_to_v06_strategy(
         self,
@@ -1924,481 +1627,17 @@ class CapabilityBroker:
         return mapping.get(failure_class, failure_class)
 
     def _build_v06_tool_registry(self) -> ToolRegistry:
-        def preview_window_id(name: str) -> str:
-            slug = name.strip().lower() or "current"
-            return f"preview:{slug}"
-
-        def apps_resolve(payload, context) -> ToolResult:
-            name = str(payload.get("name") or "")
-            matches = self.apps.resolve(name)
-            selected = matches[0].desktop_id if matches else None
-            return ToolResult(
-                status="succeeded",
-                output={"resolved_desktop_id": selected, "matches": [asdict(item) for item in matches]},
-                evidence={"requested_name": name, "match_count": len(matches)},
-                state_updates={"resolved_desktop_id": selected},
-            )
-
-        def app_open(payload, context) -> ToolResult:
-            name = str(payload.get("name") or "")
-            selected = str(context.state.get("resolved_desktop_id") or "")
-            matches = self.apps.resolve(name) if not selected else []
-            if not selected and matches:
-                selected = matches[0].desktop_id
-            if not selected:
-                return ToolResult(
-                    status="failed",
-                    message="no installed app matches the requested target",
-                    evidence={"requested_name": name},
-                    failure_class="semantic_mismatch",
-                )
-            if context.environment.dry_run:
-                return ToolResult(
-                    status="succeeded",
-                    output={"selected_target": selected, "adapter": "apps.registry", "adapter_status": "dry_run"},
-                    evidence={"requested_name": name, "desktop_id": selected, "dry_run": True},
-                    state_updates={"selected_target": selected},
-                )
-            app = next((item for item in self.apps.list_apps() if item.desktop_id == selected), None)
-            if app is None:
-                return ToolResult(
-                    status="failed",
-                    message="resolved desktop application is unavailable",
-                    evidence={"desktop_id": selected},
-                    failure_class="environment_unreachable",
-                )
-            adapter_result = self.apps.open_app(app)
-            if adapter_result.get("status") == "opened":
-                return ToolResult(
-                    status="succeeded",
-                    output={"selected_target": selected, "adapter": "apps.registry", "adapter_status": "succeeded", **adapter_result},
-                    evidence={"requested_name": name, "desktop_id": selected},
-                    state_updates={"selected_target": selected},
-                )
-            return ToolResult(
-                status="failed",
-                message=str(adapter_result.get("error") or "app open failed"),
-                output={"adapter": "apps.registry", "adapter_status": str(adapter_result.get("status") or "failed"), **adapter_result},
-                evidence={"requested_name": name, "desktop_id": selected},
-                failure_class="environment_unreachable",
-            )
-
-        def browser_action(payload, context) -> ToolResult:
-            tool_id = str(payload.get("tool_id") or "")
-            uri, query, site = self._browser_runtime_target(tool_id, payload)
-            if not uri:
-                return ToolResult(status="failed", message="browser route did not produce a URI", failure_class="semantic_mismatch")
-            if context.environment.dry_run:
-                with browser_attempt_scope(run_id=context.goal_id, attempt_id=context.attempt_id, route_id=context.strategy_id):
-                    record_browser_navigation(uri=uri, query=query, site=site, adapter="browser.semantic", status="opened")
-                return ToolResult(
-                    status="succeeded",
-                    output={"selected_target": uri, "uri": uri, "adapter": "browser.semantic", "adapter_status": "dry_run"},
-                    evidence={"uri": uri, "query": query, "site": site, "dry_run": True},
-                    state_updates={"selected_target": uri},
-                )
-            with browser_attempt_scope(run_id=context.goal_id, attempt_id=context.attempt_id, route_id=context.strategy_id):
-                adapter_result = self.portal.open_uri(uri)
-                if query or site:
-                    record_browser_navigation(
-                        uri=uri,
-                        query=query,
-                        site=site,
-                        adapter=str(adapter_result.get("adapter") or "browser.semantic"),
-                        status="opened" if adapter_result.get("status") == "opened" else str(adapter_result.get("status") or "failed"),
-                    )
-            status = str(adapter_result.get("status") or "failed")
-            if status == "opened":
-                return ToolResult(
-                    status="succeeded",
-                    output={"selected_target": uri, "uri": uri, "adapter": "browser.semantic", "adapter_status": "succeeded", **adapter_result},
-                    evidence={"uri": uri, "query": query, "site": site},
-                    state_updates={"selected_target": uri},
-                )
-            failure_class = "tool_timeout" if status == "timeout" else "environment_unreachable"
-            return ToolResult(
-                status="failed",
-                message=str(adapter_result.get("error") or "browser action failed"),
-                output={"uri": uri, "adapter": "browser.semantic", "adapter_status": status, **adapter_result},
-                evidence={"uri": uri, "query": query, "site": site},
-                failure_class=failure_class,
-            )
-
-        def browser_observe(payload, context) -> ToolResult:
-            snapshot = browser_context_snapshot(context.attempt_id)
-            if not snapshot.get("active_url"):
-                url_observation = self.verifier_harness.observation_for("browser_url_opened")
-                if url_observation.get("opened_url"):
-                    snapshot["active_url"] = url_observation.get("opened_url")
-                elif context.environment.dry_run and snapshot.get("requested_url"):
-                    snapshot["active_url"] = snapshot.get("requested_url")
-            if not snapshot.get("query"):
-                query_observation = self.verifier_harness.observation_for("browser_search_route_completed")
-                if query_observation.get("query"):
-                    snapshot["query"] = query_observation.get("query")
-                elif context.environment.dry_run and snapshot.get("requested_query"):
-                    snapshot["query"] = snapshot.get("requested_query")
-            return ToolResult(
-                status="succeeded",
-                output={"observed_url": snapshot.get("active_url"), "observed_query": snapshot.get("query")},
-                evidence=snapshot,
-                state_updates={"observed_url": snapshot.get("active_url"), "observed_query": snapshot.get("query")},
-            )
-
-        def browser_verify_query(payload, context) -> ToolResult:
-            expected_query = str(payload.get("query") or "")
-            observed_query = str(context.state.get("observed_query") or "") or str(self.verifier_harness.observation_for("browser_search_route_completed").get("query") or "")
-            accepted = bool(expected_query) and observed_query == expected_query
-            return ToolResult(
-                status="succeeded" if accepted else "failed",
-                message="browser verifier observed the requested search query" if accepted else "browser verifier did not observe the expected search query",
-                evidence={"expected_query": expected_query, "observed_query": observed_query},
-                accepted=accepted,
-                failure_class="acceptance_failed" if not accepted else "none",
-            )
-
-        def browser_verify_url(payload, context) -> ToolResult:
-            expected_url = str(payload.get("uri") or "")
-            observed_url = str(context.state.get("observed_url") or "") or str(self.verifier_harness.observation_for("browser_url_opened").get("opened_url") or "")
-            accepted = bool(expected_url) and observed_url == expected_url
-            return ToolResult(
-                status="succeeded" if accepted else "failed",
-                message="browser verifier observed the requested URL" if accepted else "browser verifier did not observe the expected URL",
-                evidence={"expected_url": expected_url, "observed_url": observed_url},
-                accepted=accepted,
-                failure_class="acceptance_failed" if not accepted else "none",
-            )
-
-        def browser_resolve_named_target(payload, context) -> ToolResult:
-            name = str(payload.get("name") or payload.get("target_name") or "").strip()
-            resolved = str(getattr(context.environment, "browser_site_catalog", {}).get(name.lower(), "") or "")
-            if not resolved:
-                return ToolResult(
-                    status="failed",
-                    message="no local direct-open resolution matched the named website target",
-                    evidence={"requested_name": name},
-                    failure_class="semantic_mismatch",
-                )
-            return ToolResult(
-                status="succeeded",
-                output={"resolved_url": resolved},
-                evidence={"requested_name": name, "resolved_url": resolved, "resolution_source": "local_catalog"},
-                state_updates={"resolved_url": resolved},
-            )
-
-        def browser_open_resolved_target(payload, context) -> ToolResult:
-            resolved_url = str(context.state.get("resolved_url") or "")
-            if not resolved_url:
-                return ToolResult(status="failed", message="named browser target has not been resolved", failure_class="semantic_mismatch")
-            return browser_action({"tool_id": "browser.open_url", "uri": resolved_url}, context)
-
-        def browser_observe_search_results(payload, context) -> ToolResult:
-            query = str(payload.get("query") or context.state.get("observed_query") or "").strip()
-            catalog = getattr(context.environment, "browser_search_catalog", {})
-            result_payload = catalog.get(query.lower(), {}) if isinstance(catalog, dict) else {}
-            official_url = str(result_payload.get("official_url") or "")
-            return ToolResult(
-                status="succeeded",
-                output={"official_result_url": official_url, "result_count": 1 if official_url else 0},
-                evidence={"query": query, "official_result_url": official_url, "result_source": "local_catalog"},
-                state_updates={"official_result_url": official_url},
-            )
-
-        def browser_follow_search_result(payload, context) -> ToolResult:
-            official_url = str(context.state.get("official_result_url") or "")
-            if not official_url:
-                return ToolResult(
-                    status="failed",
-                    message="browser search results did not provide a follow-up destination",
-                    evidence={"query": payload.get("query")},
-                    failure_class="semantic_mismatch",
-                )
-            return browser_action({"tool_id": "browser.open_url", "uri": official_url}, context)
-
-        def browser_verify_goal_page_identity(payload, context) -> ToolResult:
-            name = str(payload.get("name") or "").strip()
-            observed_url = str(context.state.get("observed_url") or "") or str(self.verifier_harness.observation_for("browser_url_opened").get("opened_url") or "")
-            resolved_url = str(context.state.get("resolved_url") or context.state.get("official_result_url") or getattr(context.environment, "browser_site_catalog", {}).get(name.lower(), "") or "")
-            accepted = bool(observed_url) and bool(resolved_url) and observed_url == resolved_url
-            return ToolResult(
-                status="succeeded" if accepted else "failed",
-                message="browser verifier observed the resolved goal page identity" if accepted else "browser verifier did not observe the resolved goal page identity",
-                evidence={"target_name": name, "observed_url": observed_url, "resolved_url": resolved_url},
-                accepted=accepted,
-                failure_class="acceptance_failed" if not accepted else "none",
-            )
-
-        def fixture_for_app(context, app_name: str) -> AppSearchFixture | None:
-            catalog = getattr(context.environment, "app_fixture_catalog", {})
-            fixture = catalog.get(app_name.lower()) if isinstance(catalog, dict) else None
-            return fixture if isinstance(fixture, AppSearchFixture) else None
-
-        def app_fixture_locate_search_control(payload, context) -> ToolResult:
-            app_name = str(payload.get("app") or "").strip()
-            fixture = fixture_for_app(context, app_name)
-            if fixture is None:
-                return ToolResult(status="failed", message="no app fixture matched the requested application", evidence={"app": app_name}, failure_class="environment_unreachable")
-            if not fixture.has_control("search_box"):
-                return ToolResult(status="failed", message="structured search control was not visible in the app fixture", evidence={"app": app_name, "fixture_id": fixture.fixture_id}, failure_class="semantic_mismatch")
-            return ToolResult(
-                status="succeeded",
-                output={"search_control_id": "search_box"},
-                evidence={"app": app_name, "fixture_id": fixture.fixture_id, "control_id": "search_box"},
-                state_updates={"search_control_id": "search_box"},
-            )
-
-        def app_fixture_activate_search_shortcut(payload, context) -> ToolResult:
-            app_name = str(payload.get("app") or "").strip()
-            fixture = fixture_for_app(context, app_name)
-            if fixture is None:
-                return ToolResult(status="failed", message="no app fixture matched the requested application", evidence={"app": app_name}, failure_class="environment_unreachable")
-            if not fixture.shortcut_search_enabled:
-                return ToolResult(status="failed", message="shortcut search mode is unavailable in the app fixture", evidence={"app": app_name, "fixture_id": fixture.fixture_id}, failure_class="semantic_mismatch")
-            return ToolResult(
-                status="succeeded",
-                output={"search_mode": "shortcut"},
-                evidence={"app": app_name, "fixture_id": fixture.fixture_id, "shortcut": "Ctrl+K"},
-                state_updates={"search_mode": "shortcut"},
-            )
-
-        def app_fixture_enter_search_query(payload, context) -> ToolResult:
-            app_name = str(payload.get("app") or "").strip()
-            query = str(payload.get("query") or "").strip()
-            fixture = fixture_for_app(context, app_name)
-            if fixture is None:
-                return ToolResult(status="failed", message="no app fixture matched the requested application", evidence={"app": app_name}, failure_class="environment_unreachable")
-            if not query:
-                return ToolResult(status="failed", message="missing app search query", failure_class="semantic_mismatch")
-            if not context.state.get("search_control_id") and context.state.get("search_mode") != "shortcut":
-                return ToolResult(status="failed", message="search query entry requires a visible control or active shortcut mode", evidence={"app": app_name}, failure_class="semantic_mismatch")
-            results = fixture.results_for(query)
-            return ToolResult(
-                status="succeeded",
-                output={"search_query": query, "result_count": len(results)},
-                evidence={"app": app_name, "fixture_id": fixture.fixture_id, "query": query, "result_count": len(results)},
-                state_updates={"search_query": query, "observed_results": results},
-            )
-
-        def app_fixture_observe_results(payload, context) -> ToolResult:
-            app_name = str(payload.get("app") or "").strip()
-            results = tuple(str(item) for item in context.state.get("observed_results", ()))
-            return ToolResult(
-                status="succeeded",
-                output={"observed_results": results},
-                evidence={"app": app_name, "observed_results": results},
-                state_updates={"observed_results": results},
-            )
-
-        def app_fixture_verify_target_presence(payload, context) -> ToolResult:
-            query = str(payload.get("query") or context.state.get("search_query") or "").strip()
-            observed_results = tuple(str(item) for item in context.state.get("observed_results", ()))
-            accepted = bool(query) and any(item.lower() == query.lower() for item in observed_results)
-            return ToolResult(
-                status="succeeded" if accepted else "failed",
-                message="app verifier observed the requested target in search results" if accepted else "app verifier did not observe the requested target in search results",
-                evidence={"query": query, "observed_results": observed_results},
-                accepted=accepted,
-                failure_class="acceptance_failed" if not accepted else "none",
-            )
-
-        def window_list(payload, context) -> ToolResult:
-            windows = [asdict(window) for window in self.windows.list_windows()]
-            return ToolResult(
-                status="succeeded",
-                output={"windows": windows, "adapter": "windows.registry", "adapter_status": "succeeded"},
-                evidence={"window_count": len(windows)},
-                state_updates={"selected_target": windows[0]["window_id"] if windows else None},
-            )
-
-        def window_resolve(payload, context) -> ToolResult:
-            name = str(payload.get("name") or "current")
-            windows = self.windows.resolve(name)
-            selected = windows[0].window_id if windows else None
-            if context.environment.dry_run and not selected:
-                selected = preview_window_id(name)
-            return ToolResult(
-                status="succeeded",
-                output={"resolved_window_id": selected, "matches": [asdict(item) for item in windows]},
-                evidence={"requested_name": name, "match_count": len(windows), "preview_only": context.environment.dry_run and not windows},
-                state_updates={"resolved_window_id": selected},
-            )
-
-        def window_action(payload, context) -> ToolResult:
-            tool_id = str(payload.get("tool_id") or "")
-            name = str(payload.get("name") or "current")
-            resolved = str(context.state.get("resolved_window_id") or "")
-            windows = self.windows.resolve(name) if not resolved else []
-            window = None
-            if resolved:
-                window = next((item for item in self.windows.list_windows() if item.window_id == resolved), None)
-            elif windows:
-                window = windows[0]
-            if context.environment.dry_run:
-                synthetic_target = resolved or (window.window_id if window is not None else preview_window_id(name))
-                return ToolResult(
-                    status="succeeded",
-                    output={"selected_target": synthetic_target, "adapter": "windows.registry", "adapter_status": "dry_run"},
-                    evidence={"requested_name": name, "window_id": synthetic_target, "dry_run": True, "preview_only": window is None},
-                    state_updates={"selected_target": synthetic_target},
-                )
-            if window is None:
-                return ToolResult(
-                    status="failed",
-                    message=f"no window matched {name!r}",
-                    evidence={"requested_name": name},
-                    failure_class="semantic_mismatch",
-                )
-            action = {
-                "window.focus": self.windows.focus,
-                "window.minimize": self.windows.minimize,
-                "window.maximize": self.windows.maximize,
-                "window.close": self.windows.close,
-            }[tool_id]
-            action_result = action(window)
-            status = str(action_result.get("status") or "failed")
-            if status in {"focused", "minimized", "maximized", "closed"}:
-                return ToolResult(
-                    status="succeeded",
-                    output={"selected_target": window.window_id, "adapter": "windows.registry", "adapter_status": "succeeded", **action_result},
-                    evidence={"requested_name": name, "window_id": window.window_id},
-                    state_updates={"selected_target": window.window_id},
-                )
-            return ToolResult(
-                status="failed",
-                message=str(action_result.get("error") or f"window action {tool_id} failed"),
-                output={"adapter": "windows.registry", "adapter_status": status, **action_result},
-                evidence={"requested_name": name, "window_id": window.window_id},
-                failure_class="environment_unreachable",
-            )
-
-        def notification_send(payload, context) -> ToolResult:
-            title = str(payload.get("title") or "VibeOS").strip() or "VibeOS"
-            body = str(payload.get("body") or payload.get("message") or "").strip()
-            if context.environment.dry_run:
-                return ToolResult(
-                    status="succeeded",
-                    output={"selected_target": title, "adapter": "notifications.send", "adapter_status": "dry_run"},
-                    evidence={"title": title, "body": body, "dry_run": True},
-                    state_updates={"selected_target": title},
-                )
-            sent = self.notifications.send(title, body)
-            status = str(sent.get("status") or "failed")
-            if status == "sent":
-                return ToolResult(
-                    status="succeeded",
-                    output={
-                        "selected_target": title,
-                        "adapter": "notifications.send",
-                        "adapter_status": "succeeded",
-                        "notification_adapter": sent.get("adapter"),
-                        **{key: value for key, value in sent.items() if key != "adapter"},
-                    },
-                    evidence={"title": title, "body": body, "notification_adapter": sent.get("adapter")},
-                    state_updates={"selected_target": title},
-                )
-            return ToolResult(
-                status="failed",
-                message=str(sent.get("error") or "notification send failed"),
-                output={
-                    "adapter": "notifications.send",
-                    "adapter_status": status,
-                    "notification_adapter": sent.get("adapter"),
-                    **{key: value for key, value in sent.items() if key != "adapter"},
-                },
-                evidence={"title": title, "body": body, "notification_adapter": sent.get("adapter")},
-                failure_class="environment_unreachable" if status == "unavailable" else "tool_timeout" if status == "timeout" else "acceptance_failed",
-            )
-
-        def system_status(payload, context) -> ToolResult:
-            status_payload = {"portal": self.portal.status(), **self.capabilities()}
-            return ToolResult(
-                status="succeeded",
-                output={"adapter": "system.status", "adapter_status": "succeeded", **status_payload},
-                evidence={"capability_count": len(status_payload.get("capabilities", []))},
-            )
-
-        def clipboard_write(payload, context) -> ToolResult:
-            text = str(payload.get("text") or payload.get("content") or "").strip()
-            if not text:
-                return ToolResult(status="failed", message="missing clipboard text", failure_class="semantic_mismatch")
-            if context.environment.dry_run:
-                return ToolResult(
-                    status="succeeded",
-                    output={"selected_target": "clipboard", "adapter": "clipboard.write", "adapter_status": "dry_run"},
-                    evidence={"text_length": len(text), "dry_run": True},
-                    state_updates={"selected_target": "clipboard"},
-                )
-            written = self.clipboard.write(text)
-            status = str(written.get("status") or "failed")
-            if status == "written":
-                return ToolResult(
-                    status="succeeded",
-                    output={
-                        "selected_target": "clipboard",
-                        "adapter": str(written.get("adapter") or "clipboard.helper"),
-                        "capability_adapter": "clipboard.write",
-                        "adapter_status": "succeeded",
-                        **written,
-                    },
-                    evidence={"text_length": len(text)},
-                    state_updates={"selected_target": "clipboard"},
-                )
-            return ToolResult(
-                status="failed",
-                message=str(written.get("error") or "clipboard write failed"),
-                output={
-                    "adapter": str(written.get("adapter") or "clipboard.helper"),
-                    "capability_adapter": "clipboard.write",
-                    "adapter_status": status,
-                    **written,
-                },
-                evidence={"text_length": len(text)},
-                failure_class="tool_timeout" if status == "timeout" else "environment_unreachable" if status == "unavailable" else "acceptance_failed",
-            )
-
         return ToolRegistry(
             (
-                ToolSpec("apps.resolve_installed", "resolver", "desktop-linux", apps_resolve),
-                ToolSpec("app.open", "action", "desktop-linux", app_open),
-                ToolSpec("window.list", "action", "desktop-linux", window_list),
-                ToolSpec("window.resolve", "resolver", "desktop-linux", window_resolve),
-                ToolSpec("window.focus", "action", "desktop-linux", lambda payload, context: window_action({**payload, "tool_id": "window.focus"}, context)),
-                ToolSpec("window.minimize", "action", "desktop-linux", lambda payload, context: window_action({**payload, "tool_id": "window.minimize"}, context)),
-                ToolSpec("window.maximize", "action", "desktop-linux", lambda payload, context: window_action({**payload, "tool_id": "window.maximize"}, context)),
-                ToolSpec("window.close", "action", "desktop-linux", lambda payload, context: window_action({**payload, "tool_id": "window.close"}, context)),
-                ToolSpec("notification.send", "action", "desktop-linux", notification_send),
-                ToolSpec("clipboard.write", "action", "desktop-linux", clipboard_write),
-                ToolSpec("system.status", "action", "desktop-linux", system_status),
-                ToolSpec("browser.open_url", "action", "browser", lambda payload, context: browser_action({**payload, "tool_id": "browser.open_url"}, context)),
-                ToolSpec("browser.resolve_named_target", "resolver", "browser", browser_resolve_named_target),
-                ToolSpec("browser.open_resolved_target", "action", "browser", browser_open_resolved_target),
-                ToolSpec("browser.search_web", "action", "browser", lambda payload, context: browser_action({**payload, "tool_id": "browser.search_web"}, context)),
-                ToolSpec("browser.open_site_search", "action", "browser", lambda payload, context: browser_action({**payload, "tool_id": "browser.open_site_search"}, context)),
-                ToolSpec("browser.observe_context", "observer", "browser", browser_observe),
-                ToolSpec("browser.observe_search_results", "observer", "browser", browser_observe_search_results),
-                ToolSpec("browser.follow_search_result", "action", "browser", browser_follow_search_result),
-                ToolSpec("browser.verify_query", "verifier", "browser", browser_verify_query),
-                ToolSpec("browser.verify_url_opened", "verifier", "browser", browser_verify_url),
-                ToolSpec("browser.verify_goal_page_identity", "verifier", "browser", browser_verify_goal_page_identity),
-                ToolSpec("app.fixture.locate_search_control", "resolver", "desktop-linux", app_fixture_locate_search_control),
-                ToolSpec("app.fixture.activate_search_shortcut", "action", "desktop-linux", app_fixture_activate_search_shortcut),
-                ToolSpec("app.fixture.enter_search_query", "action", "desktop-linux", app_fixture_enter_search_query),
-                ToolSpec("app.fixture.observe_results", "observer", "desktop-linux", app_fixture_observe_results),
-                ToolSpec("app.fixture.verify_target_presence", "verifier", "desktop-linux", app_fixture_verify_target_presence),
+                *app_tool_specs(self.apps),
+                *window_tool_specs(self.windows),
+                *notification_tool_specs(self.notifications),
+                *clipboard_tool_specs(self.clipboard),
+                *system_tool_specs(self.portal, self.capabilities),
+                *browser_tool_specs(self.portal, self.verifier_harness),
+                *fixture_tool_specs(),
             )
         )
-
-    def _browser_runtime_target(self, tool_id: str, payload: dict[str, object]) -> tuple[str, str | None, str | None]:
-        if tool_id == "browser.open_url":
-            return str(payload.get("uri") or payload.get("url") or ""), None, None
-        if tool_id == "browser.search_web":
-            query = str(payload.get("query") or "")
-            return browser_semantic_uri(Intent(action="browser.search_web", target={"query": query})), query or None, None
-        if tool_id == "browser.open_site_search":
-            query = str(payload.get("query") or "")
-            site = str(payload.get("site") or "")
-            return browser_semantic_uri(Intent(action="browser.open_site_search", target={"query": query, "site": site})), query or None, site or None
-        return "", None, None
 
     def _run_task_plan_goal_loop(self, request: CommandRequest, planning) -> CommandResult:
         goal_spec = planning.goal_synthesis.goal_spec if planning.goal_synthesis is not None else None
@@ -2466,6 +1705,7 @@ class CapabilityBroker:
             request,
             planning,
             loop_result.attempt_records,
+            context=RunContext.from_request(request, run_id=run_id, goal_id=goal_id),
             overall_status=overall_status,
             message=message,
         )

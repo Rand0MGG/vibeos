@@ -1,50 +1,42 @@
 from __future__ import annotations
 
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
-from typing import Any, Callable
+from typing import Any
 
 from .loop_models import GoalLoopResult, LoopPolicy, LoopState
+from .goal_ports import GoalLoopPorts
 from .loop_policy import default_loop_policy, enforce_replan_policy, loop_budget_exhausted, next_observation_level
 from .models import CommandRequest, PermissionReview, ReviewRequest, utc_now_iso
-from .observation_service import ObservationService, observation_progressed
+from .observation_service import observation_progressed
 from .task_models import FailureClassification, PlanAttempt, PlanExecutionResult, ReplanDecision, StepExecutionResult, TaskPlan, TaskStep, canonicalize_target_for_action, task_plan_from_payload
 from .task_trace import record_trace_event
 
 
+@dataclass(frozen=True)
+class _StepReviewTransition:
+    state: LoopState
+    outcome: GoalLoopResult | None = None
+
+
+@dataclass(frozen=True)
+class _ExecutedStepTransition:
+    state: LoopState
+    attempt_id: str
+    step_result: StepExecutionResult
+    post_observation: Any
+
+
 class GoalLoop:
-    def __init__(
-        self,
-        *,
-        observation_service: ObservationService,
-        planning_payload: Callable[[Any], dict[str, Any]],
-        resolve_understanding_transition: Callable[[Any, str], Any],
-        apply_replan_transition: Callable[[Any, ReplanDecision, FailureClassification], Any],
-        plan_again: Callable[[Any, CommandRequest, tuple[str, ...], tuple[str, ...], tuple[str, ...]], Any],
-        review_step: Callable[[TaskPlan, TaskStep, Any | None], tuple[PermissionReview, Any]],
-        execute_step: Callable[[TaskPlan, TaskStep, CommandRequest, str], StepExecutionResult],
-        step_progressed: Callable[[TaskPlan, TaskStep, StepExecutionResult, Any, Any, CommandRequest], bool] | None = None,
-        assess_plan_execution: Callable[[TaskPlan, tuple[StepExecutionResult, ...], CommandRequest, str, str | None, str | None, str | None], PlanExecutionResult],
-        classify_failure: Callable[[TaskPlan, PlanExecutionResult], FailureClassification],
-        decide_replan: Callable[[str, TaskPlan, tuple[Any, ...], FailureClassification, str | None, str | None, tuple[str, ...]], ReplanDecision],
-        persist_review: Callable[[str, Any, LoopState, TaskStep, str], ReviewRequest],
-        persist_user_input: Callable[[str, Any, LoopState, str], ReviewRequest],
-        policy: LoopPolicy | None = None,
-    ) -> None:
-        self.observation_service = observation_service
-        self.planning_payload = planning_payload
-        self.resolve_understanding_transition = resolve_understanding_transition
-        self.apply_replan_transition = apply_replan_transition
-        self.plan_again = plan_again
-        self.review_step = review_step
-        self.execute_step = execute_step
-        self.step_progressed = step_progressed or _default_step_progressed
-        self.assess_plan_execution = assess_plan_execution
-        self.classify_failure = classify_failure
-        self.decide_replan = decide_replan
-        self.persist_review = persist_review
-        self.persist_user_input = persist_user_input
-        self.policy = policy or default_loop_policy()
+    def __init__(self, *, ports: GoalLoopPorts) -> None:
+        self.ports = ports
+        self.planning = ports.planning
+        self.observation = ports.observation
+        self.review = ports.review
+        self.execution = ports.execution
+        self.acceptance = ports.acceptance
+        self.recovery = ports.recovery
+        self.policy = ports.policy
 
     def run(
         self,
@@ -81,84 +73,31 @@ class GoalLoop:
         )
 
         while True:
-            planning = self.resolve_understanding_transition(planning, trigger)
+            planning = self.planning.resolve_understanding_transition(planning, trigger=trigger)
             state = sync_loop_state_with_planning(state, planning)
-            payload = self.planning_payload(planning)
+            payload = self.planning.payload(planning)
             plan = getattr(planning, "plan", None)
             analysis = getattr(planning, "analysis", None)
             route_decision = getattr(planning, "route_decision", None)
 
             if plan is None:
-                route_action = getattr(route_decision, "action", None)
-                if getattr(analysis, "type", "") == "clarification" or route_action == "clarify":
-                    review_request = self.persist_user_input(
-                        request.utterance,
-                        planning,
-                        replace(state, stage="needs_user_input"),
-                        getattr(analysis, "chat_response", None) or getattr(analysis, "explanation", "") or "clarification required",
-                    )
-                    state = replace(state, pending_user_input_id=review_request.review_id, stage="needs_user_input")
-                    record_trace_event(
-                        phase="goal_loop",
-                        event_type="loop_suspended",
-                        status="needs_user_input",
-                        actor="goal_loop",
-                        goal_id=goal_id,
-                        review_id=review_request.review_id,
-                        data=asdict(state),
-                    )
-                    return GoalLoopResult(
-                        decision="needs_user_input",
-                        state=state,
-                        message=review_request.pending_reason or "clarification required",
-                        review_id=review_request.review_id,
-                        execution_status="not_started",
-                        acceptance_status="skipped",
-                        overall_status="needs_user_input",
-                        payload=payload,
-                        attempt_records=tuple(attempts_list),
-                    )
-                overall_status = "blocked" if route_action == "blocked" else "failed"
-                terminal_state = replace(state, stage="blocked" if overall_status == "blocked" else "complete")
-                _record_loop_completed(
-                    goal_id=goal_id,
-                    state=terminal_state,
-                    overall_status=overall_status,
-                    message=getattr(route_decision, "reason", "") or getattr(analysis, "explanation", "") or "planner did not produce a task plan",
-                )
-                return GoalLoopResult(
-                    decision="blocked" if overall_status == "blocked" else "complete",
-                    state=terminal_state,
-                    message=getattr(route_decision, "reason", "") or getattr(analysis, "explanation", "") or "planner did not produce a task plan",
-                    execution_status="not_started",
-                    acceptance_status="skipped",
-                    overall_status=overall_status,
+                return self._handle_missing_plan(
+                    request=request,
+                    planning=planning,
+                    state=state,
+                    analysis=analysis,
+                    route_decision=route_decision,
                     payload=payload,
-                    attempt_records=tuple(attempts_list),
+                    attempts=tuple(attempts_list),
+                    goal_id=goal_id,
                 )
 
             if loop_budget_exhausted(state, self.policy):
-                state = replace(state, stage="budget_exhausted")
-                _record_loop_completed(
-                    goal_id=goal_id,
-                    state=state,
-                    overall_status="blocked",
-                    message="goal loop budget exhausted",
-                )
-                return GoalLoopResult(
-                    decision="budget_exhausted",
-                    state=state,
-                    message="goal loop budget exhausted",
-                    execution_status="failed",
-                    acceptance_status="skipped",
-                    overall_status="blocked",
-                    payload=payload,
-                    attempt_records=tuple(attempts_list),
-                )
+                return self._budget_exhausted_result(state=state, payload=payload, attempts=tuple(attempts_list), goal_id=goal_id)
 
             next_step = _next_step(plan, state.completed_step_ids)
             if next_step is None:
-                execution = self.assess_plan_execution(
+                execution = self.acceptance.assess(
                     plan,
                     tuple(step_results_list),
                     request,
@@ -168,7 +107,7 @@ class GoalLoop:
                     state.selected_route_decision_id,
                 )
                 payload["execution"] = asdict(execution)
-                failure = self.classify_failure(plan, execution)
+                failure = self.recovery.classify(plan, execution)
                 terminal_message = execution.error or (
                     (execution.acceptance_result or {}).get("message", "") if isinstance(execution.acceptance_result, dict) else ""
                 )
@@ -217,7 +156,7 @@ class GoalLoop:
                     attempt_id=attempt_id,
                     data=asdict(failure),
                 )
-                decision = self.decide_replan(
+                decision = self.recovery.decide(
                     request.utterance,
                     plan,
                     (*tuple(attempts_list), current_attempt),
@@ -237,7 +176,7 @@ class GoalLoop:
                 attempts_list.append(replace(current_attempt, replan_decision=decision))
                 state = replace(state, attempt_records=tuple(attempts_list))
                 if decision.action == "ask_user":
-                    review_request = self.persist_user_input(
+                    review_request = self.review.persist_user_input(
                         request.utterance,
                         planning,
                         replace(state, stage="needs_user_input"),
@@ -286,11 +225,11 @@ class GoalLoop:
                     step_results_list = []
                     trigger = decision.action
                     continue
-                planning = self.apply_replan_transition(planning, decision, failure)
+                planning = self.planning.apply_replan_transition(planning, decision=decision, failure=failure)
                 excluded_route_ids = tuple(dict.fromkeys((*excluded_route_ids, *decision.do_not_repeat_route_ids)))
                 excluded_capability_ids = tuple(dict.fromkeys((*excluded_capability_ids, *decision.do_not_repeat_capability_ids)))
                 candidate_domain_ids = tuple(dict.fromkeys((*candidate_domain_ids, *decision.candidate_domain_ids)))
-                planning = self.plan_again(planning, request, excluded_route_ids, excluded_capability_ids, candidate_domain_ids)
+                planning = self.planning.replan(planning, request, excluded_route_ids, excluded_capability_ids, candidate_domain_ids)
                 state, step_results_list = _restore_replanned_state(state=state, planning=planning, attempts=tuple(attempts_list))
                 trigger = decision.action
                 continue
@@ -306,7 +245,7 @@ class GoalLoop:
                 step_id=next_step.id,
                 data={"completed_step_ids": list(state.completed_step_ids)},
             )
-            pre_observation = self.observation_service.observe(plan=plan, step=next_step, phase="pre", level=state.observation_level)
+            pre_observation = self.observation.observe(plan=plan, step=next_step, phase="pre", level=state.observation_level)
             state = replace(state, pre_observation_id=pre_observation.observation_id)
             record_trace_event(
                 phase="goal_loop",
@@ -318,125 +257,38 @@ class GoalLoop:
                 data=asdict(pre_observation),
             )
 
-            state = replace(state, stage="step_review")
-            review, step_review = self.review_step(plan, next_step, pre_observation)
-            record_trace_event(
-                phase="goal_loop",
-                event_type="step_review_completed",
-                status="allowed" if review.allowed and not review.review_required else ("review_required" if review.review_required else "rejected"),
-                actor="goal_loop",
-                goal_id=goal_id,
-                step_id=next_step.id,
-                data=asdict(step_review),
-            )
-            approved_pending_review = (
-                bool(request.approve)
-                and request.review_id is not None
-                and request.review_id == state.pending_review_id
-                and state.pending_step_safety_review_id is not None
-                and state.pending_step_safety_review_id == step_review.step_safety_review_id
-            )
-            if not review.allowed:
-                blocked_state = replace(state, stage="blocked")
-                _record_loop_completed(
-                    goal_id=goal_id,
-                    state=blocked_state,
-                    overall_status="failed",
-                    message=review.reason,
-                    plan_id=plan.plan_id,
-                    step_id=next_step.id,
-                )
-                return GoalLoopResult(
-                    decision="blocked",
-                    state=blocked_state,
-                    message=review.reason,
-                    execution_status="not_started",
-                    acceptance_status="skipped",
-                    overall_status="failed",
-                    payload=payload,
-                    attempt_records=tuple(attempts_list),
-                )
-            if review.review_required and not approved_pending_review:
-                pending_review_state = replace(
-                    state,
-                    pending_step_safety_review_id=step_review.step_safety_review_id,
-                    stage="needs_review",
-                )
-                review_request = self.persist_review(
-                    request.utterance,
-                    planning,
-                    pending_review_state,
-                    next_step,
-                    review.reason,
-                )
-                state = replace(
-                    pending_review_state,
-                    pending_review_id=review_request.review_id,
-                )
-                record_trace_event(
-                    phase="goal_loop",
-                    event_type="loop_suspended",
-                    status="needs_review",
-                    actor="goal_loop",
-                    goal_id=goal_id,
-                    review_id=review_request.review_id,
-                    step_id=next_step.id,
-                    data=asdict(state),
-                )
-                return GoalLoopResult(
-                    decision="needs_review",
-                    state=state,
-                    message=review.reason,
-                    review_id=review_request.review_id,
-                    execution_status="not_started",
-                    acceptance_status="skipped",
-                    overall_status="needs_review",
-                    payload=payload,
-                    attempt_records=tuple(attempts_list),
-                )
-            if approved_pending_review:
-                state = replace(state, pending_review_id=None, pending_step_safety_review_id=None)
-
-            state = replace(state, stage="act")
-            attempt_id = _make_attempt_id(run_id, len(step_results_list) + 1, next_step.id)
-            step_result = self.execute_step(plan, next_step, request, attempt_id)
-            step_results_list.append(step_result)
-            state = replace(
-                state,
-                attempt_count=state.attempt_count + 1,
-                step_count=state.step_count + 1,
-            )
-            record_trace_event(
-                phase="goal_loop",
-                event_type="step_executed",
-                status=step_result.status,
-                actor="goal_loop",
-                goal_id=goal_id,
-                step_id=next_step.id,
-                attempt_id=attempt_id,
-                data=asdict(step_result),
-            )
-
-            state = replace(state, stage="observe_post")
-            post_observation = self.observation_service.observe(
+            review_transition = self._review_or_suspend_step(
+                request=request,
+                planning=planning,
+                state=state,
                 plan=plan,
                 step=next_step,
-                phase="post",
-                level=next_observation_level(state, self.policy, escalate=step_result.status != "succeeded"),
-            )
-            state = replace(state, post_observation_id=post_observation.observation_id)
-            record_trace_event(
-                phase="goal_loop",
-                event_type="observe_post_completed",
-                status=post_observation.level,
-                actor="goal_loop",
+                observation=pre_observation,
+                payload=payload,
+                attempts=tuple(attempts_list),
                 goal_id=goal_id,
-                step_id=next_step.id,
-                data=asdict(post_observation),
             )
+            if review_transition.outcome is not None:
+                return review_transition.outcome
+            state = review_transition.state
+
+            executed = self._execute_and_observe_step(
+                request=request,
+                state=state,
+                plan=plan,
+                step=next_step,
+                run_id=run_id,
+                step_result_count=len(step_results_list),
+                goal_id=goal_id,
+            )
+            state = executed.state
+            attempt_id = executed.attempt_id
+            step_result = executed.step_result
+            post_observation = executed.post_observation
+            step_results_list.append(step_result)
 
             state = replace(state, stage="verify")
-            progress_made = self.step_progressed(
+            progress_made = self.observation.progressed(
                 plan,
                 next_step,
                 step_result,
@@ -474,7 +326,7 @@ class GoalLoop:
                 continue
 
             partial_execution = _partial_execution(plan, step_result, progress_made)
-            failure = self.classify_failure(plan, partial_execution)
+            failure = self.recovery.classify(plan, partial_execution)
             current_attempt = _attempt_record(
                 run_id=run_id,
                 attempt_index=len(attempts_list) + 1,
@@ -503,7 +355,7 @@ class GoalLoop:
                 step_id=next_step.id,
                 data=asdict(failure),
             )
-            decision = self.decide_replan(
+            decision = self.recovery.decide(
                 request.utterance,
                 plan,
                 (*tuple(attempts_list), current_attempt),
@@ -523,7 +375,7 @@ class GoalLoop:
             attempts_list.append(replace(current_attempt, replan_decision=decision))
             state = replace(state, attempt_records=tuple(attempts_list))
             if decision.action == "ask_user":
-                review_request = self.persist_user_input(request.utterance, planning, replace(state, stage="needs_user_input"), decision.reason or failure.message)
+                review_request = self.review.persist_user_input(request.utterance, planning, replace(state, stage="needs_user_input"), decision.reason or failure.message)
                 state = replace(state, pending_user_input_id=review_request.review_id, stage="needs_user_input")
                 return GoalLoopResult(
                     decision="needs_user_input",
@@ -563,13 +415,157 @@ class GoalLoop:
                     state = replace(state, observation_level=next_observation_level(state, self.policy, escalate=True))
                 trigger = decision.action
                 continue
-            planning = self.apply_replan_transition(planning, decision, failure)
+            planning = self.planning.apply_replan_transition(planning, decision=decision, failure=failure)
             excluded_route_ids = tuple(dict.fromkeys((*excluded_route_ids, *decision.do_not_repeat_route_ids)))
             excluded_capability_ids = tuple(dict.fromkeys((*excluded_capability_ids, *decision.do_not_repeat_capability_ids)))
             candidate_domain_ids = tuple(dict.fromkeys((*candidate_domain_ids, *decision.candidate_domain_ids)))
-            planning = self.plan_again(planning, request, excluded_route_ids, excluded_capability_ids, candidate_domain_ids)
+            planning = self.planning.replan(planning, request, excluded_route_ids, excluded_capability_ids, candidate_domain_ids)
             state, step_results_list = _restore_replanned_state(state=state, planning=planning, attempts=tuple(attempts_list))
             trigger = decision.action
+
+    def _review_or_suspend_step(
+        self,
+        *,
+        request: CommandRequest,
+        planning: Any,
+        state: LoopState,
+        plan: TaskPlan,
+        step: TaskStep,
+        observation: Any,
+        payload: dict[str, Any],
+        attempts: tuple[PlanAttempt, ...],
+        goal_id: str,
+    ) -> _StepReviewTransition:
+        state = replace(state, stage="step_review")
+        review, step_review = self.review.review_step(plan, step, observation)
+        record_trace_event(
+            phase="goal_loop",
+            event_type="step_review_completed",
+            status="allowed" if review.allowed and not review.review_required else ("review_required" if review.review_required else "rejected"),
+            actor="goal_loop",
+            goal_id=goal_id,
+            step_id=step.id,
+            data=asdict(step_review),
+        )
+        approved_pending_review = (
+            bool(request.approve)
+            and request.review_id is not None
+            and request.review_id == state.pending_review_id
+            and state.pending_step_safety_review_id == step_review.step_safety_review_id
+        )
+        if not review.allowed:
+            blocked_state = replace(state, stage="blocked")
+            _record_loop_completed(
+                goal_id=goal_id,
+                state=blocked_state,
+                overall_status="failed",
+                message=review.reason,
+                plan_id=plan.plan_id,
+                step_id=step.id,
+            )
+            return _StepReviewTransition(
+                state=blocked_state,
+                outcome=GoalLoopResult(
+                    decision="blocked",
+                    state=blocked_state,
+                    message=review.reason,
+                    execution_status="not_started",
+                    acceptance_status="skipped",
+                    overall_status="failed",
+                    payload=payload,
+                    attempt_records=attempts,
+                ),
+            )
+        if review.review_required and not approved_pending_review:
+            pending_review_state = replace(
+                state,
+                pending_step_safety_review_id=step_review.step_safety_review_id,
+                stage="needs_review",
+            )
+            review_request = self.review.persist_step_review(
+                request.utterance,
+                planning,
+                pending_review_state,
+                step,
+                review.reason,
+            )
+            suspended_state = replace(pending_review_state, pending_review_id=review_request.review_id)
+            record_trace_event(
+                phase="goal_loop",
+                event_type="loop_suspended",
+                status="needs_review",
+                actor="goal_loop",
+                goal_id=goal_id,
+                review_id=review_request.review_id,
+                step_id=step.id,
+                data=asdict(suspended_state),
+            )
+            return _StepReviewTransition(
+                state=suspended_state,
+                outcome=GoalLoopResult(
+                    decision="needs_review",
+                    state=suspended_state,
+                    message=review.reason,
+                    review_id=review_request.review_id,
+                    execution_status="not_started",
+                    acceptance_status="skipped",
+                    overall_status="needs_review",
+                    payload=payload,
+                    attempt_records=attempts,
+                ),
+            )
+        if approved_pending_review:
+            state = replace(state, pending_review_id=None, pending_step_safety_review_id=None)
+        return _StepReviewTransition(state=state)
+
+    def _execute_and_observe_step(
+        self,
+        *,
+        request: CommandRequest,
+        state: LoopState,
+        plan: TaskPlan,
+        step: TaskStep,
+        run_id: str,
+        step_result_count: int,
+        goal_id: str,
+    ) -> _ExecutedStepTransition:
+        state = replace(state, stage="act")
+        attempt_id = _make_attempt_id(run_id, step_result_count + 1, step.id)
+        step_result = self.execution.execute_step(plan, step, request, attempt_id)
+        state = replace(state, attempt_count=state.attempt_count + 1, step_count=state.step_count + 1)
+        record_trace_event(
+            phase="goal_loop",
+            event_type="step_executed",
+            status=step_result.status,
+            actor="goal_loop",
+            goal_id=goal_id,
+            step_id=step.id,
+            attempt_id=attempt_id,
+            data=asdict(step_result),
+        )
+        state = replace(state, stage="observe_post")
+        post_observation = self.observation.observe(
+            plan=plan,
+            step=step,
+            phase="post",
+            level=next_observation_level(state, self.policy, escalate=step_result.status != "succeeded"),
+        )
+        state = replace(state, post_observation_id=post_observation.observation_id)
+        record_trace_event(
+            phase="goal_loop",
+            event_type="observe_post_completed",
+            status=post_observation.level,
+            actor="goal_loop",
+            goal_id=goal_id,
+            step_id=step.id,
+            data=asdict(post_observation),
+        )
+        return _ExecutedStepTransition(
+            state=state,
+            attempt_id=attempt_id,
+            step_result=step_result,
+            post_observation=post_observation,
+        )
 
     def resume_from_review(self, *, request: CommandRequest, planning: Any, state: LoopState, run_id: str, goal_id: str) -> GoalLoopResult:
         resumed_state = sync_loop_state_with_planning(state, planning)
@@ -605,6 +601,25 @@ class GoalLoop:
             state=replace(resumed_state, pending_user_input_id=None, stage="init_loop"),
             attempts=resumed_state.attempt_records,
         )
+
+    def _handle_missing_plan(self, *, request: CommandRequest, planning: Any, state: LoopState, analysis: Any, route_decision: Any, payload: dict[str, Any], attempts: tuple[PlanAttempt, ...], goal_id: str) -> GoalLoopResult:
+        route_action = getattr(route_decision, "action", None)
+        if getattr(analysis, "type", "") == "clarification" or route_action == "clarify":
+            reason = getattr(analysis, "chat_response", None) or getattr(analysis, "explanation", "") or "clarification required"
+            review_request = self.review.persist_user_input(request.utterance, planning, replace(state, stage="needs_user_input"), reason)
+            suspended_state = replace(state, pending_user_input_id=review_request.review_id, stage="needs_user_input")
+            record_trace_event(phase="goal_loop", event_type="loop_suspended", status="needs_user_input", actor="goal_loop", goal_id=goal_id, review_id=review_request.review_id, data=asdict(suspended_state))
+            return GoalLoopResult(decision="needs_user_input", state=suspended_state, message=review_request.pending_reason or "clarification required", review_id=review_request.review_id, execution_status="not_started", acceptance_status="skipped", overall_status="needs_user_input", payload=payload, attempt_records=attempts)
+        overall_status = "blocked" if route_action == "blocked" else "failed"
+        message = getattr(route_decision, "reason", "") or getattr(analysis, "explanation", "") or "planner did not produce a task plan"
+        terminal_state = replace(state, stage="blocked" if overall_status == "blocked" else "complete")
+        _record_loop_completed(goal_id=goal_id, state=terminal_state, overall_status=overall_status, message=message)
+        return GoalLoopResult(decision="blocked" if overall_status == "blocked" else "complete", state=terminal_state, message=message, execution_status="not_started", acceptance_status="skipped", overall_status=overall_status, payload=payload, attempt_records=attempts)
+
+    def _budget_exhausted_result(self, *, state: LoopState, payload: dict[str, Any], attempts: tuple[PlanAttempt, ...], goal_id: str) -> GoalLoopResult:
+        terminal_state = replace(state, stage="budget_exhausted")
+        _record_loop_completed(goal_id=goal_id, state=terminal_state, overall_status="blocked", message="goal loop budget exhausted")
+        return GoalLoopResult(decision="budget_exhausted", state=terminal_state, message="goal loop budget exhausted", execution_status="failed", acceptance_status="skipped", overall_status="blocked", payload=payload, attempt_records=attempts)
 
     def _initial_state(self, *, planning: Any, run_id: str, goal_id: str) -> LoopState:
         understanding = getattr(planning, "understanding", None)

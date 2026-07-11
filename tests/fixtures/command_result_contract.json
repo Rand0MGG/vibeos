@@ -1,0 +1,24 @@
+{
+  "required_fields": [
+    "status",
+    "intent",
+    "result",
+    "selected_target",
+    "trace_run_id",
+    "audit_id",
+    "review_id",
+    "transport",
+    "message",
+    "review",
+    "execution_status",
+    "acceptance_status",
+    "overall_status"
+  ],
+  "semantic_statuses": {
+    "completed": "completed",
+    "needs_review": "needs_review",
+    "needs_user_input": "needs_user_input",
+    "blocked": "blocked",
+    "dry_run": "dry_run"
+  }
+}

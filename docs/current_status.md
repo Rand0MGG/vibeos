@@ -1,6 +1,25 @@
 # VibeOS Current Status
 
-Last updated: 2026-07-10
+Last updated: 2026-07-11
+
+## Maintainability refactor status
+
+- `CommandService` is the transport-neutral command ingress; the broker's
+  `handle()` method delegates to it.
+- `GoalLoop` remains the only supported-task state machine and now depends on
+  named planning, observation, review, execution, acceptance, and recovery
+  ports rather than a public callback bundle.
+- Domain tool registrations are owned by `src/vibeos/tools/`; broker assembly
+  preserves the existing capability IDs and adapters without embedding domain
+  handlers.
+- Review state is authoritative in SQLite current-state rows with versioned
+  atomic claim/release/consume transitions. JSONL and event-only SQLite data
+  are migration sources and `review_events` remains audit history.
+- The dead fresh-task v0.6 runtime bridge was removed. Historical persisted
+  `review_kind=plan` records remain a compatibility-resume-only path and are
+  not used by fresh tasks.
+- `.github/workflows/test.yml` is configured for deterministic Python 3.11
+  checks on `push` and `pull_request`; no GitHub run is claimed yet.
 
 ## Runtime Convergence
 
@@ -36,31 +55,15 @@ Last updated: 2026-07-10
 
 ## Implemented
 
-- v0.6 runtime groundwork:
-  - new session-oriented runtime modules: `agent_runtime`, `strategy`, `tool_protocol`, and `run_ledger`
-  - typed `AgentSession`, `GoalRuntime`, `GoalTurn`, `EnvironmentProfile`, `OutcomeDecision`, and `TerminalOutcome`
-  - explicit strategy layer with `StrategyCandidate`, `StrategyConstraint`, and policy-driven replacement selection
-  - layered tool protocol with first-class `resolver`, `action`, `observer`, `verifier`, `wait_poll`, and `environment` families
-  - typed capability-surface descriptors now explicitly cover `workspace-local`, `shell-local`, `browser`, and `desktop-linux`
-  - broker main-path bridge for browser and mixed app/browser candidates:
-    - `CapabilityBroker` can route eligible `apps`, `browser`, `window_management`, `notification`, and `system_observation` supported-task requests through the new session runtime
-    - broker results now expose `goal_runtime`, `goal_turn`, `strategy_candidates`, `selected_strategy_id`, `run_ledger`, and `environment_profile`
-    - repeated browser and app turns can reuse a stable goal id while still emitting unique per-request `run_id` values
-    - CLI JSON output now preserves these runtime fields for browser-facing and app-facing `vibe ask` requests
-    - debug payload now includes runtime-scoped `provider_artifacts` and the active `environment_profile`
-    - review-required clipboard planning now exposes `goal_runtime` and `run_ledger` while stopping in a structured `needs_review` state
-    - review-required `window.close` planning now follows the same v0.6 `needs_review` gate and approve-by-id continuation path as other L2 runtime-managed actions
-    - `approve --dry-run` previews `window.close` through the same runtime path without requiring a real local window match
-    - browser `--offline --dry-run` preview now synthesizes deterministic observation evidence from the requested query/URL instead of failing on missing real browser state
-    - approved plan reviews can continue the same goal runtime instead of restarting from a detached execution path
-  - first deterministic v0.6 minimal vertical slice:
-    - stable goal id survives strategy replacement
-    - desktop-first "open Notion" strategy fails with resolver evidence and semantic mismatch
-    - recovery policy selects a browser fallback strategy without changing the goal
-    - observer and verifier evidence justify the final completed outcome
-    - run ledger records session, goal, strategy decisions, attempts, evidence, and terminal outcome
-    - broker main-path coverage now includes the same app-to-browser strategy replacement behavior
-  - local environment-profile coverage for strategy preference and tool availability constraints
+- historical v0.6 runtime foundations:
+  - `agent_runtime`, `strategy`, `tool_protocol`, and `run_ledger` remain to
+    read older runtime-shaped data and produce compatible result projections.
+  - fresh supported tasks do **not** enter the former broker runtime bridge;
+    their `goal_runtime`, strategy, and ledger fields are pure projections of
+    the CommandService/GoalLoop run.
+  - only persisted legacy `review_kind=plan` records use the isolated
+    compatibility resume path; its dry-run behavior is regression-tested and
+    never consumes approval.
 - v0.5 planning architecture:
   - typed goal synthesis layer
   - explicit domain packs for `apps`, `window_management`, `clipboard`, `notification`, `system_observation`, `browser`, and `media`
@@ -164,7 +167,7 @@ vibe ask "search web for hello" --json --offline --dry-run
 Expected current result:
 
 ```text
-pytest: 229 passed in the configured WSL environment
+pytest: 237 passed in the configured Fedora 44 WSL environment (2026-07-11)
 doctor: overall warn, 0 failures (desktop-session integration is not configured in WSL)
 capabilities: 19 registered actions; L0/L1/L2/L3 policy boundary intact
 offline dry-run: completed locally with overall_status=dry_run and no provider request

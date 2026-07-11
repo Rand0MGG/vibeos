@@ -111,7 +111,14 @@ Task-plan command results also expose:
 - `run`
 - `attempts`
 
-Supported tasks now run through `GoalLoop` as the single default orchestration path. `CapabilityBroker` handles ingress and result formatting; it no longer owns a parallel retry/replan loop. See [docs/runtime_convergence.md](docs/runtime_convergence.md) for ownership boundaries, review durability, and trace privacy behavior.
+Supported tasks run through `GoalLoop` as the single default orchestration
+state machine. `CommandService` owns transport-neutral dispatch and result
+finalization; `CapabilityBroker` is a compatibility facade and dependency
+assembler, not a parallel retry/replan loop. Registered implementations live
+in domain modules under `src/vibeos/tools/`, while GoalLoop coordinates typed
+planning, observation, review, execution, acceptance, and recovery ports. See
+[docs/runtime_convergence.md](docs/runtime_convergence.md) for the ownership
+map, transactional review semantics, trace policy, and the WSL/VM boundary.
 
 `--debug` on `vibe plan`, `vibe ask`, and `vibe approve` includes raw provider payloads in `debug_trace` with redaction and truncation safeguards.
 
@@ -206,3 +213,6 @@ See [docs/vm_acceptance_evidence.md](docs/vm_acceptance_evidence.md) for the VM 
 See [docs/linux_vm_install_upgrade_test_runbook.md](docs/linux_vm_install_upgrade_test_runbook.md) for environment setup, uninstall/reinstall steps, and the complete VM test flow.
 See [docs/zh_cn/README.md](docs/zh_cn/README.md) for the Chinese module-oriented documentation set.
 See [docs/zh_cn/07_wsl_test_standard.md](docs/zh_cn/07_wsl_test_standard.md) for the WSL-specific test scope and workflow.
+Continuous verification is configured in
+[.github/workflows/test.yml](.github/workflows/test.yml) for `push` and
+`pull_request`; its GitHub run status is not asserted here.
