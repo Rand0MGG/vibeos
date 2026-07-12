@@ -92,14 +92,14 @@ class ReviewRequest:
     intent: Intent
     review: PermissionReview
     created_at: str
-    status: Literal["pending", "approved", "executing", "rejected", "consumed", "expired", "provided"] = "pending"
+    status: Literal["pending", "approved", "executing", "rejected", "consumed", "expired", "provided", "superseded"] = "pending"
     expires_at: str | None = None
     review_kind: Literal["intent", "plan", "loop", "user_input"] = "intent"
     plan_id: str | None = None
-    plan_payload: dict[str, Any] | None = None
-    step_reviews: tuple[dict[str, Any], ...] = ()
+    plan_payload: dict[str, object] | None = None
+    step_reviews: tuple[dict[str, object], ...] = ()
     layer: str | None = None
-    snapshot_payload: dict[str, Any] | None = None
+    snapshot_payload: dict[str, object] | None = None
     pending_reason: str | None = None
     supplemental_input: str | None = None
 

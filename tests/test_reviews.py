@@ -5,9 +5,11 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 from vibeos.models import Intent
 from vibeos.permissions import PermissionPolicy
-from vibeos.reviews import ReviewStore
+from vibeos.reviews import ReviewPersistenceError, ReviewStore, review_execution_binding
 
 
 def test_review_store_round_trips_pending_review() -> None:
@@ -58,6 +60,19 @@ def test_current_state_row_tracks_status_and_version_alongside_events() -> None:
 
     assert row == ("approved", 1)
     assert event_count == 2
+
+
+def test_review_schema_has_migrations_structured_events_and_lookup_indexes() -> None:
+    store = ReviewStore(make_review_path("schema-contract"))
+
+    with sqlite3.connect(store.db_path) as connection:
+        migrations = connection.execute("SELECT version FROM schema_migrations").fetchall()
+        event_columns = {row[1] for row in connection.execute("PRAGMA table_info(review_events)").fetchall()}
+        indexes = {row[1] for row in connection.execute("PRAGMA index_list(reviews)").fetchall()}
+
+    assert migrations == [(1,)]
+    assert {"review_id", "event_type", "created_at", "payload"} <= event_columns
+    assert {"idx_reviews_status_created_at", "idx_reviews_lookup_kind_step"} <= indexes
 
 
 def test_event_only_sqlite_is_migrated_to_current_state_idempotently() -> None:
@@ -116,7 +131,7 @@ def test_review_store_rejects_pending_review() -> None:
     assert loaded.status == "rejected"
 
 
-def test_review_store_consumes_approved_review() -> None:
+def test_review_store_completes_only_claimed_execution_review() -> None:
     path = make_review_path("consumed")
     store = ReviewStore(path)
     intent = Intent(action="window.close", target={"name": "Firefox"})
@@ -124,7 +139,9 @@ def test_review_store_consumes_approved_review() -> None:
     request = store.create("关闭 Firefox", intent, review)
 
     store.approve(request.review_id)
-    consumed = store.consume(request.review_id)
+    assert store.complete_execution(request.review_id).status == "approved"
+    assert store.claim_execution(request.review_id) is True
+    consumed = store.complete_execution(request.review_id)
     loaded = store.get(request.review_id)
 
     assert consumed
@@ -219,6 +236,67 @@ def test_review_execution_claim_is_atomic_across_store_instances() -> None:
     assert released
     assert released.status == "approved"
     assert store.claim_execution(request.review_id) is True
+
+
+def test_claim_rejects_expired_approved_review() -> None:
+    store = ReviewStore(make_review_path("approved-expired"), ttl_seconds=-1)
+    request = store.create(
+        "close Firefox",
+        Intent(action="window.close", target={"name": "Firefox"}),
+        PermissionPolicy().review(Intent(action="window.close", target={"name": "Firefox"})),
+    )
+
+    assert store.approve(request.review_id).status == "expired"
+    assert store.claim_execution(request.review_id) is False
+    assert store.get(request.review_id).status == "expired"
+
+
+def test_claim_validates_the_expected_approval_binding() -> None:
+    store = ReviewStore(make_review_path("claim-binding"))
+    request = store.create_loop_review(
+        "search web",
+        plan_payload={"plan_id": "plan_binding"},
+        snapshot_payload={"current_step_id": "step_search"},
+        pending_reason="approval required",
+        step_id="step_search",
+    )
+    approved = store.approve(request.review_id)
+    binding = review_execution_binding(approved)
+
+    assert store.claim_execution(request.review_id, expected_binding={**binding, "step_id": "other"}) is False
+    assert store.get(request.review_id).status == "approved"
+    assert store.claim_execution(request.review_id, expected_binding=binding) is True
+
+
+def test_user_input_consumption_is_not_an_execution_transition() -> None:
+    store = ReviewStore(make_review_path("input-transition"))
+    request = store.create_loop_review(
+        "which site?",
+        plan_payload={"plan_id": "plan_input"},
+        snapshot_payload={"current_step_id": "step_input"},
+        pending_reason="provide more detail",
+        step_id="step_input",
+        review_kind="user_input",
+    )
+
+    assert store.complete_execution(request.review_id).status == "pending"
+    assert store.provide_input(request.review_id, "example.com").status == "provided"
+    assert store.consume_input(request.review_id).status == "consumed"
+
+
+def test_sqlite_failure_never_creates_a_jsonl_mutation_fallback() -> None:
+    path = make_review_path("persistence-failure")
+    store = ReviewStore(path)
+    store._mark_unavailable()
+
+    with pytest.raises(ReviewPersistenceError):
+        store.create(
+            "close Firefox",
+            Intent(action="window.close", target={"name": "Firefox"}),
+            PermissionPolicy().review(Intent(action="window.close", target={"name": "Firefox"})),
+        )
+
+    assert not path.exists()
 
 
 def make_review_path(name: str) -> Path:

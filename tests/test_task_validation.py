@@ -2,7 +2,7 @@ from dataclasses import replace
 
 from vibeos.models import Intent
 from vibeos.planner import normalize_intent_to_task_plan
-from vibeos.task_models import ExpectedState, TaskStep
+from vibeos.task_models import ExpectedState
 from vibeos.task_validation import validate_plan
 
 

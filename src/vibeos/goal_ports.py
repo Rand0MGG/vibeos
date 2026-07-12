@@ -6,6 +6,7 @@ from typing import Protocol
 from .loop_models import LoopObservation, LoopPolicy, LoopState, ObservationLevel
 from .models import CommandRequest, PermissionReview, ReviewRequest
 from .planner import PlanningArtifacts
+from .run_context import RunContext
 from .task_models import FailureClassification, PlanAttempt, PlanExecutionResult, ReplanDecision, StepExecutionResult, StepReviewRecord, TaskPlan, TaskStep
 
 
@@ -44,6 +45,7 @@ class ObservationPort(Protocol):
         step: TaskStep,
         phase: str,
         level: ObservationLevel,
+        attempt_id: str | None = None,
     ) -> LoopObservation: ...
 
     def progressed(
@@ -90,6 +92,7 @@ class ExecutionPort(Protocol):
 
     def execute_step(
         self,
+        context: RunContext,
         plan: TaskPlan,
         step: TaskStep,
         request: CommandRequest,

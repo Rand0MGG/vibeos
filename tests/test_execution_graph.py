@@ -1,5 +1,5 @@
 from vibeos.execution_graph import execute_plan_graph
-from vibeos.task_models import DisplayFields, PlanExecutionResult, StepExecutionResult, TaskPlan, TaskRoute, TaskStep
+from vibeos.task_models import DisplayFields, StepExecutionResult, TaskPlan, TaskRoute, TaskStep
 
 
 def test_execute_plan_graph_groups_parallel_safe_l0_steps() -> None:

@@ -4,12 +4,29 @@ from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
 from typing import Any
 
-from .loop_models import GoalLoopResult, LoopPolicy, LoopState
+from .candidate_selection import CandidateSelectionDecision
+from .loop_models import GoalLoopResult, LoopObservation, LoopPolicy, LoopState, MigratedStepApprovalBinding
 from .goal_ports import GoalLoopPorts
-from .loop_policy import default_loop_policy, enforce_replan_policy, loop_budget_exhausted, next_observation_level
-from .models import CommandRequest, PermissionReview, ReviewRequest, utc_now_iso
+from .loop_policy import enforce_replan_policy, loop_budget_exhausted, next_observation_level
+from .models import CommandRequest, utc_now_iso
 from .observation_service import observation_progressed
-from .task_models import FailureClassification, PlanAttempt, PlanExecutionResult, ReplanDecision, StepExecutionResult, TaskPlan, TaskStep, canonicalize_target_for_action, task_plan_from_payload
+from .planner import PlanningArtifacts
+from .run_context import RunContext
+from .task_models import (
+    AcceptanceStatus,
+    ExecutionStatus,
+    FailureClassification,
+    OverallStatus,
+    PlanAttempt,
+    PlanExecutionResult,
+    ReplanDecision,
+    StepExecutionResult,
+    TaskPlan,
+    TaskStep,
+    UtteranceAnalysis,
+    canonicalize_target_for_action,
+    task_plan_from_payload,
+)
 from .task_trace import record_trace_event
 
 
@@ -24,7 +41,7 @@ class _ExecutedStepTransition:
     state: LoopState
     attempt_id: str
     step_result: StepExecutionResult
-    post_observation: Any
+    post_observation: LoopObservation
 
 
 class GoalLoop:
@@ -42,18 +59,19 @@ class GoalLoop:
         self,
         *,
         request: CommandRequest,
-        planning: Any,
+        planning: PlanningArtifacts,
         run_id: str,
         goal_id: str,
         state: LoopState | None = None,
         step_results: tuple[StepExecutionResult, ...] = (),
-        attempts: tuple[Any, ...] = (),
+        attempts: tuple[PlanAttempt, ...] = (),
     ) -> GoalLoopResult:
+        context = RunContext.from_request(request, run_id=run_id, goal_id=goal_id)
         state = state or self._initial_state(planning=planning, run_id=run_id, goal_id=goal_id)
         state = sync_loop_state_with_planning(state, planning)
         attempts_list: list[PlanAttempt] = list(attempts or state.attempt_records)
         restored_results = _restored_step_results(
-            plan=getattr(planning, "plan", None),
+            plan=planning.plan,
             completed_step_ids=state.completed_step_ids,
             attempts=tuple(attempts_list),
         )
@@ -76,9 +94,9 @@ class GoalLoop:
             planning = self.planning.resolve_understanding_transition(planning, trigger=trigger)
             state = sync_loop_state_with_planning(state, planning)
             payload = self.planning.payload(planning)
-            plan = getattr(planning, "plan", None)
-            analysis = getattr(planning, "analysis", None)
-            route_decision = getattr(planning, "route_decision", None)
+            plan = planning.plan
+            analysis = planning.analysis
+            route_decision = planning.route_decision
 
             if plan is None:
                 return self._handle_missing_plan(
@@ -273,20 +291,19 @@ class GoalLoop:
             state = review_transition.state
 
             executed = self._execute_and_observe_step(
+                context=context,
                 request=request,
                 state=state,
                 plan=plan,
                 step=next_step,
                 run_id=run_id,
-                step_result_count=len(step_results_list),
+                step_result_count=state.step_count,
                 goal_id=goal_id,
             )
             state = executed.state
             attempt_id = executed.attempt_id
             step_result = executed.step_result
             post_observation = executed.post_observation
-            step_results_list.append(step_result)
-
             state = replace(state, stage="verify")
             progress_made = self.observation.progressed(
                 plan,
@@ -297,6 +314,11 @@ class GoalLoop:
                 request,
             )
             if step_result.status == "succeeded" and progress_made:
+                # This collection is the acceptance receipt set, not attempt
+                # history. Failed/no-progress receipts remain in
+                # ``attempt_records`` below and must never poison final
+                # acceptance after a later repair succeeds.
+                step_results_list.append(step_result)
                 attempts_list.append(
                     _attempt_record(
                         run_id=run_id,
@@ -375,7 +397,9 @@ class GoalLoop:
             attempts_list.append(replace(current_attempt, replan_decision=decision))
             state = replace(state, attempt_records=tuple(attempts_list))
             if decision.action == "ask_user":
-                review_request = self.review.persist_user_input(request.utterance, planning, replace(state, stage="needs_user_input"), decision.reason or failure.message)
+                review_request = self.review.persist_user_input(
+                    request.utterance, planning, replace(state, stage="needs_user_input"), decision.reason or failure.message
+                )
                 state = replace(state, pending_user_input_id=review_request.review_id, stage="needs_user_input")
                 return GoalLoopResult(
                     decision="needs_user_input",
@@ -427,12 +451,12 @@ class GoalLoop:
         self,
         *,
         request: CommandRequest,
-        planning: Any,
+        planning: PlanningArtifacts,
         state: LoopState,
         plan: TaskPlan,
         step: TaskStep,
-        observation: Any,
-        payload: dict[str, Any],
+        observation: LoopObservation,
+        payload: dict[str, object],
         attempts: tuple[PlanAttempt, ...],
         goal_id: str,
     ) -> _StepReviewTransition:
@@ -453,6 +477,20 @@ class GoalLoop:
             and request.review_id == state.pending_review_id
             and state.pending_step_safety_review_id == step_review.step_safety_review_id
         )
+        migrated_approval = state.migrated_step_approval
+        approved_migrated_review = (
+            bool(request.approve)
+            and request.review_id is not None
+            and migrated_approval is not None
+            and request.review_id == migrated_approval.review_id == state.pending_review_id
+            and step.id == migrated_approval.step_id
+            and step.action == migrated_approval.action
+            and review.allowed == migrated_approval.allowed
+            and review.review_required == migrated_approval.review_required
+            and review.risk_level == migrated_approval.risk_level
+            and review.reason == migrated_approval.reason
+        )
+        approved_pending_review = approved_pending_review or approved_migrated_review
         if not review.allowed:
             blocked_state = replace(state, stage="blocked")
             _record_loop_completed(
@@ -515,12 +553,13 @@ class GoalLoop:
                 ),
             )
         if approved_pending_review:
-            state = replace(state, pending_review_id=None, pending_step_safety_review_id=None)
+            state = replace(state, pending_review_id=None, pending_step_safety_review_id=None, migrated_step_approval=None)
         return _StepReviewTransition(state=state)
 
     def _execute_and_observe_step(
         self,
         *,
+        context: RunContext,
         request: CommandRequest,
         state: LoopState,
         plan: TaskPlan,
@@ -531,7 +570,7 @@ class GoalLoop:
     ) -> _ExecutedStepTransition:
         state = replace(state, stage="act")
         attempt_id = _make_attempt_id(run_id, step_result_count + 1, step.id)
-        step_result = self.execution.execute_step(plan, step, request, attempt_id)
+        step_result = self.execution.execute_step(context, plan, step, request, attempt_id)
         state = replace(state, attempt_count=state.attempt_count + 1, step_count=state.step_count + 1)
         record_trace_event(
             phase="goal_loop",
@@ -549,6 +588,7 @@ class GoalLoop:
             step=step,
             phase="post",
             level=next_observation_level(state, self.policy, escalate=step_result.status != "succeeded"),
+            attempt_id=attempt_id,
         )
         state = replace(state, post_observation_id=post_observation.observation_id)
         record_trace_event(
@@ -567,7 +607,15 @@ class GoalLoop:
             post_observation=post_observation,
         )
 
-    def resume_from_review(self, *, request: CommandRequest, planning: Any, state: LoopState, run_id: str, goal_id: str) -> GoalLoopResult:
+    def resume_from_review(
+        self,
+        *,
+        request: CommandRequest,
+        planning: PlanningArtifacts,
+        state: LoopState,
+        run_id: str,
+        goal_id: str,
+    ) -> GoalLoopResult:
         resumed_state = sync_loop_state_with_planning(state, planning)
         _record_loop_resumed(
             goal_id=goal_id,
@@ -585,7 +633,15 @@ class GoalLoop:
             attempts=resumed_state.attempt_records,
         )
 
-    def resume_from_user_input(self, *, request: CommandRequest, planning: Any, state: LoopState, run_id: str, goal_id: str) -> GoalLoopResult:
+    def resume_from_user_input(
+        self,
+        *,
+        request: CommandRequest,
+        planning: PlanningArtifacts,
+        state: LoopState,
+        run_id: str,
+        goal_id: str,
+    ) -> GoalLoopResult:
         resumed_state = sync_loop_state_with_planning(state, planning)
         _record_loop_resumed(
             goal_id=goal_id,
@@ -602,43 +658,97 @@ class GoalLoop:
             attempts=resumed_state.attempt_records,
         )
 
-    def _handle_missing_plan(self, *, request: CommandRequest, planning: Any, state: LoopState, analysis: Any, route_decision: Any, payload: dict[str, Any], attempts: tuple[PlanAttempt, ...], goal_id: str) -> GoalLoopResult:
-        route_action = getattr(route_decision, "action", None)
-        if getattr(analysis, "type", "") == "clarification" or route_action == "clarify":
-            reason = getattr(analysis, "chat_response", None) or getattr(analysis, "explanation", "") or "clarification required"
+    def _handle_missing_plan(
+        self,
+        *,
+        request: CommandRequest,
+        planning: PlanningArtifacts,
+        state: LoopState,
+        analysis: UtteranceAnalysis,
+        route_decision: CandidateSelectionDecision | None,
+        payload: dict[str, object],
+        attempts: tuple[PlanAttempt, ...],
+        goal_id: str,
+    ) -> GoalLoopResult:
+        route_action = route_decision.action if route_decision is not None else None
+        if analysis.type == "clarification" or route_action == "clarify":
+            reason = analysis.chat_response or analysis.explanation or "clarification required"
             review_request = self.review.persist_user_input(request.utterance, planning, replace(state, stage="needs_user_input"), reason)
             suspended_state = replace(state, pending_user_input_id=review_request.review_id, stage="needs_user_input")
-            record_trace_event(phase="goal_loop", event_type="loop_suspended", status="needs_user_input", actor="goal_loop", goal_id=goal_id, review_id=review_request.review_id, data=asdict(suspended_state))
-            return GoalLoopResult(decision="needs_user_input", state=suspended_state, message=review_request.pending_reason or "clarification required", review_id=review_request.review_id, execution_status="not_started", acceptance_status="skipped", overall_status="needs_user_input", payload=payload, attempt_records=attempts)
+            record_trace_event(
+                phase="goal_loop",
+                event_type="loop_suspended",
+                status="needs_user_input",
+                actor="goal_loop",
+                goal_id=goal_id,
+                review_id=review_request.review_id,
+                data=asdict(suspended_state),
+            )
+            return GoalLoopResult(
+                decision="needs_user_input",
+                state=suspended_state,
+                message=review_request.pending_reason or "clarification required",
+                review_id=review_request.review_id,
+                execution_status="not_started",
+                acceptance_status="skipped",
+                overall_status="needs_user_input",
+                payload=payload,
+                attempt_records=attempts,
+            )
         overall_status = "blocked" if route_action == "blocked" else "failed"
-        message = getattr(route_decision, "reason", "") or getattr(analysis, "explanation", "") or "planner did not produce a task plan"
+        message = (route_decision.reason if route_decision is not None else "") or analysis.explanation or "planner did not produce a task plan"
         terminal_state = replace(state, stage="blocked" if overall_status == "blocked" else "complete")
         _record_loop_completed(goal_id=goal_id, state=terminal_state, overall_status=overall_status, message=message)
-        return GoalLoopResult(decision="blocked" if overall_status == "blocked" else "complete", state=terminal_state, message=message, execution_status="not_started", acceptance_status="skipped", overall_status=overall_status, payload=payload, attempt_records=attempts)
+        return GoalLoopResult(
+            decision="blocked" if overall_status == "blocked" else "complete",
+            state=terminal_state,
+            message=message,
+            execution_status="not_started",
+            acceptance_status="skipped",
+            overall_status=overall_status,
+            payload=payload,
+            attempt_records=attempts,
+        )
 
-    def _budget_exhausted_result(self, *, state: LoopState, payload: dict[str, Any], attempts: tuple[PlanAttempt, ...], goal_id: str) -> GoalLoopResult:
+    def _budget_exhausted_result(
+        self,
+        *,
+        state: LoopState,
+        payload: dict[str, object],
+        attempts: tuple[PlanAttempt, ...],
+        goal_id: str,
+    ) -> GoalLoopResult:
         terminal_state = replace(state, stage="budget_exhausted")
         _record_loop_completed(goal_id=goal_id, state=terminal_state, overall_status="blocked", message="goal loop budget exhausted")
-        return GoalLoopResult(decision="budget_exhausted", state=terminal_state, message="goal loop budget exhausted", execution_status="failed", acceptance_status="skipped", overall_status="blocked", payload=payload, attempt_records=attempts)
+        return GoalLoopResult(
+            decision="budget_exhausted",
+            state=terminal_state,
+            message="goal loop budget exhausted",
+            execution_status="failed",
+            acceptance_status="skipped",
+            overall_status="blocked",
+            payload=payload,
+            attempt_records=attempts,
+        )
 
-    def _initial_state(self, *, planning: Any, run_id: str, goal_id: str) -> LoopState:
-        understanding = getattr(planning, "understanding", None)
-        candidate_set = getattr(planning, "candidate_set", None)
-        route_decision = getattr(planning, "route_decision", None)
+    def _initial_state(self, *, planning: PlanningArtifacts, run_id: str, goal_id: str) -> LoopState:
+        understanding = planning.understanding
+        candidate_set = planning.candidate_set
+        route_decision = planning.route_decision
         model_artifact_ids: dict[str, str] = {}
-        if understanding is not None and getattr(understanding, "understanding_id", None) is not None:
-            model_artifact_ids["understanding_id"] = str(understanding.understanding_id)
-        if route_decision is not None and getattr(route_decision, "route_decision_id", None) is not None:
-            model_artifact_ids["route_decision_id"] = str(route_decision.route_decision_id)
-        if candidate_set is not None and getattr(candidate_set, "candidate_set_id", None) is not None:
-            model_artifact_ids["candidate_set_id"] = str(candidate_set.candidate_set_id)
+        if understanding is not None:
+            model_artifact_ids["understanding_id"] = understanding.understanding_id
+        if route_decision is not None:
+            model_artifact_ids["route_decision_id"] = route_decision.route_decision_id
+        if candidate_set is not None:
+            model_artifact_ids["candidate_set_id"] = candidate_set.candidate_set_id
         return LoopState(
             loop_snapshot_id=_make_snapshot_id(run_id, goal_id),
             trace_run_id=run_id,
             goal_id=goal_id,
-            primary_understanding_id=_string_attr(understanding, "primary_understanding_id") or _string_attr(understanding, "understanding_id"),
-            candidate_set_id=_string_attr(candidate_set, "candidate_set_id"),
-            selected_route_decision_id=_string_attr(route_decision, "route_decision_id"),
+            primary_understanding_id=(understanding.primary_understanding_id or understanding.understanding_id) if understanding is not None else None,
+            candidate_set_id=candidate_set.candidate_set_id if candidate_set is not None else None,
+            selected_route_decision_id=route_decision.route_decision_id if route_decision is not None else None,
             current_step_id=None,
             model_artifact_ids=model_artifact_ids,
         )
@@ -658,8 +768,8 @@ def _default_step_progressed(
     _plan: TaskPlan,
     _step: TaskStep,
     step_result: StepExecutionResult,
-    pre_observation: Any,
-    post_observation: Any,
+    pre_observation: LoopObservation,
+    post_observation: LoopObservation,
     request: CommandRequest,
 ) -> bool:
     """Default to evidence from observation, with dry-runs completing by design.
@@ -669,16 +779,14 @@ def _default_step_progressed(
     acceptance contract.
     """
 
-    return step_result.status == "succeeded" and (
-        request.dry_run or observation_progressed(pre_observation, post_observation)
-    )
+    return bool(step_result.status == "succeeded" and (request.dry_run or observation_progressed(pre_observation, post_observation)))
 
 
 def _partial_execution(plan: TaskPlan, step_result: StepExecutionResult, progress_made: bool) -> PlanExecutionResult:
     acceptance_result: dict[str, Any] | None = None
-    acceptance_status = "skipped"
-    execution_status = "failed" if step_result.status != "succeeded" else "succeeded"
-    overall_status = "failed" if step_result.status != "succeeded" else "incomplete"
+    acceptance_status: AcceptanceStatus = "skipped"
+    execution_status: ExecutionStatus = "failed" if step_result.status != "succeeded" else "succeeded"
+    overall_status: OverallStatus = "failed" if step_result.status != "succeeded" else "incomplete"
     if step_result.status == "succeeded" and not progress_made:
         acceptance_result = {
             "same_action_no_progress": True,
@@ -689,9 +797,9 @@ def _partial_execution(plan: TaskPlan, step_result: StepExecutionResult, progres
         plan_id=plan.plan_id,
         status="succeeded" if step_result.status == "succeeded" else "failed",
         step_results=(step_result,),
-        execution_status=execution_status,  # type: ignore[arg-type]
-        acceptance_status=acceptance_status,  # type: ignore[arg-type]
-        overall_status=overall_status,  # type: ignore[arg-type]
+        execution_status=execution_status,
+        acceptance_status=acceptance_status,
+        overall_status=overall_status,
         acceptance_result=acceptance_result,
         error=step_result.error,
     )
@@ -699,23 +807,10 @@ def _partial_execution(plan: TaskPlan, step_result: StepExecutionResult, progres
 
 def _selected_target(step_results: list[StepExecutionResult]) -> str | None:
     for step in reversed(step_results):
-        target = (
-            step.diagnostics.get("selected_target")
-            or step.result.get("selected_target")
-            or step.result.get("uri")
-        )
+        target = step.diagnostics.get("selected_target") or step.result.get("selected_target") or step.result.get("uri")
         if target is not None:
             return str(target)
     return None
-
-
-def _string_attr(obj: Any, name: str) -> str | None:
-    if obj is None:
-        return None
-    value = getattr(obj, name, None)
-    if value is None:
-        return None
-    return str(value)
 
 
 def _make_snapshot_id(run_id: str, goal_id: str) -> str:
@@ -731,34 +826,30 @@ def _make_attempt_id(run_id: str, attempt_index: int, step_id: str) -> str:
 def normalize_state_for_plan(state: LoopState, plan: TaskPlan | None) -> LoopState:
     if plan is None:
         return replace(state, completed_step_ids=(), current_step_id=None)
-    compatible_completed = tuple(
-        step_id
-        for step_id in state.completed_step_ids
-        if _attempt_supports_step(plan, step_id, state.attempt_records)
-    )
+    compatible_completed = tuple(step_id for step_id in state.completed_step_ids if _attempt_supports_step(plan, step_id, state.attempt_records))
     current_step_id = state.current_step_id if state.current_step_id and _attempt_supports_step(plan, state.current_step_id, state.attempt_records) else None
     return replace(state, completed_step_ids=compatible_completed, current_step_id=current_step_id)
 
 
-def sync_loop_state_with_planning(state: LoopState, planning: Any) -> LoopState:
-    understanding = getattr(planning, "understanding", None)
-    candidate_set = getattr(planning, "candidate_set", None)
-    route_decision = getattr(planning, "route_decision", None)
-    plan = getattr(planning, "plan", None)
+def sync_loop_state_with_planning(state: LoopState, planning: PlanningArtifacts) -> LoopState:
+    understanding = planning.understanding
+    candidate_set = planning.candidate_set
+    route_decision = planning.route_decision
+    plan = planning.plan
     model_artifact_ids: dict[str, str] = {}
-    if understanding is not None and getattr(understanding, "understanding_id", None) is not None:
-        model_artifact_ids["understanding_id"] = str(understanding.understanding_id)
-    if route_decision is not None and getattr(route_decision, "route_decision_id", None) is not None:
-        model_artifact_ids["route_decision_id"] = str(route_decision.route_decision_id)
-    if candidate_set is not None and getattr(candidate_set, "candidate_set_id", None) is not None:
-        model_artifact_ids["candidate_set_id"] = str(candidate_set.candidate_set_id)
+    if understanding is not None:
+        model_artifact_ids["understanding_id"] = understanding.understanding_id
+    if route_decision is not None:
+        model_artifact_ids["route_decision_id"] = route_decision.route_decision_id
+    if candidate_set is not None:
+        model_artifact_ids["candidate_set_id"] = candidate_set.candidate_set_id
     return replace(
         state,
-        primary_understanding_id=_string_attr(understanding, "primary_understanding_id") or _string_attr(understanding, "understanding_id"),
-        candidate_set_id=_string_attr(candidate_set, "candidate_set_id"),
-        selected_route_decision_id=_string_attr(route_decision, "route_decision_id"),
-        selected_route_id=getattr(plan, "selected_route_id", None) if plan is not None else state.selected_route_id,
-        selected_plan_id=getattr(plan, "plan_id", None) if plan is not None else state.selected_plan_id,
+        primary_understanding_id=(understanding.primary_understanding_id or understanding.understanding_id) if understanding is not None else None,
+        candidate_set_id=candidate_set.candidate_set_id if candidate_set is not None else None,
+        selected_route_decision_id=route_decision.route_decision_id if route_decision is not None else None,
+        selected_route_id=plan.selected_route_id if plan is not None else state.selected_route_id,
+        selected_plan_id=plan.plan_id if plan is not None else state.selected_plan_id,
         model_artifact_ids=model_artifact_ids,
     )
 
@@ -774,11 +865,7 @@ def loop_state_from_payload(payload: dict[str, Any]) -> LoopState:
         current_step_id=str(payload["current_step_id"]) if payload.get("current_step_id") is not None else None,
         completed_step_ids=tuple(str(item) for item in payload.get("completed_step_ids", ())),
         pending_review_id=str(payload["pending_review_id"]) if payload.get("pending_review_id") is not None else None,
-        pending_step_safety_review_id=(
-            str(payload["pending_step_safety_review_id"])
-            if payload.get("pending_step_safety_review_id") is not None
-            else None
-        ),
+        pending_step_safety_review_id=(str(payload["pending_step_safety_review_id"]) if payload.get("pending_step_safety_review_id") is not None else None),
         pending_user_input_id=str(payload["pending_user_input_id"]) if payload.get("pending_user_input_id") is not None else None,
         pre_observation_id=str(payload["pre_observation_id"]) if payload.get("pre_observation_id") is not None else None,
         post_observation_id=str(payload["post_observation_id"]) if payload.get("post_observation_id") is not None else None,
@@ -791,6 +878,25 @@ def loop_state_from_payload(payload: dict[str, Any]) -> LoopState:
         observation_level=str(payload.get("observation_level", "L0")),
         selected_route_id=str(payload["selected_route_id"]) if payload.get("selected_route_id") is not None else None,
         selected_plan_id=str(payload["selected_plan_id"]) if payload.get("selected_plan_id") is not None else None,
+        migrated_step_approval=_migrated_step_approval_from_payload(payload.get("migrated_step_approval")),
+    )
+
+
+def _migrated_step_approval_from_payload(payload: object) -> MigratedStepApprovalBinding | None:
+    if not isinstance(payload, dict):
+        return None
+    required = ("review_id", "step_id", "action", "original_safety_review_id", "risk_level", "reason")
+    if any(not isinstance(payload.get(field), str) or not payload.get(field) for field in required):
+        return None
+    return MigratedStepApprovalBinding(
+        review_id=str(payload["review_id"]),
+        step_id=str(payload["step_id"]),
+        action=str(payload["action"]),
+        original_safety_review_id=str(payload["original_safety_review_id"]),
+        risk_level=str(payload["risk_level"]),
+        review_required=bool(payload.get("review_required")),
+        allowed=bool(payload.get("allowed")),
+        reason=str(payload["reason"]),
     )
 
 
@@ -888,9 +994,7 @@ def _execution_attempt_record(
         route_decision_id=route_decision_id,
         semantic_summary_id=str(acceptance_result.get("semantic_summary_id")) if acceptance_result.get("semantic_summary_id") is not None else None,
         semantic_acceptance_decision_id=(
-            str(acceptance_result.get("semantic_acceptance_decision_id"))
-            if acceptance_result.get("semantic_acceptance_decision_id") is not None
-            else None
+            str(acceptance_result.get("semantic_acceptance_decision_id")) if acceptance_result.get("semantic_acceptance_decision_id") is not None else None
         ),
         selected_route_id=plan.selected_route_id,
         task_plan=plan,
@@ -941,7 +1045,7 @@ def _attempt_step_compatible_with_plan(plan: TaskPlan, attempt: PlanAttempt, ste
 
 
 def _steps_are_compatible(current_step: TaskStep, previous_step: TaskStep) -> bool:
-    return (
+    return bool(
         current_step.action == previous_step.action
         and current_step.capability_id == previous_step.capability_id
         and canonicalize_target_for_action(current_step.action, current_step.target)
@@ -982,8 +1086,13 @@ def _reset_for_same_plan_recovery(state: LoopState, policy: LoopPolicy, *, repai
     )
 
 
-def _restore_replanned_state(*, state: LoopState, planning: Any, attempts: tuple[PlanAttempt, ...]) -> tuple[LoopState, list[StepExecutionResult]]:
-    plan = getattr(planning, "plan", None)
+def _restore_replanned_state(
+    *,
+    state: LoopState,
+    planning: PlanningArtifacts,
+    attempts: tuple[PlanAttempt, ...],
+) -> tuple[LoopState, list[StepExecutionResult]]:
+    plan = planning.plan
     normalized_state = sync_loop_state_with_planning(normalize_state_for_plan(state, plan), planning)
     restored_results = list(
         _restored_step_results(

@@ -1,25 +1,31 @@
 # VibeOS Current Status
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
 ## Maintainability refactor status
 
-- `CommandService` is the transport-neutral command ingress; the broker's
-  `handle()` method delegates to it.
+- `runtime_composition.py` is the explicit dependency-composition root.
+  `CommandService` is the transport-neutral command ingress and delegates to
+  the typed `TaskApplicationService` boundary; the broker's `handle()` method
+  delegates to `CommandService`.
 - `GoalLoop` remains the only supported-task state machine and now depends on
   named planning, observation, review, execution, acceptance, and recovery
   ports rather than a public callback bundle.
-- Domain tool registrations are owned by `src/vibeos/tools/`; broker assembly
-  preserves the existing capability IDs and adapters without embedding domain
-  handlers.
+- Domain tool registrations are owned by `src/vibeos/tools/`; the composition
+  root preserves existing capability IDs and adapters without embedding domain
+  handlers in Broker.
 - Review state is authoritative in SQLite current-state rows with versioned
   atomic claim/release/consume transitions. JSONL and event-only SQLite data
   are migration sources and `review_events` remains audit history.
-- The dead fresh-task v0.6 runtime bridge was removed. Historical persisted
-  `review_kind=plan` records remain a compatibility-resume-only path and are
-  not used by fresh tasks.
-- `.github/workflows/test.yml` is configured for deterministic Python 3.11
-  checks on `push` and `pull_request`; no GitHub run is claimed yet.
+- The dead fresh-task v0.6 runtime bridge and shared production agent session
+  were removed. Historical persisted `review_kind=plan` records migrate only
+  with a verified immutable approval binding; otherwise they fail closed and
+  require a fresh command/review.
+- `CommandResultProjector` and `AuditResultRecorder` own compatibility/public
+  result projection and audit metadata, rather than Broker.
+- `.github/workflows/test.yml` is configured for Ruff lint/format, scoped
+  strict typing, deterministic Python 3.11 tests, and offline smoke checks on
+  `push` and `pull_request`; no GitHub run is claimed yet.
 
 ## Runtime Convergence
 
@@ -61,9 +67,9 @@ Last updated: 2026-07-11
   - fresh supported tasks do **not** enter the former broker runtime bridge;
     their `goal_runtime`, strategy, and ledger fields are pure projections of
     the CommandService/GoalLoop run.
-  - only persisted legacy `review_kind=plan` records use the isolated
-    compatibility resume path; its dry-run behavior is regression-tested and
-    never consumes approval.
+  - only persisted legacy `review_kind=plan` records use the isolated,
+    verifiable compatibility resume path; its dry-run behavior is
+    regression-tested and never consumes approval.
 - v0.5 planning architecture:
   - typed goal synthesis layer
   - explicit domain packs for `apps`, `window_management`, `clipboard`, `notification`, `system_observation`, `browser`, and `media`
@@ -164,7 +170,7 @@ vibe capabilities --json
 vibe ask "search web for hello" --json --offline --dry-run
 ```
 
-Expected current result:
+Historical baseline result (before the architecture-completion refactor):
 
 ```text
 pytest: 237 passed in the configured Fedora 44 WSL environment (2026-07-11)
@@ -172,6 +178,13 @@ doctor: overall warn, 0 failures (desktop-session integration is not configured 
 capabilities: 19 registered actions; L0/L1/L2/L3 policy boundary intact
 offline dry-run: completed locally with overall_status=dry_run and no provider request
 ```
+
+The architecture-completion work has newer targeted evidence recorded in
+`architecture_completion_phase_a.md` through `architecture_completion_phase_f.md`.
+Its final repository-wide static, test, and smoke verification is deliberately
+tracked as an outstanding Phase G gate in
+`architecture_completion_phase_g.md`; do not treat the historical counts above
+as proof for the current worktree.
 
 Additional targeted suites run after the run-loop and transport changes:
 

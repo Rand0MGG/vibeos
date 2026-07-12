@@ -4,7 +4,6 @@ from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
 import json
 import urllib.error
-from typing import Any
 
 from .clarification import (
     ClarificationDecision,
@@ -13,7 +12,7 @@ from .clarification import (
 )
 from .intent import IntentBroker, OpenAICompatibleIntentBroker
 from .models import Intent, utc_now_iso
-from .nlu import analysis_from_intent, domain_for_action, make_provenance
+from .nlu import analysis_from_intent, make_provenance
 from .provider_client import env_flag_enabled, load_openai_compatible_provider_config, request_json_object
 from .task_models import FailureClassification, ReplanDecision, TaskSpan, UtteranceAnalysis
 from .task_trace import record_model_io
@@ -437,9 +436,7 @@ def provider_unavailable_understanding(utterance: str, message: str) -> Utteranc
 
 
 def make_understanding_id(utterance: str, analysis: UtteranceAnalysis) -> str:
-    digest = sha256(
-        f"{analysis.type}:{analysis.confidence}:{analysis.domains}:{utterance.strip()}:{utc_now_iso()}".encode("utf-8")
-    ).hexdigest()[:12]
+    digest = sha256(f"{analysis.type}:{analysis.confidence}:{analysis.domains}:{utterance.strip()}:{utc_now_iso()}".encode("utf-8")).hexdigest()[:12]
     return f"und_{digest}"
 
 

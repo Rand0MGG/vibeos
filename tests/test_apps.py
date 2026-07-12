@@ -39,4 +39,3 @@ def test_open_app_reports_spawn_error(monkeypatch) -> None:
     result = AppRegistry().open_app(AppEntry(desktop_id="org.mozilla.firefox.desktop", name="Firefox"))
 
     assert result == {"status": "failed", "error": "spawn failed"}
-

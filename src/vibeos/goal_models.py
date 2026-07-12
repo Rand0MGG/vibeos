@@ -43,9 +43,7 @@ class GoalSpec:
     fallback_hints: tuple[str, ...] = ()
     assumptions: tuple[str, ...] = ()
     assistant_intent: AssistantIntent | None = None
-    synthesis_provenance: GoalSynthesisProvenance = field(
-        default_factory=lambda: GoalSynthesisProvenance(provider_name="unknown", provider_version="unknown")
-    )
+    synthesis_provenance: GoalSynthesisProvenance = field(default_factory=lambda: GoalSynthesisProvenance(provider_name="unknown", provider_version="unknown"))
 
 
 @dataclass(frozen=True)

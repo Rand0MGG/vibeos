@@ -65,21 +65,25 @@ class CandidateSelectionDecision:
 
 def candidate_set_from_payload(payload: dict[str, object]) -> CandidateSet:
     candidates_payload = payload.get("candidates")
-    descriptors = tuple(
-        CandidateDescriptor(
-            candidate_id=str(item["candidate_id"]),
-            plan_id=str(item["plan_id"]),
-            route_id=str(item["route_id"]),
-            domain_id=str(item["domain_id"]),
-            score=float(item["score"]),
-            satisfiable=bool(item.get("satisfiable", False)),
-            required_capabilities=tuple(str(capability) for capability in item.get("required_capabilities", ())),
-            default_verifier_ids=tuple(str(verifier) for verifier in item.get("default_verifier_ids", ())),
-            step_ids=tuple(str(step_id) for step_id in item.get("step_ids", ())),
+    descriptors = (
+        tuple(
+            CandidateDescriptor(
+                candidate_id=str(item["candidate_id"]),
+                plan_id=str(item["plan_id"]),
+                route_id=str(item["route_id"]),
+                domain_id=str(item["domain_id"]),
+                score=float(item["score"]),
+                satisfiable=bool(item.get("satisfiable", False)),
+                required_capabilities=tuple(str(capability) for capability in item.get("required_capabilities", ())),
+                default_verifier_ids=tuple(str(verifier) for verifier in item.get("default_verifier_ids", ())),
+                step_ids=tuple(str(step_id) for step_id in item.get("step_ids", ())),
+            )
+            for item in candidates_payload
+            if isinstance(item, dict)
         )
-        for item in candidates_payload
-        if isinstance(item, dict)
-    ) if isinstance(candidates_payload, list) else ()
+        if isinstance(candidates_payload, list)
+        else ()
+    )
     return CandidateSet(
         candidate_set_id=str(payload["candidate_set_id"]),
         understanding_id=str(payload["understanding_id"]),

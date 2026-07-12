@@ -64,6 +64,25 @@ def browser_attempt_scope(*, run_id: str, attempt_id: str, route_id: str | None 
         _CURRENT_RUN_ID.reset(run_token)
 
 
+@contextmanager
+def browser_observation_scope(attempt_id: str | None) -> Iterator[None]:
+    """Expose an existing attempt receipt to a later observation without resetting it."""
+
+    if attempt_id is None:
+        yield
+        return
+    event = _BROWSER_EVENTS.get(attempt_id)
+    run_token: Token[str | None] = _CURRENT_RUN_ID.set(str(event.get("run_id")) if event and event.get("run_id") else None)
+    attempt_token: Token[str | None] = _CURRENT_ATTEMPT_ID.set(attempt_id)
+    route_token: Token[str | None] = _CURRENT_ROUTE_ID.set(str(event.get("route_id")) if event and event.get("route_id") else None)
+    try:
+        yield
+    finally:
+        _CURRENT_ROUTE_ID.reset(route_token)
+        _CURRENT_ATTEMPT_ID.reset(attempt_token)
+        _CURRENT_RUN_ID.reset(run_token)
+
+
 def record_browser_navigation(
     *,
     uri: str | None,

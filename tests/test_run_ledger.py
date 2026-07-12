@@ -15,27 +15,31 @@ def test_run_ledger_appends_strategy_decision_and_attempt() -> None:
         failure_class="semantic_mismatch",
     )
 
-    updated = ledger.append_strategy_decision(decision, turn_id="turn_1", attempt_id="attempt_1").append_attempt(
-        AttemptLedgerEntry(
-            attempt_id="attempt_1",
-            turn_id="turn_1",
-            goal_id="goal_1",
-            understanding_id="und_1",
-            candidate_set_id="cset_1",
-            route_decision_id="rdec_1",
-            replan_decision_id="rpdec_1",
-            semantic_summary_id="ssum_1",
-            semantic_acceptance_decision_id="sacc_1",
-            strategy_id="strategy_1",
-            route_id="route_1",
-            trigger="execute_strategy",
-            task_plan_id="plan_1",
-            capability_surface="browser",
-            interaction_surface="structured_ui_action",
-            outcome_status="completed",
-            message="ok",
+    updated = (
+        ledger.append_strategy_decision(decision, turn_id="turn_1", attempt_id="attempt_1")
+        .append_attempt(
+            AttemptLedgerEntry(
+                attempt_id="attempt_1",
+                turn_id="turn_1",
+                goal_id="goal_1",
+                understanding_id="und_1",
+                candidate_set_id="cset_1",
+                route_decision_id="rdec_1",
+                replan_decision_id="rpdec_1",
+                semantic_summary_id="ssum_1",
+                semantic_acceptance_decision_id="sacc_1",
+                strategy_id="strategy_1",
+                route_id="route_1",
+                trigger="execute_strategy",
+                task_plan_id="plan_1",
+                capability_surface="browser",
+                interaction_surface="structured_ui_action",
+                outcome_status="completed",
+                message="ok",
+            )
         )
-    ).with_terminal_outcome({"status": "completed"})
+        .with_terminal_outcome({"status": "completed"})
+    )
 
     assert updated.strategy_history[0].strategy_id == "strategy_1"
     assert updated.strategy_history[0].strategy_decision_id == "sdec_1"

@@ -165,7 +165,9 @@ def _run(args: argparse.Namespace) -> int:
             goal_id=str(goal_spec.get("goal_id")) if goal_spec.get("goal_id") is not None else None,
             message=str(payload.get("message", "")),
             overall_status=str(payload.get("overall_status", payload.get("status", "failed"))),
-            plan_id=str(payload.get("plan", {}).get("plan_id")) if isinstance(payload.get("plan"), dict) and payload.get("plan", {}).get("plan_id") is not None else None,
+            plan_id=str(payload.get("plan", {}).get("plan_id"))
+            if isinstance(payload.get("plan"), dict) and payload.get("plan", {}).get("plan_id") is not None
+            else None,
         )
         print_plan_payload(payload, json_output=args.json)
         return 0 if payload["status"] == "validated" else 1

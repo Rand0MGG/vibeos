@@ -14,11 +14,7 @@ def route_domains(
         return None
 
     raw_candidates = candidate_domain_ids or analysis.domains
-    active_candidates = tuple(
-        domain_id
-        for domain_id in raw_candidates
-        if registry.get_pack(domain_id) is not None
-    )
+    active_candidates = tuple(domain_id for domain_id in raw_candidates if registry.get_pack(domain_id) is not None)
     if not active_candidates and analysis.type == "clarification":
         active_candidates = ("media",)
     if not active_candidates:

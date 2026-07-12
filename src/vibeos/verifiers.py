@@ -72,11 +72,7 @@ class VerifierRegistry:
 def browser_url_opened_verifier(plan: TaskPlan, execution: PlanExecutionResult, harness: VerifierHarness) -> VerifierResult:
     observation = harness.observation_for("browser_url_opened")
     browser_context = harness.context_package_for("browser_context")
-    opened_url = str(
-        observation.get("opened_url")
-        or browser_context.get("active_url")
-        or ""
-    )
+    opened_url = str(observation.get("opened_url") or browser_context.get("active_url") or "")
     expected_url = ""
     for step in plan.steps:
         if step.action == "browser.open_url":
@@ -118,12 +114,7 @@ def browser_url_opened_verifier(plan: TaskPlan, execution: PlanExecutionResult, 
 def browser_search_route_completed_verifier(plan: TaskPlan, execution: PlanExecutionResult, harness: VerifierHarness) -> VerifierResult:
     observation = harness.observation_for("browser_search_route_completed")
     browser_context = harness.context_package_for("browser_context")
-    observed_query = str(
-        observation.get("query")
-        or browser_context.get("query")
-        or _query_from_url(str(browser_context.get("active_url") or ""))
-        or ""
-    )
+    observed_query = str(observation.get("query") or browser_context.get("query") or _query_from_url(str(browser_context.get("active_url") or "")) or "")
     expected_query = ""
     for step in plan.steps:
         if step.action in {"browser.search_web", "browser.open_site_search"}:
@@ -176,11 +167,7 @@ def browser_goal_page_identity_verifier(plan: TaskPlan, execution: PlanExecution
         break
     for step_result in execution.step_results:
         result_payload = step_result.result if isinstance(step_result.result, dict) else {}
-        expected_url = str(
-            result_payload.get("official_url")
-            or result_payload.get("resolved_url")
-            or ""
-        )
+        expected_url = str(result_payload.get("official_url") or result_payload.get("resolved_url") or "")
         if expected_url:
             break
     if execution.status != "succeeded":

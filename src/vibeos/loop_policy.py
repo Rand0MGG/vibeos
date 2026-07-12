@@ -85,16 +85,12 @@ def enforce_replan_policy(
         return replace(
             decision,
             action="stop",
-            reason=(
-                f"loop policy stopped repeated no-progress after {failure_streak} consecutive attempts"
-            ),
+            reason=(f"loop policy stopped repeated no-progress after {failure_streak} consecutive attempts"),
         )
     if failure_streak >= policy.max_same_failure_count:
         return replace(
             decision,
             action="stop",
-            reason=(
-                f"loop policy stopped repeated failure '{failure.failure_class}' after {failure_streak} consecutive attempts"
-            ),
+            reason=(f"loop policy stopped repeated failure '{failure.failure_class}' after {failure_streak} consecutive attempts"),
         )
     return decision

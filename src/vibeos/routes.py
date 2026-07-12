@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from .capabilities import CAPABILITIES
-from .task_models import DisplayFields, TaskPlan, TaskRoute
+from .task_models import DisplayFields, TaskPlan
 
 
 def available_capabilities() -> set[str]:
@@ -33,7 +33,6 @@ def score_plan_candidate(plan: TaskPlan, available: set[str]) -> TaskPlan:
     covered = len(required & available)
     total = len(required) or 1
     capability_coverage = covered / total
-    missing_preconditions = float(total - covered)
     max_risk = max((risk_rank(step.risk_level) for step in plan.steps), default=0)
     risk_penalty = max_risk / 4.0
     domain_match = 1.0

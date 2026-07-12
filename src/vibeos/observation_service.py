@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from contextlib import nullcontext
 from hashlib import sha256
 from typing import Any
 
+from .browser_state import browser_observation_scope
 from .domain_models import ObservationReceipt, ObservationRequest
 from .domain_registry import default_domain_registry
 from .loop_models import LoopObservation, ObservationLevel
-from .models import utc_now_iso
+from .models import CommandRequest, utc_now_iso
+from .task_models import StepExecutionResult
 from .observation import resolve_observation_request, resolve_post_execution_observation
 from .task_models import TaskPlan, TaskStep
 from .verifiers import VerifierHarness, VerifierRegistry
@@ -35,9 +37,12 @@ class ObservationService:
         step: TaskStep | None,
         phase: str,
         level: ObservationLevel,
+        attempt_id: str | None = None,
     ) -> LoopObservation:
         request = _observation_request(plan=plan, phase=phase, level=level, registry=self.registry)
-        receipt = _resolve_observation_receipt(request=request, registry=self.registry, harness=self.harness, phase=phase)
+        scope = browser_observation_scope(attempt_id) if phase == "post" else nullcontext()
+        with scope:
+            receipt = _resolve_observation_receipt(request=request, registry=self.registry, harness=self.harness, phase=phase)
         packages = {package.package_id: dict(package.payload) for package in receipt.packages}
         observation_id = _make_observation_id(
             plan.plan_id,
@@ -53,6 +58,26 @@ class ObservationService:
             route_id=plan.selected_route_id,
             step_id=step.id if step is not None else None,
         )
+
+    def progressed(
+        self,
+        plan: TaskPlan,
+        step: TaskStep,
+        step_result: StepExecutionResult,
+        pre_observation: LoopObservation,
+        post_observation: LoopObservation,
+        request: CommandRequest,
+    ) -> bool:
+        """Apply the selected route's explicit evidence contract."""
+
+        if step_result.status != "succeeded":
+            return False
+        if request.dry_run:
+            return True
+        route = self.registry.get_route(plan.selected_route_id)
+        if route is None or not route.default_verifier_ids:
+            return True
+        return observation_progressed(pre_observation, post_observation)
 
 
 def observation_progressed(pre: LoopObservation | None, post: LoopObservation | None) -> bool:
@@ -75,11 +100,7 @@ def _normalized_observation_packages(packages: dict[str, dict[str, Any]]) -> dic
 
 def _strip_volatile_fields(value: Any) -> Any:
     if isinstance(value, dict):
-        return {
-            key: _strip_volatile_fields(item)
-            for key, item in value.items()
-            if key not in VOLATILE_OBSERVATION_KEYS
-        }
+        return {key: _strip_volatile_fields(item) for key, item in value.items() if key not in VOLATILE_OBSERVATION_KEYS}
     if isinstance(value, list):
         return [_strip_volatile_fields(item) for item in value]
     if isinstance(value, tuple):
@@ -143,11 +164,7 @@ def _packages_for_observation_level(
         allowed_package_ids.extend(pack.allowed_context_package_ids)
     allowed = tuple(dict.fromkeys(package_id for package_id in allowed_package_ids if package_id))
     route_required = tuple(dict.fromkeys(package_id for package_id in route_package_ids if package_id))
-    baseline = route_required or tuple(
-        package_id
-        for package_id in ("session_context",)
-        if package_id in allowed
-    )
+    baseline = route_required or tuple(package_id for package_id in ("session_context",) if package_id in allowed)
 
     if level == "L0":
         if baseline:

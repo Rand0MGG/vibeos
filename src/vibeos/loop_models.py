@@ -60,6 +60,20 @@ class LoopObservation:
 
 
 @dataclass(frozen=True)
+class MigratedStepApprovalBinding:
+    """Verified historical approval scope carried into exactly one current step."""
+
+    review_id: str
+    step_id: str
+    action: str
+    original_safety_review_id: str
+    risk_level: str
+    review_required: bool
+    allowed: bool
+    reason: str
+
+
+@dataclass(frozen=True)
 class LoopStepResult:
     step_id: str
     execution_status: str
@@ -94,6 +108,7 @@ class LoopState:
     observation_level: ObservationLevel = "L0"
     selected_route_id: str | None = None
     selected_plan_id: str | None = None
+    migrated_step_approval: MigratedStepApprovalBinding | None = None
 
 
 @dataclass(frozen=True)

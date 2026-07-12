@@ -112,11 +112,13 @@ Task-plan command results also expose:
 - `attempts`
 
 Supported tasks run through `GoalLoop` as the single default orchestration
-state machine. `CommandService` owns transport-neutral dispatch and result
-finalization; `CapabilityBroker` is a compatibility facade and dependency
-assembler, not a parallel retry/replan loop. Registered implementations live
-in domain modules under `src/vibeos/tools/`, while GoalLoop coordinates typed
-planning, observation, review, execution, acceptance, and recovery ports. See
+state machine. `CommandService` owns transport-neutral dispatch, and the typed
+`TaskApplicationService` owns task start/review resume. The explicit
+composition root assembles dependencies; `CapabilityBroker` is only a
+compatibility facade, not a parallel retry/replan loop. Registered
+implementations live in domain modules under `src/vibeos/tools/`, while
+GoalLoop coordinates typed planning, observation, review, execution,
+acceptance, and recovery services. See
 [docs/runtime_convergence.md](docs/runtime_convergence.md) for the ownership
 map, transactional review semantics, trace policy, and the WSL/VM boundary.
 

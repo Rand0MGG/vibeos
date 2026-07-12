@@ -8,7 +8,7 @@ from vibeos.failure_classifier import FailureClassifier
 from vibeos.goal_loop import GoalLoop, loop_state_from_payload
 from vibeos.goal_ports import GoalLoopPorts
 from vibeos.loop_policy import default_loop_policy
-from vibeos.loop_models import LoopObservation, LoopPolicy, LoopState
+from vibeos.loop_models import LoopObservation, LoopPolicy
 from vibeos.models import CommandRequest, PermissionReview
 from vibeos.observation_service import observation_progressed
 from vibeos.reviews import ReviewStore
@@ -30,7 +30,7 @@ class FakeObservationService:
     def __init__(self, sequence):
         self._sequence = list(sequence)
 
-    def observe(self, *, plan, step, phase, level):
+    def observe(self, *, plan, step, phase, level, attempt_id=None):
         payload = self._sequence.pop(0)
         return LoopObservation(
             observation_id=payload["observation_id"],
@@ -60,7 +60,7 @@ class CallbackGoalLoopPorts:
     def replan(self, planning, request, excluded_route_ids, excluded_capability_ids, candidate_domain_ids):
         return self.callbacks["plan_again"](planning, request, excluded_route_ids, excluded_capability_ids, candidate_domain_ids)
 
-    def observe(self, *, plan, step, phase, level):
+    def observe(self, *, plan, step, phase, level, attempt_id=None):
         return self.callbacks["observation_service"].observe(plan=plan, step=step, phase=phase, level=level)
 
     def progressed(self, plan, step, step_result, pre_observation, post_observation, request):
@@ -78,21 +78,17 @@ class CallbackGoalLoopPorts:
     def persist_user_input(self, utterance, planning, state, reason):
         return self.callbacks["persist_user_input"](utterance, planning, state, reason)
 
-    def execute_step(self, plan, step, request, attempt_id):
+    def execute_step(self, context, plan, step, request, attempt_id):
         return self.callbacks["execute_step"](plan, step, request, attempt_id)
 
     def assess(self, plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id):
-        return self.callbacks["assess_plan_execution"](
-            plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id
-        )
+        return self.callbacks["assess_plan_execution"](plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id)
 
     def classify(self, plan, execution):
         return self.callbacks["classify_failure"](plan, execution)
 
     def decide(self, utterance, plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids):
-        return self.callbacks["decide_replan"](
-            utterance, plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids
-        )
+        return self.callbacks["decide_replan"](utterance, plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids)
 
 
 def make_goal_loop(**callbacks) -> GoalLoop:
@@ -139,9 +135,7 @@ def test_goal_loop_suspends_for_review_with_real_review_store() -> None:
     store = ReviewStore(make_review_path("goal-loop-review"))
 
     loop = make_goal_loop(
-        observation_service=FakeObservationService(
-            [{"observation_id": "obs_pre", "packages": {"browser_context": {"active_url": ""}}}]
-        ),
+        observation_service=FakeObservationService([{"observation_id": "obs_pre", "packages": {"browser_context": {"active_url": ""}}}]),
         planning_payload=lambda planning: {"plan": asdict(plan)},
         resolve_understanding_transition=lambda planning, trigger: planning,
         apply_replan_transition=lambda planning, decision, failure: planning,
@@ -151,9 +145,13 @@ def test_goal_loop_suspends_for_review_with_real_review_store() -> None:
             StepReviewRecord("srev_1", step.id, step.action, "L2", True, True, "approval required"),
         ),
         execute_step=lambda plan, step, request, attempt_id: (_ for _ in ()).throw(AssertionError("step must not execute before approval")),
-        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: (_ for _ in ()).throw(AssertionError("final assessment should not run")),
+        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: (_ for _ in ()).throw(
+            AssertionError("final assessment should not run")
+        ),
         classify_failure=FailureClassifier().classify,
-        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: (_ for _ in ()).throw(AssertionError("replanner should not run")),
+        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: (_ for _ in ()).throw(
+            AssertionError("replanner should not run")
+        ),
         persist_review=lambda utterance, planning, loop_state, step, reason: store.create_loop_review(
             utterance,
             plan_payload={"plan_id": planning.plan.plan_id, "plan": asdict(planning.plan)},
@@ -191,7 +189,7 @@ def test_goal_loop_suspends_for_user_input_with_real_review_store() -> None:
     planning = SimpleNamespace(
         plan=None,
         analysis=SimpleNamespace(type="clarification", explanation="need a concrete target", chat_response="which site should I open?"),
-        route_decision=SimpleNamespace(action="clarify"),
+        route_decision=SimpleNamespace(action="clarify", route_decision_id="rdec_clarification"),
         understanding=None,
         candidate_set=None,
     )
@@ -203,9 +201,13 @@ def test_goal_loop_suspends_for_user_input_with_real_review_store() -> None:
         plan_again=lambda current, request, excluded_routes, excluded_capabilities, candidate_domains: current,
         review_step=lambda plan, step, pre_observation: (_ for _ in ()).throw(AssertionError("review path should not run")),
         execute_step=lambda plan, step, request, attempt_id: (_ for _ in ()).throw(AssertionError("execute path should not run")),
-        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: (_ for _ in ()).throw(AssertionError("assessment should not run")),
+        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: (_ for _ in ()).throw(
+            AssertionError("assessment should not run")
+        ),
         classify_failure=FailureClassifier().classify,
-        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: (_ for _ in ()).throw(AssertionError("replanner should not run")),
+        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: (_ for _ in ()).throw(
+            AssertionError("replanner should not run")
+        ),
         persist_review=lambda utterance, planning, loop_state, step, reason: (_ for _ in ()).throw(AssertionError("loop review should not run")),
         persist_user_input=lambda utterance, planning, loop_state, reason: store.create_loop_review(
             utterance,
@@ -280,7 +282,9 @@ def test_review_approval_resumes_from_pending_step_without_reexecuting_completed
             acceptance_result={"message": "goal completed", "semantic_acceptance_decision_id": "sacc_test"},
         ),
         classify_failure=FailureClassifier().classify,
-        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: (_ for _ in ()).throw(AssertionError("replanner should not run")),
+        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: (_ for _ in ()).throw(
+            AssertionError("replanner should not run")
+        ),
         persist_review=lambda utterance, planning, loop_state, step, reason: store.create_loop_review(
             utterance,
             plan_payload={"plan_id": planning.plan.plan_id, "plan": asdict(planning.plan)},
@@ -370,7 +374,9 @@ def test_review_resume_uses_real_review_store_persistence() -> None:
                 acceptance_result={"message": "goal completed", "semantic_acceptance_decision_id": "sacc_resume_store"},
             ),
             classify_failure=FailureClassifier().classify,
-            decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: (_ for _ in ()).throw(AssertionError("replanner should not run")),
+            decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: (_ for _ in ()).throw(
+                AssertionError("replanner should not run")
+            ),
             persist_review=lambda utterance, planning, loop_state, step, reason: store.create_loop_review(
                 utterance,
                 plan_payload={"plan_id": planning.plan.plan_id, "plan": asdict(planning.plan)},
@@ -436,7 +442,9 @@ def test_goal_loop_classifies_same_action_no_progress() -> None:
             capability_id=step.capability_id,
             result={"status": "succeeded"},
         ),
-        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: (_ for _ in ()).throw(AssertionError("final assessment should not run")),
+        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: (_ for _ in ()).throw(
+            AssertionError("final assessment should not run")
+        ),
         classify_failure=FailureClassifier().classify,
         decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(
             action="stop",
@@ -501,7 +509,9 @@ def test_goal_loop_records_pre_and_post_observation(monkeypatch) -> None:
             acceptance_result={"message": "goal completed", "semantic_acceptance_decision_id": "sacc_test"},
         ),
         classify_failure=FailureClassifier().classify,
-        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(action="stop", reason=failure.message),
+        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(
+            action="stop", reason=failure.message
+        ),
         persist_review=lambda utterance, planning, loop_state, step, reason: (_ for _ in ()).throw(AssertionError("review path should not run")),
         persist_user_input=lambda utterance, planning, loop_state, reason: (_ for _ in ()).throw(AssertionError("user-input path should not run")),
     )
@@ -557,7 +567,9 @@ def test_goal_loop_executes_one_step_at_a_time(monkeypatch) -> None:
             acceptance_result={"message": "goal completed", "semantic_acceptance_decision_id": "sacc_steps"},
         ),
         classify_failure=FailureClassifier().classify,
-        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(action="stop", reason=failure.message),
+        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(
+            action="stop", reason=failure.message
+        ),
         persist_review=lambda utterance, planning, loop_state, step, reason: (_ for _ in ()).throw(AssertionError("review path should not run")),
         persist_user_input=lambda utterance, planning, loop_state, reason: (_ for _ in ()).throw(AssertionError("user-input path should not run")),
     )
@@ -572,7 +584,8 @@ def test_goal_loop_executes_one_step_at_a_time(monkeypatch) -> None:
     sequence = [
         event["event_type"]
         for event in events
-        if event["event_type"] in {
+        if event["event_type"]
+        in {
             "step_selected",
             "observe_pre_completed",
             "step_review_completed",
@@ -624,9 +637,13 @@ def test_goal_loop_stops_on_budget_exhausted() -> None:
             StepReviewRecord(f"srev_{step.id}", step.id, step.action, "L1", False, True, "allowed"),
         ),
         execute_step=lambda plan, step, request, attempt_id: execute_success_step(step, execution_counts),
-        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: (_ for _ in ()).throw(AssertionError("budget exhaustion should stop before final assessment")),
+        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: (_ for _ in ()).throw(
+            AssertionError("budget exhaustion should stop before final assessment")
+        ),
         classify_failure=FailureClassifier().classify,
-        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(action="stop", reason=failure.message),
+        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(
+            action="stop", reason=failure.message
+        ),
         persist_review=lambda utterance, planning, loop_state, step, reason: (_ for _ in ()).throw(AssertionError("review path should not run")),
         persist_user_input=lambda utterance, planning, loop_state, reason: (_ for _ in ()).throw(AssertionError("user-input path should not run")),
         policy=LoopPolicy(max_steps=1),
@@ -676,7 +693,9 @@ def test_goal_loop_can_finish_after_multiple_step_ticks() -> None:
             acceptance_result={"message": "goal completed", "semantic_acceptance_decision_id": "sacc_multi_tick"},
         ),
         classify_failure=FailureClassifier().classify,
-        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(action="stop", reason=failure.message),
+        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(
+            action="stop", reason=failure.message
+        ),
         persist_review=lambda utterance, planning, loop_state, step, reason: (_ for _ in ()).throw(AssertionError("review path should not run")),
         persist_user_input=lambda utterance, planning, loop_state, reason: (_ for _ in ()).throw(AssertionError("user-input path should not run")),
     )
@@ -718,9 +737,13 @@ def test_goal_loop_escalates_observation_level_after_failed_attempt() -> None:
             error="adapter failed",
             result={"status": "failed"},
         ),
-        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: (_ for _ in ()).throw(AssertionError("final assessment should not run")),
+        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: (_ for _ in ()).throw(
+            AssertionError("final assessment should not run")
+        ),
         classify_failure=FailureClassifier().classify,
-        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(action="stop", reason="stop after failure"),
+        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(
+            action="stop", reason="stop after failure"
+        ),
         persist_review=lambda utterance, planning, loop_state, step, reason: (_ for _ in ()).throw(AssertionError("review path should not run")),
         persist_user_input=lambda utterance, planning, loop_state, reason: (_ for _ in ()).throw(AssertionError("user-input path should not run")),
     )
@@ -775,7 +798,9 @@ def test_goal_loop_passes_pre_observation_into_step_review() -> None:
             acceptance_result={"message": "goal completed", "semantic_acceptance_decision_id": "sacc_test"},
         ),
         classify_failure=FailureClassifier().classify,
-        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(action="stop", reason=failure.message),
+        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(
+            action="stop", reason=failure.message
+        ),
         persist_review=lambda utterance, planning, loop_state, step, reason: (_ for _ in ()).throw(AssertionError("review path should not run")),
         persist_user_input=lambda utterance, planning, loop_state, reason: (_ for _ in ()).throw(AssertionError("user-input path should not run")),
     )
@@ -794,7 +819,21 @@ def test_goal_loop_passes_pre_observation_into_step_review() -> None:
 
 def test_goal_loop_retries_same_attempt_without_replanning() -> None:
     execution_attempts = {"count": 0}
+    acceptance_inputs: list[tuple[StepExecutionResult, ...]] = []
     plan = make_plan("plan_retry_same_attempt", ("step_1",))
+
+    def assess(plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id):
+        acceptance_inputs.append(step_results)
+        return PlanExecutionResult(
+            plan_id=plan.plan_id,
+            status="succeeded",
+            step_results=step_results,
+            execution_status="succeeded",
+            acceptance_status="passed",
+            overall_status="completed",
+            acceptance_result={"message": "goal completed", "semantic_acceptance_decision_id": "sacc_retry"},
+        )
+
     loop = make_goal_loop(
         observation_service=FakeObservationService(
             [
@@ -806,24 +845,22 @@ def test_goal_loop_retries_same_attempt_without_replanning() -> None:
         ),
         planning_payload=lambda planning: {"plan": asdict(plan)},
         resolve_understanding_transition=lambda planning, trigger: planning,
-        apply_replan_transition=lambda planning, decision, failure: (_ for _ in ()).throw(AssertionError("retry_same_attempt should not mutate the plan basis")),
-        plan_again=lambda planning, request, excluded_routes, excluded_capabilities, candidate_domains: (_ for _ in ()).throw(AssertionError("retry_same_attempt should not invoke replanning")),
+        apply_replan_transition=lambda planning, decision, failure: (_ for _ in ()).throw(
+            AssertionError("retry_same_attempt should not mutate the plan basis")
+        ),
+        plan_again=lambda planning, request, excluded_routes, excluded_capabilities, candidate_domains: (_ for _ in ()).throw(
+            AssertionError("retry_same_attempt should not invoke replanning")
+        ),
         review_step=lambda plan, step, pre_observation: (
             PermissionReview("L1", False, True, "allowed"),
             StepReviewRecord("srev_1", step.id, step.action, "L1", False, True, "allowed"),
         ),
         execute_step=lambda plan, step, request, attempt_id: _retry_step_result(step, execution_attempts),
-        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: PlanExecutionResult(
-            plan_id=plan.plan_id,
-            status="succeeded",
-            step_results=step_results,
-            execution_status="succeeded",
-            acceptance_status="passed",
-            overall_status="completed",
-            acceptance_result={"message": "goal completed", "semantic_acceptance_decision_id": "sacc_retry"},
-        ),
+        assess_plan_execution=assess,
         classify_failure=FailureClassifier().classify,
-        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(action="retry_same_attempt", reason="retry the transient failure"),
+        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(
+            action="retry_same_attempt", reason="retry the transient failure"
+        ),
         persist_review=lambda utterance, planning, loop_state, step, reason: (_ for _ in ()).throw(AssertionError("review path should not run")),
         persist_user_input=lambda utterance, planning, loop_state, reason: (_ for _ in ()).throw(AssertionError("user-input path should not run")),
     )
@@ -839,6 +876,7 @@ def test_goal_loop_retries_same_attempt_without_replanning() -> None:
     assert execution_attempts["count"] == 2
     assert len(result.attempt_records) == 2
     assert result.attempt_records[1].trigger == "retry_same_attempt"
+    assert [[receipt.status for receipt in inputs] for inputs in acceptance_inputs] == [["succeeded"]]
 
 
 def test_goal_loop_repairs_after_terminal_acceptance_unverified(monkeypatch) -> None:
@@ -860,16 +898,20 @@ def test_goal_loop_repairs_after_terminal_acceptance_unverified(monkeypatch) -> 
         planning_payload=lambda planning: {"plan": asdict(plan)},
         resolve_understanding_transition=lambda planning, trigger: planning,
         apply_replan_transition=lambda planning, decision, failure: (_ for _ in ()).throw(AssertionError("repair should not mutate the plan basis")),
-        plan_again=lambda planning, request, excluded_routes, excluded_capabilities, candidate_domains: (_ for _ in ()).throw(AssertionError("repair should not invoke replanning")),
+        plan_again=lambda planning, request, excluded_routes, excluded_capabilities, candidate_domains: (_ for _ in ()).throw(
+            AssertionError("repair should not invoke replanning")
+        ),
         review_step=lambda plan, step, pre_observation: (
             PermissionReview("L1", False, True, "allowed"),
             StepReviewRecord("srev_1", step.id, step.action, "L1", False, True, "allowed"),
         ),
         execute_step=lambda plan, step, request, attempt_id: _counted_success_step(step, execution_attempts),
-        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: _terminal_acceptance_assessment(
-            plan,
-            step_results,
-            assessment_attempts,
+        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: (
+            _terminal_acceptance_assessment(
+                plan,
+                step_results,
+                assessment_attempts,
+            )
         ),
         classify_failure=FailureClassifier().classify,
         decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(
@@ -969,7 +1011,9 @@ def test_goal_loop_policy_stops_retry_same_attempt_after_failure_limit() -> None
         planning_payload=lambda planning: {"plan": asdict(plan)},
         resolve_understanding_transition=lambda planning, trigger: planning,
         apply_replan_transition=lambda planning, decision, failure: (_ for _ in ()).throw(AssertionError("policy stop should avoid plan mutation")),
-        plan_again=lambda planning, request, excluded_routes, excluded_capabilities, candidate_domains: (_ for _ in ()).throw(AssertionError("policy stop should avoid replanning")),
+        plan_again=lambda planning, request, excluded_routes, excluded_capabilities, candidate_domains: (_ for _ in ()).throw(
+            AssertionError("policy stop should avoid replanning")
+        ),
         review_step=lambda plan, step, pre_observation: (
             PermissionReview("L1", False, True, "allowed"),
             StepReviewRecord("srev_1", step.id, step.action, "L1", False, True, "allowed"),
@@ -983,7 +1027,9 @@ def test_goal_loop_policy_stops_retry_same_attempt_after_failure_limit() -> None
             error="tool execution timed out",
             result={"status": "failed"},
         ),
-        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: (_ for _ in ()).throw(AssertionError("final assessment should not run")),
+        assess_plan_execution=lambda plan, step_results, request, run_id, understanding_id, candidate_set_id, route_decision_id: (_ for _ in ()).throw(
+            AssertionError("final assessment should not run")
+        ),
         classify_failure=FailureClassifier().classify,
         decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(
             action="retry_same_attempt",
@@ -1308,7 +1354,9 @@ def test_goal_loop_semantic_result_uses_semantic_acceptance_decision() -> None:
             },
         ),
         classify_failure=FailureClassifier().classify,
-        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(action="stop", reason=failure.message),
+        decide_replan=lambda utterance, current_plan, attempts, failure, understanding_id, candidate_set_id, available_domain_ids: ReplanDecision(
+            action="stop", reason=failure.message
+        ),
         persist_review=lambda utterance, planning, loop_state, step, reason: (_ for _ in ()).throw(AssertionError("review path should not run")),
         persist_user_input=lambda utterance, planning, loop_state, reason: (_ for _ in ()).throw(AssertionError("user-input path should not run")),
     )

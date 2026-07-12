@@ -59,11 +59,7 @@ def default_browser_context() -> dict[str, Any]:
     browser_window = None
     if snapshot.get("requested_url") or snapshot.get("active_url"):
         browser_window = next(
-            (
-                window
-                for window in windows
-                if window.focused and _looks_like_browser_app(window.app_id, window.title)
-            ),
+            (window for window in windows if window.focused and _looks_like_browser_app(window.app_id, window.title)),
             None,
         )
         if browser_window is None:
@@ -249,7 +245,9 @@ def default_context_registry() -> ContextPackageRegistry:
         ContextPackageDefinition(
             package_id="browser_context",
             producer=default_browser_context,
-            budget=ContextBudget(max_items=8, max_bytes=3072, ttl_ms=10_000, redaction_policy="urls_redacted", sensitive_fields=("active_url", "requested_url")),
+            budget=ContextBudget(
+                max_items=8, max_bytes=3072, ttl_ms=10_000, redaction_policy="urls_redacted", sensitive_fields=("active_url", "requested_url")
+            ),
             schema_name="browser_context_v1",
             redaction_policy="urls_redacted",
         ),

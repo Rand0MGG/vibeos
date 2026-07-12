@@ -4,7 +4,6 @@ from dataclasses import asdict
 from hashlib import sha256
 import json
 import urllib.error
-from typing import Any
 
 from .assistant_semantics import (
     AssistantCompletionSemantics,
@@ -149,7 +148,9 @@ class GoalSynthesizer:
                 constraints=tuple(str(item) for item in normalized.get("constraints", ())),
                 fallback_hints=tuple(str(item) for item in normalized.get("fallback_hints", ())),
                 assumptions=tuple(str(item) for item in normalized.get("assumptions", ())),
-                assistant_intent=assistant_intent_from_payload(normalized.get("assistant_intent") if isinstance(normalized.get("assistant_intent"), dict) else None),
+                assistant_intent=assistant_intent_from_payload(
+                    normalized.get("assistant_intent") if isinstance(normalized.get("assistant_intent"), dict) else None
+                ),
                 synthesis_provenance=GoalSynthesisProvenance(
                     provider_name=self.provider.provider_name,
                     provider_version=self.provider.provider_version,
@@ -338,8 +339,12 @@ def build_goal_synthesis_request_payload(*, utterance: str, analysis: UtteranceA
         "host_hint": host_hint,
         "allowed_statuses": ["ready", "clarification_needed", "missing_capability", "unsupported"],
         "allowed_candidate_domain_ids": list(host_hint.get("candidate_domain_ids", [])) if isinstance(host_hint.get("candidate_domain_ids"), list) else [],
-        "allowed_required_capability_ids": list(host_hint.get("required_capability_ids", [])) if isinstance(host_hint.get("required_capability_ids"), list) else [],
-        "allowed_missing_capability_ids": list(host_hint.get("missing_capability_ids", [])) if isinstance(host_hint.get("missing_capability_ids"), list) else [],
+        "allowed_required_capability_ids": list(host_hint.get("required_capability_ids", []))
+        if isinstance(host_hint.get("required_capability_ids"), list)
+        else [],
+        "allowed_missing_capability_ids": list(host_hint.get("missing_capability_ids", []))
+        if isinstance(host_hint.get("missing_capability_ids"), list)
+        else [],
     }
 
 
@@ -368,10 +373,7 @@ def validate_goal_synthesis_payload(payload: dict[str, object], *, host_hint: di
         if isinstance(normalized_capabilities, list):
             normalized["required_capability_ids"] = [str(item).strip() for item in normalized_capabilities if str(item).strip()]
         normalized_capability = (
-            normalized.get("capability_id")
-            or normalized.get("capability")
-            or goal_payload.get("capability_id")
-            or goal_payload.get("capability")
+            normalized.get("capability_id") or normalized.get("capability") or goal_payload.get("capability_id") or goal_payload.get("capability")
         )
         if not isinstance(normalized.get("required_capability_ids"), list) and isinstance(normalized_capability, str) and normalized_capability.strip():
             normalized["required_capability_ids"] = [normalized_capability.strip()]
@@ -383,8 +385,12 @@ def validate_goal_synthesis_payload(payload: dict[str, object], *, host_hint: di
     missing_capability_ids = list(normalized.get("missing_capability_ids", [])) if isinstance(normalized.get("missing_capability_ids"), list) else []
 
     allowed_domains = set(str(item) for item in host_hint.get("candidate_domain_ids", [])) if isinstance(host_hint.get("candidate_domain_ids"), list) else set()
-    allowed_required_capabilities = set(str(item) for item in host_hint.get("required_capability_ids", [])) if isinstance(host_hint.get("required_capability_ids"), list) else set()
-    allowed_missing_capabilities = set(str(item) for item in host_hint.get("missing_capability_ids", [])) if isinstance(host_hint.get("missing_capability_ids"), list) else set()
+    allowed_required_capabilities = (
+        set(str(item) for item in host_hint.get("required_capability_ids", [])) if isinstance(host_hint.get("required_capability_ids"), list) else set()
+    )
+    allowed_missing_capabilities = (
+        set(str(item) for item in host_hint.get("missing_capability_ids", [])) if isinstance(host_hint.get("missing_capability_ids"), list) else set()
+    )
 
     candidate_domain_ids = _reconcile_goal_candidate_domains(
         candidate_domain_ids=candidate_domain_ids,

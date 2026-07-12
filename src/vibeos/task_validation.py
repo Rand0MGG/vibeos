@@ -5,8 +5,6 @@ from .expected_states import validate_expected_state
 from .models import Intent
 from .permissions import (
     MAX_NAME_LENGTH,
-    MAX_NOTIFICATION_BODY_LENGTH,
-    MAX_NOTIFICATION_TITLE_LENGTH,
     validate_target,
 )
 from .task_models import PlanValidationResult, TaskPlan

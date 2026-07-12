@@ -8,6 +8,14 @@ from ..tool_protocol import ToolExecutionContext, ToolResult, ToolSpec
 
 
 def app_tool_specs(apps: AppRegistry) -> tuple[ToolSpec, ...]:
+    def list_apps(_payload: dict[str, Any], _context: ToolExecutionContext) -> ToolResult:
+        entries = [asdict(item) for item in apps.list_apps()]
+        return ToolResult(
+            status="succeeded",
+            output={"apps": entries, "adapter": "apps.registry", "adapter_status": "succeeded"},
+            evidence={"app_count": len(entries)},
+        )
+
     def resolve(payload: dict[str, Any], _context: ToolExecutionContext) -> ToolResult:
         name = str(payload.get("name") or "")
         matches = apps.resolve(name)
@@ -26,9 +34,16 @@ def app_tool_specs(apps: AppRegistry) -> tuple[ToolSpec, ...]:
         if not selected and matches:
             selected = matches[0].desktop_id
         if not selected:
+            if context.environment.dry_run:
+                return ToolResult(
+                    status="succeeded",
+                    message=f"intent accepted; no local application registry match for {name!r}",
+                    output={"adapter": "apps.registry", "adapter_status": "dry_run"},
+                    evidence={"requested_name": name, "dry_run": True, "match_count": 0},
+                )
             return ToolResult(
                 status="failed",
-                message="no installed app matches the requested target",
+                message=f"no application matched {name!r}",
                 evidence={"requested_name": name},
                 failure_class="semantic_mismatch",
             )
@@ -64,6 +79,7 @@ def app_tool_specs(apps: AppRegistry) -> tuple[ToolSpec, ...]:
         )
 
     return (
+        ToolSpec("app.list", "action", "desktop-linux", list_apps),
         ToolSpec("apps.resolve_installed", "resolver", "desktop-linux", resolve),
         ToolSpec("app.open", "action", "desktop-linux", open_app),
     )

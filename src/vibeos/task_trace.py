@@ -274,16 +274,8 @@ class TaskTraceSession:
             self._semantic_summary_cache_hit_count += 1
         if escalation:
             self._escalation_count += 1
-        request_artifact = (
-            self._write_artifact("request", provider, _trace_payload(request_payload, allow_content=True))
-            if self.debug
-            else None
-        )
-        response_artifact = (
-            self._write_artifact("response", provider, _trace_payload(response_payload, allow_content=True))
-            if self.debug
-            else None
-        )
+        request_artifact = self._write_artifact("request", provider, _trace_payload(request_payload, allow_content=True)) if self.debug else None
+        response_artifact = self._write_artifact("response", provider, _trace_payload(response_payload, allow_content=True)) if self.debug else None
         entry = {
             "ts": utc_now_iso(),
             "record_id": f"mdl_{uuid4().hex[:12]}",

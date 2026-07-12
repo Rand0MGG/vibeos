@@ -330,11 +330,7 @@ def semantic_recovery_options(
 ) -> tuple[ReplanOption, ...]:
     do_not_repeat_capability_ids = tuple(step.capability_id for step in current_plan.steps)
     selected_route = current_plan.routes[0] if current_plan.routes else None
-    if (
-        selected_route is not None
-        and selected_route.domain_id == "app_interaction"
-        and do_not_repeat_capability_ids == ("app.search_history",)
-    ):
+    if selected_route is not None and selected_route.domain_id == "app_interaction" and do_not_repeat_capability_ids == ("app.search_history",):
         # App search recovery often needs to keep the same capability while switching
         # to a weaker interaction surface such as a shortcut-driven route.
         do_not_repeat_capability_ids = ()
@@ -408,18 +404,9 @@ def replan_candidate_domains(
     available_domain_ids: tuple[str, ...],
 ) -> tuple[str, ...]:
     current_domains = tuple(dict.fromkeys(route.domain_id for route in current_plan.routes if route.domain_id))
-    attempted_domains = {
-        route.domain_id
-        for attempt in attempts
-        for route in attempt.task_plan.routes
-        if route.domain_id
-    }
+    attempted_domains = {route.domain_id for attempt in attempts for route in attempt.task_plan.routes if route.domain_id}
     attempted_domains.update(current_domains)
-    return tuple(
-        domain_id
-        for domain_id in dict.fromkeys(available_domain_ids)
-        if domain_id and domain_id not in attempted_domains
-    )
+    return tuple(domain_id for domain_id in dict.fromkeys(available_domain_ids) if domain_id and domain_id not in attempted_domains)
 
 
 def build_replan_request_payload(

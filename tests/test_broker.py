@@ -16,7 +16,20 @@ from vibeos.models import AppEntry, CommandRequest, CommandResult, Intent, Permi
 from vibeos.planner import PlanningArtifacts
 from vibeos.portal import PortalAdapter
 from vibeos.reviews import ReviewStore
-from vibeos.task_models import DisplayFields, ExpectedState, PlanAttempt, PlanExecutionResult, StepExecutionResult, StepPrecondition, StepProvenance, StepReviewRecord, TaskPlan, TaskRoute, TaskStep
+from vibeos.task_models import (
+    DisplayFields,
+    ExpectedState,
+    PlanAttempt,
+    PlanExecutionResult,
+    StepExecutionResult,
+    StepPrecondition,
+    StepProvenance,
+    StepReviewRecord,
+    TaskPlan,
+    TaskPlanReviewResult,
+    TaskRoute,
+    TaskStep,
+)
 from vibeos.understanding import default_understanding_host_hint, validated_understanding_from_payload
 from tests.support_intent_broker import FixtureIntentBroker
 
@@ -82,6 +95,15 @@ class RetryWindows(FakeWindows):
         return {"status": "closed", "window_id": window.window_id}
 
 
+class FakeClipboard:
+    def __init__(self):
+        self.writes: list[str] = []
+
+    def write(self, text: str) -> dict[str, str]:
+        self.writes.append(text)
+        return {"status": "written", "adapter": "test-clipboard"}
+
+
 class BlockingWindows(FakeWindows):
     def __init__(self):
         self.close_calls = 0
@@ -117,22 +139,18 @@ def test_broker_dry_run_open_app() -> None:
     assert result.transport is None
 
 
-def test_default_goal_loop_projection_does_not_mutate_broker_session() -> None:
+def test_default_goal_loop_projection_has_no_broker_session_state() -> None:
     broker = CapabilityBroker(
         intent_broker=FixtureIntentBroker(),
         portal=ObservedPortal(),
         audit=AuditLog(),
         reviews=ReviewStore(make_review_path("pure-projection")),
     )
-    original_goals = dict(broker.agent_session.goals)
-    original_turns = dict(broker.agent_session.turns)
-
     result = broker.handle(CommandRequest("search web for hello", dry_run=True))
 
     assert result.overall_status == "dry_run"
-    assert result.result["goal_runtime"]["session_id"] != broker.agent_session.session_id
-    assert broker.agent_session.goals == original_goals
-    assert broker.agent_session.turns == original_turns
+    assert result.result["goal_runtime"]["session_id"].startswith("session_")
+    assert not hasattr(broker, "agent_session")
 
 
 def test_handle_delegates_to_command_service(monkeypatch) -> None:
@@ -172,6 +190,27 @@ def test_l2_window_close_requires_review() -> None:
     assert result.review_id
     assert result.review
     assert result.review.risk_level == "L2"
+
+
+def test_review_persistence_failure_blocks_side_effect_dispatch() -> None:
+    review_path = make_review_path("persistence-failure-blocks-dispatch")
+    reviews = ReviewStore(review_path)
+    reviews._mark_unavailable()
+    windows = RetryWindows()
+    broker = CapabilityBroker(
+        intent_broker=FixtureIntentBroker(),
+        apps=FakeApps(),
+        windows=windows,
+        audit=AuditLog(),
+        reviews=reviews,
+    )
+
+    result = broker.handle(CommandRequest("close Firefox"))
+
+    assert result.status == "failed"
+    assert result.result["error_code"] == "review_persistence_unavailable"
+    assert result.overall_status == "blocked"
+    assert windows.close_calls == 0
 
 
 def test_l2_direct_approval_without_review_id_is_rejected() -> None:
@@ -384,6 +423,82 @@ def test_historical_plan_review_dry_run_remains_isolated_from_fresh_goal_loop() 
     assert stored.status == "pending"
 
 
+def test_verified_historical_plan_review_executes_through_goal_loop() -> None:
+    reviews = ReviewStore(make_review_path("historical-plan-review-execution"))
+    clipboard = FakeClipboard()
+    broker = CapabilityBroker(
+        intent_broker=FixtureIntentBroker(),
+        clipboard=clipboard,
+        audit=AuditLog(),
+        reviews=reviews,
+    )
+    plan = TaskPlan(
+        schema_version="v0.5",
+        plan_id="plan_historical_clipboard_execution",
+        utterance="copy hello to clipboard",
+        display=DisplayFields(goal="copy hello"),
+        selected_route_id="clipboard_write_route",
+        routes=(TaskRoute(id="clipboard_write_route", score=1.0, domain_id="clipboard"),),
+        steps=(
+            TaskStep(
+                id="clipboard_write",
+                action="clipboard.write",
+                capability_id="clipboard.write",
+                target={"text": "hello"},
+                expected_state=ExpectedState(kind="clipboard_content_requested", fields={"text": "hello"}),
+                preconditions=(StepPrecondition(kind="capability_available", capability_id="clipboard.write"),),
+                provenance=StepProvenance(source_span_id="span_historical_execution", planner="historical-plan-review-test"),
+            ),
+        ),
+    )
+
+    pending = broker.review_task_plan(plan)
+    result = broker.approve_review(pending.review_id or "")
+    stored = reviews.get(pending.review_id or "")
+
+    assert result.status == "executed"
+    assert result.result["plan_id"] == plan.plan_id
+    assert result.result["step_results"][0]["layer"] == "registered_tool_execute"
+    assert clipboard.writes == ["hello"]
+    assert stored is not None
+    assert stored.status == "consumed"
+
+
+def test_unverifiable_historical_plan_review_fails_closed() -> None:
+    reviews = ReviewStore(make_review_path("unverifiable-plan-review"))
+    broker = CapabilityBroker(
+        intent_broker=FixtureIntentBroker(),
+        audit=AuditLog(),
+        reviews=reviews,
+    )
+    plan = TaskPlan(
+        schema_version="v0.5",
+        plan_id="plan_unverifiable",
+        utterance="copy hello to clipboard",
+        display=DisplayFields(goal="copy hello"),
+        selected_route_id="clipboard_write_route",
+        routes=(TaskRoute(id="clipboard_write_route", score=1.0, domain_id="clipboard"),),
+        steps=(TaskStep(id="clipboard_write", action="clipboard.write", capability_id="clipboard.write", target={"text": "hello"}),),
+    )
+    review = reviews.create_plan_review(
+        plan.utterance,
+        asdict(plan),
+        TaskPlanReviewResult(
+            plan_id=plan.plan_id,
+            status="review_required",
+            max_risk_level="L2",
+            step_reviews=(StepReviewRecord("srev_unverifiable", "clipboard_write", "clipboard.write", "L2", True, True, "approved"),),
+        ),
+    )
+
+    result = broker.approve_review(review.review_id, dry_run=True)
+
+    assert result.status == "failed"
+    assert result.result["error_code"] == "legacy_review_unverifiable"
+    assert result.result["fresh_command_required"] is True
+    assert reviews.get(review.review_id).status == "pending"
+
+
 def test_existing_capability_path_can_suspend_and_resume(monkeypatch) -> None:
     review_path = make_review_path("goal-loop-existing-capability")
     reviews = ReviewStore(review_path)
@@ -404,7 +519,7 @@ def test_existing_capability_path_can_suspend_and_resume(monkeypatch) -> None:
             StepReviewRecord(f"srev_{step.id}", step.id, step.action, "L2" if required else "L1", required, True, reason),
         )
 
-    monkeypatch.setattr(broker, "review_task_step", review_step)
+    monkeypatch.setattr(broker.review_service, "review_step", review_step)
 
     pending = broker.handle(CommandRequest("search web for hello"))
     stored = reviews.get(pending.review_id or "")
@@ -419,6 +534,42 @@ def test_existing_capability_path_can_suspend_and_resume(monkeypatch) -> None:
     assert approved.status == "executed"
     assert portal.open_calls == 1
     assert approved.result["attempts"]
+
+
+def test_malformed_review_snapshot_fails_before_goal_loop_dispatch() -> None:
+    reviews = ReviewStore(make_review_path("malformed-review-snapshot"))
+    portal = ObservedPortal()
+    broker = CapabilityBroker(
+        intent_broker=FixtureIntentBroker(),
+        portal=portal,
+        audit=AuditLog(),
+        reviews=reviews,
+    )
+    state = LoopState(
+        loop_snapshot_id="lsnap_malformed",
+        trace_run_id="run_malformed",
+        goal_id="goal_malformed",
+        primary_understanding_id=None,
+        candidate_set_id=None,
+        selected_route_decision_id=None,
+        current_step_id=None,
+        stage="needs_review",
+    )
+    review = reviews.create_loop_review(
+        "search web for hello",
+        plan_payload={"snapshot_version": 99, "plan": {}},
+        snapshot_payload=asdict(state),
+        pending_reason="approval required",
+        step_id=None,
+        review_kind="loop",
+    )
+
+    result = broker.handle(CommandRequest("", review_id=review.review_id, approve=True))
+
+    assert result.status == "failed"
+    assert result.result["error_code"] == "review_snapshot_invalid"
+    assert portal.open_calls == 0
+    assert reviews.get(review.review_id).status == "approved"
 
 
 def test_review_required_still_originates_from_step_safety_boundary(monkeypatch) -> None:
@@ -445,7 +596,7 @@ def test_review_required_still_originates_from_step_safety_boundary(monkeypatch)
             StepReviewRecord("srev_changed", step.id, step.action, "L2", True, True, "context changed; renewed approval required"),
         )
 
-    monkeypatch.setattr(broker, "review_task_step", review_step)
+    monkeypatch.setattr(broker.review_service, "review_step", review_step)
 
     first = broker.handle(CommandRequest("search web for hello"))
     stored_first = reviews.get(first.review_id or "")
@@ -561,7 +712,7 @@ def test_loop_decision_maps_back_to_public_runtime_statuses() -> None:
         current_step_id=None,
     )
 
-    completed = broker._finalize_goal_loop_result(
+    completed = broker._runtime.projector.project(
         request=CommandRequest("search web for hello"),
         planning=planning,
         run_id="run_status_mapping",
@@ -575,7 +726,7 @@ def test_loop_decision_maps_back_to_public_runtime_statuses() -> None:
             overall_status="completed",
         ),
     )
-    needs_review = broker._finalize_goal_loop_result(
+    needs_review = broker._runtime.projector.project(
         request=CommandRequest("search web for hello"),
         planning=planning,
         run_id="run_status_mapping",
@@ -590,7 +741,7 @@ def test_loop_decision_maps_back_to_public_runtime_statuses() -> None:
             overall_status="needs_review",
         ),
     )
-    needs_user_input = broker._finalize_goal_loop_result(
+    needs_user_input = broker._runtime.projector.project(
         request=CommandRequest("search web for hello"),
         planning=planning,
         run_id="run_status_mapping",
@@ -605,7 +756,7 @@ def test_loop_decision_maps_back_to_public_runtime_statuses() -> None:
             overall_status="needs_user_input",
         ),
     )
-    blocked = broker._finalize_goal_loop_result(
+    blocked = broker._runtime.projector.project(
         request=CommandRequest("search web for hello"),
         planning=planning,
         run_id="run_status_mapping",
@@ -688,7 +839,9 @@ def test_broker_provide_input_resumes_user_input_review(monkeypatch) -> None:
     )
     review = reviews.create_loop_review(
         "open that site we discussed yesterday",
-        plan_payload={"analysis": {"type": "clarification", "confidence": 0.5, "domains": ["browser"], "explanation": "need more detail", "chat_response": "which site?"}},
+        plan_payload={
+            "analysis": {"type": "clarification", "confidence": 0.5, "domains": ["browser"], "explanation": "need more detail", "chat_response": "which site?"}
+        },
         snapshot_payload=asdict(state),
         pending_reason="which site?",
         step_id=None,
@@ -749,7 +902,7 @@ def test_broker_provide_input_resumes_user_input_review(monkeypatch) -> None:
             debug_trace=None,
         )
 
-    monkeypatch.setattr("vibeos.broker.plan_turn", fake_plan_turn)
+    monkeypatch.setattr("vibeos.runtime_composition.plan_turn", fake_plan_turn)
 
     result = broker.handle(CommandRequest("", review_id=review.review_id, supplemental_input="browser"))
     loaded = reviews.get(review.review_id)

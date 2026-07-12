@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from hashlib import sha256
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus
 
 from .assistant_semantics import AssistantIntent
 from .candidate_selection import (
@@ -146,9 +146,7 @@ def plan_turn(
                 "analysis": asdict(analysis),
             },
         )
-    synthesizer = GoalSynthesizer(
-        provider=goal_synthesis_provider or OpenAICompatibleGoalSynthesisProvider(broker)
-    )
+    synthesizer = GoalSynthesizer(provider=goal_synthesis_provider or OpenAICompatibleGoalSynthesisProvider(broker))
     goal_synthesis = synthesizer.synthesize(
         utterance,
         analysis,
@@ -269,7 +267,9 @@ def plan_turn(
     record_trace_event(
         phase="planning",
         event_type="route_selected" if selected is not None else "planning_unresolved",
-        status="ok" if selected is not None and (validation is None or validation.ok) else ("invalid" if validation is not None and not validation.ok else "rejected"),
+        status="ok"
+        if selected is not None and (validation is None or validation.ok)
+        else ("invalid" if validation is not None and not validation.ok else "rejected"),
         actor="planner",
         goal_id=goal_synthesis.goal_spec.goal_id if goal_synthesis.goal_spec is not None else None,
         plan_id=selected.plan_id if selected is not None else None,
@@ -491,7 +491,14 @@ def build_named_website_candidates(
 def primary_task_span(analysis: UtteranceAnalysis) -> TaskSpan:
     if analysis.task_spans:
         return analysis.task_spans[0]
-    return TaskSpan(id="span_1", text=analysis.utterance, start=0, end=len(analysis.utterance), domain=(analysis.domains[0] if analysis.domains else "browser"), confidence=analysis.confidence)
+    return TaskSpan(
+        id="span_1",
+        text=analysis.utterance,
+        start=0,
+        end=len(analysis.utterance),
+        domain=(analysis.domains[0] if analysis.domains else "browser"),
+        confidence=analysis.confidence,
+    )
 
 
 def should_use_domain_pipeline(*, analysis: UtteranceAnalysis, candidate_domain_ids: tuple[str, ...]) -> bool:
@@ -885,7 +892,9 @@ def build_media_search_plan(
         preconditions=(StepPrecondition(kind="capability_available", capability_id="media.search"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_media_route"),
     )
-    return make_explicit_plan(utterance, span, route, (step,), goal="search media", explanation="Use the explicit media domain even when dedicated execution is unavailable locally.")
+    return make_explicit_plan(
+        utterance, span, route, (step,), goal="search media", explanation="Use the explicit media domain even when dedicated execution is unavailable locally."
+    )
 
 
 def build_media_pause_plan(
@@ -909,7 +918,14 @@ def build_media_pause_plan(
         preconditions=(StepPrecondition(kind="capability_available", capability_id="media.pause"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_media_route"),
     )
-    return make_explicit_plan(utterance, span, route, (step,), goal="pause media", explanation="Use the explicit media domain for pause requests, even when the local host cannot execute the adapter.")
+    return make_explicit_plan(
+        utterance,
+        span,
+        route,
+        (step,),
+        goal="pause media",
+        explanation="Use the explicit media domain for pause requests, even when the local host cannot execute the adapter.",
+    )
 
 
 def build_browser_media_fallback_plan(
@@ -976,7 +992,9 @@ def build_apps_open_plan(
         preconditions=(StepPrecondition(kind="capability_available", capability_id="app.open"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_apps_route"),
     )
-    return make_explicit_plan(utterance, span, route, (step,), goal="open an application", explanation="Use the explicit apps domain for application launch or focus.")
+    return make_explicit_plan(
+        utterance, span, route, (step,), goal="open an application", explanation="Use the explicit apps domain for application launch or focus."
+    )
 
 
 def build_app_structured_search_plan(
@@ -1087,7 +1105,9 @@ def build_window_list_plan(
         preconditions=(StepPrecondition(kind="capability_available", capability_id="window.list"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_window_route"),
     )
-    return make_explicit_plan(utterance, span, route, (step,), goal="list windows", explanation="Use the explicit window-management domain for window inventory.")
+    return make_explicit_plan(
+        utterance, span, route, (step,), goal="list windows", explanation="Use the explicit window-management domain for window inventory."
+    )
 
 
 def build_window_focus_plan(
@@ -1145,7 +1165,9 @@ def build_clipboard_write_plan(
         preconditions=(StepPrecondition(kind="capability_available", capability_id="clipboard.write"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_clipboard_route"),
     )
-    return make_explicit_plan(utterance, span, route, (step,), goal="write the clipboard", explanation="Use the explicit clipboard domain instead of the compatibility intent bridge.")
+    return make_explicit_plan(
+        utterance, span, route, (step,), goal="write the clipboard", explanation="Use the explicit clipboard domain instead of the compatibility intent bridge."
+    )
 
 
 def build_notification_send_plan(
@@ -1170,7 +1192,9 @@ def build_notification_send_plan(
         preconditions=(StepPrecondition(kind="capability_available", capability_id="notification.send"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_notification_route"),
     )
-    return make_explicit_plan(utterance, span, route, (step,), goal="send a notification", explanation="Use the explicit notification domain for desktop notifications.")
+    return make_explicit_plan(
+        utterance, span, route, (step,), goal="send a notification", explanation="Use the explicit notification domain for desktop notifications."
+    )
 
 
 def build_system_status_plan(
@@ -1194,7 +1218,9 @@ def build_system_status_plan(
         preconditions=(StepPrecondition(kind="capability_available", capability_id="system.status"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_system_route"),
     )
-    return make_explicit_plan(utterance, span, route, (step,), goal="read system status", explanation="Use the explicit system-observation domain for runtime status inspection.")
+    return make_explicit_plan(
+        utterance, span, route, (step,), goal="read system status", explanation="Use the explicit system-observation domain for runtime status inspection."
+    )
 
 
 def build_single_window_action_plan(
@@ -1217,11 +1243,20 @@ def build_single_window_action_plan(
         target=target,
         depends_on=(),
         risk_level=CAPABILITIES[action].risk_level,
-        expected_state=ExpectedState(kind="window_state_requested", fields={"window": str(target.get("name") or "current"), "requested_state": requested_state}),
+        expected_state=ExpectedState(
+            kind="window_state_requested", fields={"window": str(target.get("name") or "current"), "requested_state": requested_state}
+        ),
         preconditions=(StepPrecondition(kind="capability_available", capability_id=action),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_window_route"),
     )
-    return make_explicit_plan(utterance, span, route, (step,), goal=f"{requested_state} a window", explanation="Use the explicit window-management domain instead of the compatibility intent bridge.")
+    return make_explicit_plan(
+        utterance,
+        span,
+        route,
+        (step,),
+        goal=f"{requested_state} a window",
+        explanation="Use the explicit window-management domain instead of the compatibility intent bridge.",
+    )
 
 
 def make_explicit_plan(

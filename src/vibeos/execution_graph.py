@@ -44,18 +44,12 @@ def execute_plan_graph(
 
     while len(completed) < len(ordered_steps):
         ready_steps = [
-            steps_by_id[step_id]
-            for step_id in ordered_ids
-            if step_id not in completed and all(dep in results_by_id for dep in steps_by_id[step_id].depends_on)
+            steps_by_id[step_id] for step_id in ordered_ids if step_id not in completed and all(dep in results_by_id for dep in steps_by_id[step_id].depends_on)
         ]
         if not ready_steps:
             raise ValueError("task plan execution reached a dead end")
 
-        blocked_steps = [
-            step
-            for step in ready_steps
-            if any(results_by_id[dep].status != "succeeded" for dep in step.depends_on)
-        ]
+        blocked_steps = [step for step in ready_steps if any(results_by_id[dep].status != "succeeded" for dep in step.depends_on)]
         for step in blocked_steps:
             blocked_dep = next(dep for dep in step.depends_on if results_by_id[dep].status != "succeeded")
             blocked = StepExecutionResult(
@@ -122,11 +116,7 @@ def next_batch(ready_steps: list[TaskStep]) -> tuple[TaskStep, ...]:
     first = ready_steps[0]
     if not is_parallel_eligible(first) or not first.parallel_group:
         return (first,)
-    return tuple(
-        step
-        for step in ready_steps
-        if step.parallel_group == first.parallel_group and is_parallel_eligible(step)
-    )
+    return tuple(step for step in ready_steps if step.parallel_group == first.parallel_group and is_parallel_eligible(step))
 
 
 def is_parallel_eligible(step: TaskStep) -> bool:

@@ -5,9 +5,7 @@ from vibeos.task_models import DisplayFields, FailureClassification, PlanAttempt
 def test_replanner_retries_same_route_once_for_transient_failures() -> None:
     replanner = EvidenceDrivenReplanner(max_attempts=3)
     plan = make_plan("browser.search_web", route_id="browser_search")
-    attempts = (
-        PlanAttempt(attempt_id="attempt_1", run_id="run_1", attempt_index=1, trigger="initial", selected_route_id="browser_search"),
-    )
+    attempts = (PlanAttempt(attempt_id="attempt_1", run_id="run_1", attempt_index=1, trigger="initial", selected_route_id="browser_search"),)
 
     decision = replanner.decide(
         utterance="search web for hello",

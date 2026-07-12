@@ -61,11 +61,7 @@ def test_tool_families_participate_in_one_run() -> None:
         environment=desktop_environment(),
     )
 
-    families = [
-        invocation.family
-        for attempt in result.ledger.attempts
-        for invocation in attempt.tool_invocations
-    ]
+    families = [invocation.family for attempt in result.ledger.attempts for invocation in attempt.tool_invocations]
     assert "resolver" in families
     assert "action" in families
     assert "observer" in families
@@ -180,11 +176,7 @@ def test_minimal_vertical_slice_does_not_require_vm_shell_files_or_network() -> 
         environment=environment,
     )
 
-    tool_ids = {
-        invocation.tool_id
-        for attempt in result.ledger.attempts
-        for invocation in attempt.tool_invocations
-    }
+    tool_ids = {invocation.tool_id for attempt in result.ledger.attempts for invocation in attempt.tool_invocations}
     assert result.terminal_outcome.status == "completed"
     assert all(not tool_id.startswith("shell.") for tool_id in tool_ids)
     assert all(not tool_id.startswith("file.") for tool_id in tool_ids)
@@ -309,7 +301,9 @@ def test_debug_payload_exposes_goal_runtime_strategy_candidates_and_recovery_sta
 def test_tool_protocol_supports_future_capability_surface_placeholders_and_wait_tools() -> None:
     registry = ToolRegistry(
         (
-            ToolSpec("workspace.describe", "environment", "workspace-local", lambda payload, context: ToolResult(status="succeeded", output={"scope": "workspace"})),
+            ToolSpec(
+                "workspace.describe", "environment", "workspace-local", lambda payload, context: ToolResult(status="succeeded", output={"scope": "workspace"})
+            ),
             ToolSpec("shell.describe", "environment", "shell-local", lambda payload, context: ToolResult(status="succeeded", output={"scope": "shell"})),
             ToolSpec("wait.until_ready", "wait_poll", "browser", lambda payload, context: ToolResult(status="succeeded", output={"ready": True})),
         )

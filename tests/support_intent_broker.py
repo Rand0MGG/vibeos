@@ -124,7 +124,9 @@ class FixtureIntentBroker(IntentBroker):
 
         for prefix in CLIPBOARD_PREFIXES:
             if text.startswith(prefix):
-                return Intent(action="clipboard.write", target={"text": _extract_clipboard_content(stripped, prefix)}, reason="fixture asked to write clipboard")
+                return Intent(
+                    action="clipboard.write", target={"text": _extract_clipboard_content(stripped, prefix)}, reason="fixture asked to write clipboard"
+                )
 
         for prefix in OPEN_PREFIXES:
             if text.startswith(prefix.lower()) or stripped.startswith(prefix):

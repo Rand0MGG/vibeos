@@ -38,11 +38,7 @@ def load_openai_compatible_provider_config(
         return OpenAICompatibleProviderConfig(
             provider_name=provider_name,
             api_key=os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY"),
-            base_url=(
-                os.environ.get("DEEPSEEK_BASE_URL")
-                or os.environ.get("OPENAI_BASE_URL")
-                or "https://api.deepseek.com"
-            ).rstrip("/"),
+            base_url=(os.environ.get("DEEPSEEK_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or "https://api.deepseek.com").rstrip("/"),
             model_name=os.environ.get("DEEPSEEK_MODEL") or os.environ.get("OPENAI_MODEL") or default_deepseek_model,
         )
     return OpenAICompatibleProviderConfig(

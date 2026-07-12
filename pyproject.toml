@@ -14,7 +14,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "mypy>=1.15",
   "pytest>=8",
+  "ruff>=0.11",
 ]
 
 [project.scripts]
@@ -27,3 +29,41 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --showlocals --tb=short --strict-config --strict-markers"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 160
+extend-exclude = [".vibeos"]
+
+[tool.ruff.lint]
+select = ["F"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/vibeos/dbus_service.py" = ["F821"]
+
+[tool.mypy]
+python_version = "3.11"
+files = [
+  "src/vibeos/command_service.py",
+  "src/vibeos/task_application.py",
+  "src/vibeos/goal_loop.py",
+  "src/vibeos/goal_ports.py",
+  "src/vibeos/planning_service.py",
+  "src/vibeos/loop_snapshot.py",
+  "src/vibeos/execution_service.py",
+  "src/vibeos/review_service.py",
+  "src/vibeos/review_resume_service.py",
+  "src/vibeos/legacy_review_migration.py",
+  "src/vibeos/acceptance_service.py",
+  "src/vibeos/recovery_service.py",
+  "src/vibeos/result_projection.py",
+  "src/vibeos/runtime_composition.py",
+  "src/vibeos/reviews.py",
+  "src/vibeos/tools/registry.py",
+]
+follow_imports = "skip"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from typing import Any
 
 from .domain_models import CapabilityExposure, ObservationReceipt, ObservationRequest, ResolvedContextPackage
@@ -125,19 +124,11 @@ def build_capability_exposure(
     all_domain_ids = tuple(pack.domain_id for pack in registry.packs())
     routes = registry.routes_for_domains(active_domain_ids)
     exposed_route_ids = tuple(route.route_id for route in routes)
-    exposed_capability_ids = tuple(
-        capability_id
-        for route in routes
-        for capability_id in route.required_capability_ids
-    )
+    exposed_capability_ids = tuple(capability_id for route in routes for capability_id in route.required_capability_ids)
     unique_capability_ids = tuple(dict.fromkeys(exposed_capability_ids))
     exposed_context_package_ids = observation_receipt.loaded_package_ids
     hidden_domain_ids = tuple(domain_id for domain_id in all_domain_ids if domain_id not in active_domain_ids)
-    hidden_route_ids = tuple(
-        route.route_id
-        for route in registry.routes_for_domains(all_domain_ids)
-        if route.route_id not in exposed_route_ids
-    )
+    hidden_route_ids = tuple(route.route_id for route in registry.routes_for_domains(all_domain_ids) if route.route_id not in exposed_route_ids)
     return CapabilityExposure(
         active_domain_ids=active_domain_ids,
         exposed_route_ids=exposed_route_ids,
@@ -154,11 +145,7 @@ def build_capability_exposure(
 
 
 def planner_context_payload(receipt: ObservationReceipt, exposure: CapabilityExposure) -> dict[str, Any]:
-    visible = {
-        package.package_id: package.payload
-        for package in receipt.packages
-        if package.package_id in exposure.exposed_context_package_ids
-    }
+    visible = {package.package_id: package.payload for package in receipt.packages if package.package_id in exposure.exposed_context_package_ids}
     return {
         "packages": visible,
         "loaded_package_ids": list(receipt.loaded_package_ids),

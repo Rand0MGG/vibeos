@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
@@ -39,9 +39,12 @@ APP_HISTORY_SEARCH_PATTERN = re.compile(
 MEDIA_SEARCH_PREFIXES = ("search media for ", "search music for ", "find media ", "find music ")
 MEDIA_PAUSE_PREFIXES = ("pause", "pause music", "pause playback")
 MEDIA_PLAY_PREFIXES = ("play ", "listen to ", "我想听 ", "播放 ", "放一首 ")
-SYSTEM_PROMPT = """You are VibeOS's model intent broker.
+SYSTEM_PROMPT = (
+    """You are VibeOS's model intent broker.
 Translate the user's natural-language Linux desktop request into exactly one JSON object.
-Allowed actions: """ + ALLOWED_ACTIONS_TEXT + """.
+Allowed actions: """
+    + ALLOWED_ACTIONS_TEXT
+    + """.
 Do not include shell commands, scripts, raw D-Bus paths, raw API calls, or implementation details.
 Map the request to the best allowed action when possible.
 If the request cannot be represented without inventing a new capability or authority outside the allowed actions, return action "unknown" with a short reason.
@@ -53,6 +56,7 @@ Schema:
   "requires_confirmation": false
 }
 Return JSON only."""
+)
 
 
 class IntentBroker:
@@ -80,7 +84,12 @@ class RuleIntentBroker(IntentBroker):
         for prefix, action, reason in WINDOW_ACTIONS:
             if text.startswith(prefix):
                 return Intent(action=action, target={"name": stripped[len(prefix) :].strip() or "current"}, reason=reason)
-        if text.startswith(f"{OPEN_CN_PREFIX.lower()} http://") or text.startswith(f"{OPEN_CN_PREFIX.lower()} https://") or text.startswith("open http://") or text.startswith("open https://"):
+        if (
+            text.startswith(f"{OPEN_CN_PREFIX.lower()} http://")
+            or text.startswith(f"{OPEN_CN_PREFIX.lower()} https://")
+            or text.startswith("open http://")
+            or text.startswith("open https://")
+        ):
             return Intent(action="portal.open_uri", target={"uri": stripped.split(maxsplit=1)[-1]}, reason="user asked to open a URI")
         browser_intent = infer_browser_intent_from_open_request(stripped)
         if browser_intent is not None:
@@ -95,21 +104,37 @@ class RuleIntentBroker(IntentBroker):
                 return Intent(action="browser.open_site_search", target={"site": site, "query": query}, reason="user asked to search within a specific website")
         if text.startswith("search web for "):
             query = stripped[len("search web for ") :].strip()
-            return Intent(action="browser.search_web", target={"query": query}, reason="user asked to search the web") if query else Intent.unknown("browser search request is missing a query")
+            return (
+                Intent(action="browser.search_web", target={"query": query}, reason="user asked to search the web")
+                if query
+                else Intent.unknown("browser search request is missing a query")
+            )
         if stripped.startswith(SEARCH_CN_PREFIX):
             query = stripped[len(SEARCH_CN_PREFIX) :].strip()
-            return Intent(action="browser.search_web", target={"query": query}, reason="user asked to search the web") if query else Intent.unknown("browser search request is missing a query")
+            return (
+                Intent(action="browser.search_web", target={"query": query}, reason="user asked to search the web")
+                if query
+                else Intent.unknown("browser search request is missing a query")
+            )
         for prefix in MEDIA_SEARCH_PREFIXES:
             if text.startswith(prefix):
                 query = stripped[len(prefix) :].strip()
-                return Intent(action="media.search", target={"query": query}, reason="user asked to search media") if query else Intent.unknown("media search request is missing a query")
+                return (
+                    Intent(action="media.search", target={"query": query}, reason="user asked to search media")
+                    if query
+                    else Intent.unknown("media search request is missing a query")
+                )
         for prefix in MEDIA_PAUSE_PREFIXES:
             if text == prefix or text.startswith(prefix + " "):
                 return Intent(action="media.pause", reason="user asked to pause media")
         for prefix in MEDIA_PLAY_PREFIXES:
             if text.startswith(prefix.lower()) or stripped.startswith(prefix):
                 query = stripped[len(prefix) :].strip()
-                return Intent(action="media.play", target={"query": query, "selection": "best_match"}, reason="user asked to play media") if query else Intent.unknown("media playback request is missing a query")
+                return (
+                    Intent(action="media.play", target={"query": query, "selection": "best_match"}, reason="user asked to play media")
+                    if query
+                    else Intent.unknown("media playback request is missing a query")
+                )
         for prefix in NOTIFICATION_PREFIXES:
             if text.startswith(prefix):
                 body = stripped[len(prefix) :].strip() if prefix == "notify " else stripped

@@ -339,7 +339,12 @@ class AgentRuntime:
                 ),
             )
         ledger = ledger.append_strategy_decision(selected_decision, turn_id=turn_id)
-        terminal = TerminalOutcome(status=terminal_status, reason=reason, failure_class="permission_blocked" if terminal_status == "needs_review" else "unsupported_request", verifier_confirmed=False)
+        terminal = TerminalOutcome(
+            status=terminal_status,
+            reason=reason,
+            failure_class="permission_blocked" if terminal_status == "needs_review" else "unsupported_request",
+            verifier_confirmed=False,
+        )
         goal_runtime = replace(goal_runtime, status=terminal.status, terminal_outcome=terminal)
         session.goals[goal_id] = goal_runtime
         ledger = ledger.with_terminal_outcome(_terminal_payload(terminal))
@@ -467,7 +472,11 @@ class AgentRuntime:
                     )
                 )
             if result.status in {"failed", "blocked", "unavailable"}:
-                outcome_status = "replannable" if result.failure_class in {"semantic_mismatch", "environment_unreachable"} else ("blocked" if result.status == "blocked" else "failed")
+                outcome_status = (
+                    "replannable"
+                    if result.failure_class in {"semantic_mismatch", "environment_unreachable"}
+                    else ("blocked" if result.status == "blocked" else "failed")
+                )
                 message = result.message or f"{envelope.tool_id} did not complete successfully"
                 attempt = AttemptLedgerEntry(
                     attempt_id=attempt_id,
@@ -489,7 +498,13 @@ class AgentRuntime:
                     failure_class=result.failure_class,
                     message=message,
                 )
-                return attempt, OutcomeDecision(status=outcome_status, reason=message, failure_class=result.failure_class, continue_running=outcome_status == "replannable"), state
+                return (
+                    attempt,
+                    OutcomeDecision(
+                        status=outcome_status, reason=message, failure_class=result.failure_class, continue_running=outcome_status == "replannable"
+                    ),
+                    state,
+                )
 
         if saw_verifier and all(item.status == "passed" for item in verification_records):
             attempt = AttemptLedgerEntry(

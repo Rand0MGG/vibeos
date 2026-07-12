@@ -18,9 +18,7 @@ def test_default_domain_registry_exposes_browser_and_media() -> None:
 
 def test_domain_registry_rejects_unknown_capability_references() -> None:
     registry = DomainRegistry(
-        packs=(
-            DomainPack(domain_id="browser", label="Browser", route_ids=("broken_route",), allowed_context_package_ids=("session_context",)),
-        ),
+        packs=(DomainPack(domain_id="browser", label="Browser", route_ids=("broken_route",), allowed_context_package_ids=("session_context",)),),
         routes=(
             RouteDefinition(
                 route_id="broken_route",

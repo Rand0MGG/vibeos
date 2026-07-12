@@ -1,46 +1,55 @@
 # Runtime Convergence Architecture
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
 ## Default supported-task path
 
 ```text
 CLI / HTTP / D-Bus
         -> CommandService
-        -> planning bootstrap
+        -> TaskApplicationService
         -> GoalLoop
              -> observe -> review -> execute -> observe -> verify
              -> retry, repair, replan, suspend, resume, or finish
-        -> CommandResult, audit, and trace finalization
+        -> CommandResultProjector / AuditResultRecorder
 ```
 
 `CapabilityBroker.handle()` is a source-compatible facade over `CommandService`.
-It assembles dependencies and keeps capability/review inspection helpers, but it
-does not own a second task loop or any registered domain-tool handler.
+`runtime_composition.py` owns dependency assembly. Broker keeps only
+construction compatibility, inspection helpers, and narrow delegation entry
+points; it does not own a task loop, review resume, execution, acceptance, or
+any registered domain-tool handler.
 
 ## Ownership boundaries
 
-- `CommandService`: transport-neutral request dispatch, trace lifecycle, and
-  public result formatting.
+- `CommandService`: transport-neutral request dispatch and trace lifecycle.
+- `TaskApplicationService`: starts tasks, handles stored approvals and
+  supplemental input, and resumes the current GoalLoop.
 - `GoalLoop`: the sole state machine for supported tasks. Its six typed ports
   are `PlanningPort`, `ObservationPort`, `ReviewPort`, `ExecutionPort`,
   `AcceptancePort`, and `RecoveryPort`.
 - `src/vibeos/tools/`: independently owned app, window, browser, clipboard,
-  notification, system, and fixture tool registrations. The broker only
-  composes their `ToolSpec` sets.
+  notification, system, and fixture tool registrations. The composition root
+  constructs their registry.
+- `ReviewService`, `AcceptanceService`, and `RecoveryService`: respectively
+  own safety review and suspension persistence, postcondition/acceptance, and
+  failure/recovery decisions.
+- `CommandResultProjector` and `AuditResultRecorder`: own public compatibility
+  projection and final audit metadata persistence.
 - `PermissionPolicy`: the sole authority for `allow`, `deny`, and
   `review_required` decisions.
 - `ReviewStore`: the authority for review state; `review_events` is audit
   history, not the current-state authority.
 
-Legacy v0.6 plan-review payloads remain an explicit historical-resume
-compatibility path. They are not reached by fresh supported tasks. The dead
-fresh-task v0.6 runtime bridge has been deleted.
+Historical `review_kind=plan` payloads are an explicit compatibility path only.
+They migrate only after immutable plan, step, target, safety-review, policy,
+capability, and expiration checks; otherwise they fail closed with
+`legacy_review_unverifiable`. They are never reached by fresh supported tasks.
 
 ## Per-run state and compatibility output
 
 `RunContext` binds a run id, goal id, transport, dry-run/debug flags, and
-review identity. Normal GoalLoop execution does not mutate the shared broker
+review identity. Normal GoalLoop execution has no shared production agent
 session. Older runtime-shaped result fields are produced by a pure projection
 from planning artifacts, GoalLoop attempts, and immutable receipts.
 
@@ -76,14 +85,18 @@ vibe capabilities --json
 vibe ask "search web for hello" --json --offline --dry-run
 ```
 
-On 2026-07-11 in Fedora 44 WSL, the suite passed with `237 passed`; the
-offline dry-run returned `overall_status=dry_run`. `vibe doctor --json`
-reported `warn` with zero failures, which is expected without a GNOME desktop
-session.
+Before the architecture-completion refactor, the 2026-07-11 Fedora 44 WSL
+baseline passed with `237 passed` and the offline dry-run returned
+`overall_status=dry_run`. `vibe doctor --json` reported `warn` with zero
+failures, which is expected without a GNOME desktop session. Current final
+verification evidence is tracked separately in
+[`architecture_completion_phase_g.md`](architecture_completion_phase_g.md),
+and historical counts are not a claim about the current worktree.
 
 [`.github/workflows/test.yml`](../.github/workflows/test.yml) runs the same
-deterministic checks on `push` and `pull_request` with Python 3.11. The
-workflow has been added but has not been observed running in GitHub yet.
+deterministic checks plus Ruff lint/format and scoped strict typing on `push`
+and `pull_request` with Python 3.11. The workflow has not been observed
+running in GitHub yet.
 
 WSL does not replace the Linux GNOME VM acceptance boundary: systemd user
 service, GNOME extension, D-Bus window control, desktop notifications,

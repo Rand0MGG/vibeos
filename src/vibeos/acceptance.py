@@ -115,9 +115,7 @@ class AcceptanceEngine:
             )
 
         browser_errors = {"tls_error", "dns_error", "network_error", "http_404"}
-        browser_observation_missing = any(
-            "did not observe" in str(item.get("message", "")) for item in verification_results
-        )
+        browser_observation_missing = any("did not observe" in str(item.get("message", "")) for item in verification_results)
         verifier_failures = tuple(str(item.get("verifier_id", "unknown")) for item in verification_results if item.get("status") == "failed")
         verifier_incomplete = any(status in {"skipped", "unavailable"} for status in verifier_statuses)
         summary_input = {

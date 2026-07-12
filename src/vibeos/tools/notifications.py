@@ -19,7 +19,12 @@ def notification_tool_specs(notifications: NotificationAdapter) -> tuple[ToolSpe
             )
         result = notifications.send(title, body)
         status = str(result.get("status") or "failed")
-        output = {"adapter": "notifications.send", "adapter_status": "succeeded" if status == "sent" else status, "notification_adapter": result.get("adapter"), **{key: value for key, value in result.items() if key != "adapter"}}
+        output = {
+            "adapter": "notifications.send",
+            "adapter_status": "succeeded" if status == "sent" else status,
+            "notification_adapter": result.get("adapter"),
+            **{key: value for key, value in result.items() if key != "adapter"},
+        }
         evidence = {"title": title, "body": body, "notification_adapter": result.get("adapter")}
         if status == "sent":
             return ToolResult(status="succeeded", output={"selected_target": title, **output}, evidence=evidence, state_updates={"selected_target": title})

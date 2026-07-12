@@ -23,7 +23,13 @@ def clipboard_tool_specs(clipboard: ClipboardAdapter) -> tuple[ToolSpec, ...]:
         if status == "written":
             return ToolResult(
                 status="succeeded",
-                output={"selected_target": "clipboard", "adapter": str(result.get("adapter") or "clipboard.helper"), "capability_adapter": "clipboard.write", "adapter_status": "succeeded", **result},
+                output={
+                    "selected_target": "clipboard",
+                    "adapter": str(result.get("adapter") or "clipboard.helper"),
+                    "capability_adapter": "clipboard.write",
+                    "adapter_status": "succeeded",
+                    **result,
+                },
                 evidence={"text_length": len(text)},
                 state_updates={"selected_target": "clipboard"},
             )
