@@ -85,15 +85,13 @@ vibe capabilities --json
 vibe ask "search web for hello" --json --offline --dry-run
 ```
 
-Before the architecture-completion refactor, the 2026-07-11 Fedora 44 WSL
-baseline passed with `237 passed` and the offline dry-run returned
-`overall_status=dry_run`. `vibe doctor --json` reported `warn` with zero
-failures, which is expected without a GNOME desktop session. Current final
-verification evidence is tracked separately in
-[`architecture_completion_phase_g.md`](architecture_completion_phase_g.md),
-and historical counts are not a claim about the current worktree.
+The final Fedora 44 WSL verification passed `263` tests in `11.90s`, and the
+offline dry-run returned `overall_status=dry_run`. `vibe doctor --json`
+reported `warn` with zero failures, which is expected without a GNOME desktop
+session. Exact static and smoke-test evidence is recorded in the
+[`final acceptance audit`](../architecture_completion_final_audit.md).
 
-[`.github/workflows/test.yml`](../.github/workflows/test.yml) runs the same
+[`.github/workflows/test.yml`](../../.github/workflows/test.yml) runs the same
 deterministic checks plus Ruff lint/format and scoped strict typing on `push`
 and `pull_request` with Python 3.11. The workflow has not been observed
 running in GitHub yet.

@@ -3,7 +3,7 @@
 Captured: 2026-07-11
 
 This checkpoint records the execution-path work required by
-[`architecture_completion_master_goal.md`](architecture_completion_master_goal.md).
+[`architecture_completion_master_goal.md`](../../architecture_completion_master_goal.md).
 The master contract itself remains unchanged.
 
 ## Single execution route

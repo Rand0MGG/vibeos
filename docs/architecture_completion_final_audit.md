@@ -32,13 +32,13 @@ separate and is not represented as a passing desktop test.
 | G | complete | Ruff, scoped strict typing, CI jobs, updated status documents, final verification | Ruff, format, mypy, 263-test suite, capability and offline smoke all passed | Legacy modules outside the strict-core scope are documented below |
 
 Phase records are retained in
-[`architecture_completion_phase_a.md`](architecture_completion_phase_a.md),
-[`architecture_completion_phase_b.md`](architecture_completion_phase_b.md),
-[`architecture_completion_phase_c.md`](architecture_completion_phase_c.md),
-[`architecture_completion_phase_d.md`](architecture_completion_phase_d.md),
-[`architecture_completion_phase_e.md`](architecture_completion_phase_e.md),
-[`architecture_completion_phase_f.md`](architecture_completion_phase_f.md),
-and [`architecture_completion_phase_g.md`](architecture_completion_phase_g.md).
+[`architecture_completion_phase_a.md`](archive/architecture-refactor-2026-07/architecture_completion_phase_a.md),
+[`architecture_completion_phase_b.md`](archive/architecture-refactor-2026-07/architecture_completion_phase_b.md),
+[`architecture_completion_phase_c.md`](archive/architecture-refactor-2026-07/architecture_completion_phase_c.md),
+[`architecture_completion_phase_d.md`](archive/architecture-refactor-2026-07/architecture_completion_phase_d.md),
+[`architecture_completion_phase_e.md`](archive/architecture-refactor-2026-07/architecture_completion_phase_e.md),
+[`architecture_completion_phase_f.md`](archive/architecture-refactor-2026-07/architecture_completion_phase_f.md),
+and [`architecture_completion_phase_g.md`](archive/architecture-refactor-2026-07/architecture_completion_phase_g.md).
 
 ## Final dependency graph
 
@@ -201,8 +201,8 @@ dependencies because architecture tests enforce the dependency boundary.
 3.11. No remote workflow run was observed, so no remote CI success is claimed.
 
 Architecture/status documentation is updated in
-[`runtime_convergence.md`](runtime_convergence.md),
-[`current_status.md`](current_status.md), and the phase records cited above.
+[`runtime_convergence.md`](architecture/runtime_convergence.md),
+[`current_status.md`](architecture/current_status.md), and the phase records cited above.
 
 ## Exact verification evidence
 

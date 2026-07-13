@@ -3,7 +3,7 @@
 Captured: 2026-07-11
 
 This is working evidence for
-[`architecture_completion_master_goal.md`](architecture_completion_master_goal.md).
+[`architecture_completion_master_goal.md`](../../architecture_completion_master_goal.md).
 It is not the master contract and may be updated only as later phases replace
 the paths recorded here.
 

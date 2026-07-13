@@ -3,7 +3,7 @@
 Captured: 2026-07-11
 
 This checkpoint implements the review persistence requirements of
-[`architecture_completion_master_goal.md`](architecture_completion_master_goal.md)
+[`architecture_completion_master_goal.md`](../../architecture_completion_master_goal.md)
 without modifying that master contract.
 
 ## Authority and failure semantics

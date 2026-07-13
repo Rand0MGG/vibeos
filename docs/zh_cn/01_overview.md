@@ -1,87 +1,42 @@
 # VibeOS 总览
 
-## 1. 项目定位
+## 项目边界
 
-VibeOS 的目标不是做一个固定命令解析器，而是做一个能够通过自然语言操控 Linux 图形桌面会话的 agent runtime。
+VibeOS 是面向 Linux 用户会话的、受限且可审计的任务运行时。它接受自然
+语言目标，但模型不能直接调用 shell、原始 D-Bus、任意键鼠控制或未注册的
+桌面 API。所有实际动作都必须经过能力注册、计划、风险审查和验收。
 
-当前聚焦范围：
-
-- GNOME Wayland 用户会话
-- 受限、可审计的能力集合
-- 明确的计划、执行、观察、验收链路
-- 不允许任意 shell 执行
-- 不允许模型直接调用 D-Bus、桌面 API 或脚本
-
-## 2. 当前主架构
-
-当前支持任务的主路径是：
+## 当前主路径
 
 ```text
-utterance
-  -> utterance analysis
-  -> goal synthesis
-  -> domain routing
-  -> observation
-  -> capability exposure
-  -> candidate plans
-  -> validation
-  -> review
-  -> execution
-  -> post-execution observation
-  -> acceptance
-  -> bounded retry / bounded replan
-  -> run trace / debug trace / audit
+CLI / HTTP / D-Bus
+  -> CommandService
+  -> TaskApplicationService
+  -> GoalLoop
+  -> StepExecutionService
+  -> CapabilityRecipeRegistry / ToolRegistry
+  -> domain tool / existing adapter
 ```
 
-这条路径的几个核心原则：
+`GoalLoop` 是所有支持任务的唯一生产状态机，负责观察、审查、执行、验
+证、重试、修复、重规划、暂停和恢复。`CapabilityBroker` 只是构造与兼容门
+面，不拥有第二条任务或执行路径。
 
-- 主语义路径以结构化 planning 为中心，不再依赖旧的单 intent 直通主路径。
-- 执行成功不等于任务完成，必须区分 `execution_status`、`acceptance_status`、`overall_status`。
-- 浏览器、窗口、剪贴板、通知等能力必须通过注册表和风险策略暴露。
-- 失败必须结构化分类，不能只靠一条字符串报错。
+## 重要状态语义
 
-## 3. 当前模块边界
+调用方应同时查看：
 
-当前显式 domain pack 包括：
+- `execution_status`：动作是否执行；
+- `acceptance_status`：证据是否证明任务达成；
+- `overall_status`：任务对外最终状态；
+- `run` 与 `attempts`：计划执行过程与历史尝试。
 
-- `apps`
-- `window_management`
-- `clipboard`
-- `notification`
-- `system_observation`
-- `browser`
-- `media`
+SQLite 是 review 当前状态的唯一权威；JSONL 只可用作一次性迁移输入。旧
+`review_kind=plan` 审批只有在计划、步骤、目标、安全审查和策略绑定均可
+验证时才会迁移，否则会失败关闭并要求重新下达命令。
 
-每个 domain 通过注册的 route、capability、context package、verifier 参与 planning 和 execution。
+## 当前验证边界
 
-## 4. 当前公开结果语义
-
-所有主要任务结果都应该公开：
-
-- `execution_status`
-- `acceptance_status`
-- `overall_status`
-
-任务计划路径还应公开：
-
-- `run`
-- `attempts`
-
-这意味着调用方不应该只看一句顶层 `message`，而应该看结构化结果。
-
-## 5. 配置原则
-
-模型是可选增强，不是系统安全边界。
-
-- 配置模型时，使用 OpenAI-compatible broker
-- 未配置模型时，可使用本地 deterministic 路径覆盖当前受支持任务面
-- provider 失败应显式暴露，不应静默伪装成“模型理解成功”
-
-## 6. 当前阅读优先级
-
-如果你刚接手这个仓库，建议按下面顺序理解：
-
-1. 先看 `02_planning_and_execution.md`
-2. 再看 `03_capabilities_and_permissions.md`
-3. 然后看 `04_linux_session_and_daemon.md`
-4. 最后用 `05_vm_install_upgrade_test_runbook.md` 做真实 VM 验证
+Fedora WSL 已验证静态检查、263 项测试和离线 dry-run。真实 GNOME Wayland
+会话仍需单独验证 daemon、扩展、窗口控制、portal、剪贴板、通知和浏览器
+观测。详细结果见 [当前状态](../architecture/current_status.md)。

@@ -1,98 +1,23 @@
 # 历史版本与原始文档索引
 
-这份索引的作用是把原来按时间、按版本散落的文档重新映射回“按模块阅读”的路径。
+历史文档已从当前说明中分离到 [`../archive/`](../archive/README.md)。它们保留
+原始判断、测试计数和路径，便于追溯；这些内容不应与当前代码混用。
 
-原则：
+| 归档目录 | 内容 |
+| --- | --- |
+| `architecture-refactor-2026-07/` | 已完成架构收敛的目标、基线和 Phase A-G 过程记录 |
+| `codex-goals/` | v0 至 v0.9 的 Codex 目标文档 |
+| `project-history/` | v0.3/v0.4 的状态、验收和测试计划 |
+| `vm-evidence/` | 旧 VM checklist、证据、问题记录和安装手册 |
+| `legacy/` | 旧权限层说明 |
+| `research/` | AAFS 文件检索草案，非当前 VibeOS scope |
 
-- 历史文档原文保留
-- 新文档只负责组织阅读，不伪造历史
-- 当历史草案与当前实现冲突时，以当前代码和 `docs/current_status.md` 为准
+当前事实请优先阅读：
 
-## 1. 总体状态与现行范围
+1. [当前状态](../architecture/current_status.md)
+2. [运行时架构](../architecture/runtime_convergence.md)
+3. [最终验收审计](../architecture_completion_final_audit.md)
+4. [WSL 测试标准](07_wsl_test_standard.md)
 
-优先阅读：
-
-- [current_status.md](/E:/codex_project/vibeos/docs/current_status.md:1)
-- [README.md](/E:/codex_project/vibeos/README.md:1)
-
-对应模块：
-
-- 总体架构
-- 当前已实现能力
-- 本地验证与 VM 验证范围
-
-## 2. 规划与架构演进
-
-历史来源：
-
-- [vibeos_v0_linux_session_agent_plan.md](/E:/codex_project/vibeos/docs/vibeos_v0_linux_session_agent_plan.md:1)
-- [vibeos_v0_2_goal.md](/E:/codex_project/vibeos/docs/vibeos_v0_2_goal.md:1)
-- [v0.3_structured_task_agent_plan.md](/E:/codex_project/vibeos/docs/v0.3_structured_task_agent_plan.md:1)
-- [v0.4_goal_for_codex.md](/E:/codex_project/vibeos/docs/v0.4_goal_for_codex.md:1)
-- [v0.5_goal_for_codex.md](/E:/codex_project/vibeos/docs/v0.5_goal_for_codex.md:1)
-- [v0.6_goal_for_codex.md](/E:/codex_project/vibeos/docs/v0.6_goal_for_codex.md:1)
-
-建议理解顺序：
-
-1. v0 Linux session 初始计划
-2. v0.2 范围与目标
-3. v0.3 structured task plan
-4. v0.4 目标
-5. v0.5 目标
-6. v0.6 目标
-
-对应当前模块：
-
-- [01_overview.md](/E:/codex_project/vibeos/docs/zh_cn/01_overview.md:1)
-- [02_planning_and_execution.md](/E:/codex_project/vibeos/docs/zh_cn/02_planning_and_execution.md:1)
-
-## 3. 权限与能力
-
-历史来源：
-
-- [capability_registry.md](/E:/codex_project/vibeos/docs/capability_registry.md:1)
-- [permission_review_layer.md](/E:/codex_project/vibeos/docs/permission_review_layer.md:1)
-
-对应当前模块：
-
-- [03_capabilities_and_permissions.md](/E:/codex_project/vibeos/docs/zh_cn/03_capabilities_and_permissions.md:1)
-
-## 4. Linux 会话与部署
-
-历史来源：
-
-- [linux_session_doctor.md](/E:/codex_project/vibeos/docs/linux_session_doctor.md:1)
-- [deepseek_api_setup.md](/E:/codex_project/vibeos/docs/deepseek_api_setup.md:1)
-- [linux_vm_permission_test_checklist.md](/E:/codex_project/vibeos/docs/linux_vm_permission_test_checklist.md:1)
-- [vm_acceptance_evidence.md](/E:/codex_project/vibeos/docs/vm_acceptance_evidence.md:1)
-
-对应当前模块：
-
-- [04_linux_session_and_daemon.md](/E:/codex_project/vibeos/docs/zh_cn/04_linux_session_and_daemon.md:1)
-- [05_vm_install_upgrade_test_runbook.md](/E:/codex_project/vibeos/docs/zh_cn/05_vm_install_upgrade_test_runbook.md:1)
-
-## 5. 版本阶段性状态记录
-
-阶段性记录文档：
-
-- [v0.3_acceptance_status_2026-06-02.md](/E:/codex_project/vibeos/docs/v0.3_acceptance_status_2026-06-02.md:1)
-- [v0.3_completion_audit_2026-06-02.md](/E:/codex_project/vibeos/docs/v0.3_completion_audit_2026-06-02.md:1)
-- [v0.3_vm_readiness_2026-06-02.md](/E:/codex_project/vibeos/docs/v0.3_vm_readiness_2026-06-02.md:1)
-- [v0.3_vm_test_plan_2026-06-02.md](/E:/codex_project/vibeos/docs/v0.3_vm_test_plan_2026-06-02.md:1)
-- [v0.4_implementation_status_2026-06-02.md](/E:/codex_project/vibeos/docs/v0.4_implementation_status_2026-06-02.md:1)
-- [vm_known_issues_2026-06-01.md](/E:/codex_project/vibeos/docs/vm_known_issues_2026-06-01.md:1)
-
-用途：
-
-- 追踪某个阶段的具体验收标准
-- 找历史问题与判断依据
-- 对照当前实现确认哪些问题已经解决，哪些仍需真实 VM 再验证
-
-## 6. 建议维护方式
-
-以后新增文档建议遵守下面的规则：
-
-- 当前有效说明优先放进 `docs/zh_cn/` 的模块文档
-- 一次性阶段总结或实验记录继续按日期单独保留
-- 目标文档如 `v0.x_goal_for_codex.md` 保留为版本里程碑，不直接充当最终用户手册
-- README 只保留高层入口，不再堆积大量重复操作说明
+若需要复用归档中的命令或设计，必须先与当前代码、能力注册表和 WSL 测试标准
+重新核对。

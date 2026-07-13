@@ -3,7 +3,7 @@
 Captured: 2026-07-12
 
 This checkpoint records the Phase F work required by
-[`architecture_completion_master_goal.md`](architecture_completion_master_goal.md).
+[`architecture_completion_master_goal.md`](../../architecture_completion_master_goal.md).
 The master contract itself remains unchanged.
 
 ## Composition and command boundary

@@ -103,7 +103,22 @@ python -m pytest -q
 当前基线：
 
 - 已在 Fedora 44 WSL 中实际跑通
-- 最近一次恢复验证（2026-07-11）：`237 passed`
+- 最近一次完整验证（2026-07-12）：`263 passed in 11.90s`
+
+### 4.1.1 静态质量检查
+
+在全量回归前或提交前，运行当前 CI 同样执行的静态门禁：
+
+```bash
+cd /mnt/e/codex_project/vibeos
+source /home/rand0mg/.venvs/vibeos/bin/activate
+python -m ruff check src tests
+python -m ruff format --check src tests
+python -m mypy --strict
+```
+
+通过标准：Ruff 无诊断、格式化无需修改、严格类型检查在已声明的核心范围内
+无问题。当前范围与结果见 `docs/architecture_completion_final_audit.md`。
 
 ### 4.2 基础诊断
 

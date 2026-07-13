@@ -15,18 +15,18 @@ VibeOS v0 does not modify the Linux kernel and does not allow arbitrary shell ex
 
 ## Permission Model
 
-VibeOS v0.1 has a capability permission layer:
+VibeOS has a capability permission layer:
 
 - L0 observe-only actions execute automatically.
 - L1 low-risk session actions execute automatically and are audited.
 - L2 medium-risk actions create a `review_id` and require `vibe approve <review_id>`.
 - L3 high-risk actions are rejected.
 
-See [docs/permission_review_layer.md](docs/permission_review_layer.md).
-Capability definitions live in [docs/capability_registry.md](docs/capability_registry.md).
+See [docs/architecture/capability_registry.md](docs/architecture/capability_registry.md).
 
 L2 approvals are bound to a stored `review_id`, so approving an action does not re-run model parsing.
-Real approvals are consumed after one execution attempt; `--dry-run` previews without consuming.
+Claimed approvals are consumed after successful completion and explicitly
+released after a failed real execution; `--dry-run` previews without consuming.
 Pending L2 reviews expire after `VIBEOS_REVIEW_TTL_SECONDS`, defaulting to 600 seconds.
 Permission review also checks action targets, such as URI scheme, clipboard content, and app/window target shape.
 
@@ -119,7 +119,7 @@ compatibility facade, not a parallel retry/replan loop. Registered
 implementations live in domain modules under `src/vibeos/tools/`, while
 GoalLoop coordinates typed planning, observation, review, execution,
 acceptance, and recovery services. See
-[docs/runtime_convergence.md](docs/runtime_convergence.md) for the ownership
+[docs/architecture/runtime_convergence.md](docs/architecture/runtime_convergence.md) for the ownership
 map, transactional review semantics, trace policy, and the WSL/VM boundary.
 
 `--debug` on `vibe plan`, `vibe ask`, and `vibe approve` includes raw provider payloads in `debug_trace` with redaction and truncation safeguards.
@@ -209,11 +209,11 @@ VMware is recommended for early testing. Use NAT networking and snapshots before
 
 ## Status
 
-See [docs/current_status.md](docs/current_status.md) for implemented scope, verification commands, and remaining Linux VM acceptance criteria.
-See [docs/runtime_convergence.md](docs/runtime_convergence.md) for the current default execution architecture.
-See [docs/vm_acceptance_evidence.md](docs/vm_acceptance_evidence.md) for the VM evidence workflow.
-See [docs/linux_vm_install_upgrade_test_runbook.md](docs/linux_vm_install_upgrade_test_runbook.md) for environment setup, uninstall/reinstall steps, and the complete VM test flow.
-See [docs/zh_cn/README.md](docs/zh_cn/README.md) for the Chinese module-oriented documentation set.
+See [docs/README.md](docs/README.md) for the current documentation map.
+See [docs/architecture/current_status.md](docs/architecture/current_status.md) for implemented scope and exact verification evidence.
+See [docs/architecture/runtime_convergence.md](docs/architecture/runtime_convergence.md) for the current default execution architecture.
+See [docs/operations/gnome_vm_acceptance.md](docs/operations/gnome_vm_acceptance.md) for the manual GNOME VM boundary.
+See [docs/zh_cn/README.md](docs/zh_cn/README.md) for the Chinese documentation set.
 See [docs/zh_cn/07_wsl_test_standard.md](docs/zh_cn/07_wsl_test_standard.md) for the WSL-specific test scope and workflow.
 Continuous verification is configured in
 [.github/workflows/test.yml](.github/workflows/test.yml) for `push` and

@@ -3,7 +3,7 @@
 Captured: 2026-07-12
 
 This document records the Phase G configuration and evidence status required by
-[`architecture_completion_master_goal.md`](architecture_completion_master_goal.md).
+[`architecture_completion_master_goal.md`](../../architecture_completion_master_goal.md).
 The master contract itself remains unchanged.
 
 ## Static quality configuration
@@ -33,7 +33,7 @@ after it is green.
 
 ## CI configuration
 
-[`../.github/workflows/test.yml`](../.github/workflows/test.yml) now defines:
+[`.github/workflows/test.yml`](../../../.github/workflows/test.yml) now defines:
 
 * `static-quality`: Ruff lint, Ruff format check, and scoped strict mypy;
 * `deterministic-tests`: pytest, capability JSON, and offline dry-run smoke
@@ -77,4 +77,4 @@ passing desktop integration.
 
 The complete phase, architecture, execution, review-state, and deferred-GNOME
 handoff is recorded in
-[`architecture_completion_final_audit.md`](architecture_completion_final_audit.md).
+[`architecture_completion_final_audit.md`](../../architecture_completion_final_audit.md).
