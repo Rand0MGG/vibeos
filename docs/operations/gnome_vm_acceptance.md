@@ -30,6 +30,25 @@ state for each applicable capability:
 - XDG portal URI navigation;
 - browser post-action observation and verifier evidence.
 
+For the Goal 01 E1 slice, record a non-dry-run `notification.send` result that
+contains its typed `action_receipt` and `observation_evidence`, confirm the
+adapter reports `sent`, and independently observe the notification on the
+desktop. A WSL `unavailable` receipt proves accurate failure handling, not this
+desktop acceptance item.
+
+This Goal 01 item passed on the Fedora GNOME Wayland VM on 2026-07-16. The
+live-provider request used the production D-Bus daemon and `/usr/bin/notify-send`,
+returned an E1 succeeded receipt with passed acceptance and a completed overall
+result, produced an independently observed D-Bus `Notify` call, displayed the
+notification on GNOME, and left zero active daemon requests. The retained
+evidence and the separate incomplete browser result are summarized in the
+[Goal 01 GNOME VM evidence report](../archive/vm-evidence/goal01_gnome_vm_acceptance_2026-07-16.md).
+
+The optional WSLg verifier can now produce a real `notify-send` receipt and
+independently observe dunst/D-Bus notification state. Keep that evidence as a
+useful pre-verification result, but do not substitute it for this supported
+Fedora GNOME Wayland checklist.
+
 Do not replace these checks with a dry-run or WSL warning-free result. The
 historical install/upgrade procedures and earlier evidence are available in
 [`../archive/vm-evidence/`](../archive/vm-evidence/); treat them as reference

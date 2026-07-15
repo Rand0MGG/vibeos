@@ -57,6 +57,22 @@ def test_tool_registry_returns_envelope_and_runner_output() -> None:
     assert envelope.evidence["query"] == "hello"
 
 
+def test_tool_registry_redacts_user_content_and_secrets_from_recorded_input() -> None:
+    registry = ToolRegistry((ToolSpec("notification.send", "action", "desktop-linux", lambda payload, context: ToolResult(status="succeeded")),))
+
+    envelope, _result = registry.invoke(
+        "notification.send",
+        {"task_step_id": "notify", "body": "private@example.com", "api_token": "secret-token"},
+        make_context(),
+    )
+
+    assert envelope.input_payload == {
+        "task_step_id": "notify",
+        "body": "[REDACTED]",
+        "api_token": "[REDACTED]",
+    }
+
+
 def make_context() -> ToolExecutionContext:
     return ToolExecutionContext(
         session_id="session_1",

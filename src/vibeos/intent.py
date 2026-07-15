@@ -90,7 +90,11 @@ class RuleIntentBroker(IntentBroker):
             or text.startswith("open http://")
             or text.startswith("open https://")
         ):
-            return Intent(action="portal.open_uri", target={"uri": stripped.split(maxsplit=1)[-1]}, reason="user asked to open a URI")
+            return Intent(
+                action="browser.open_url",
+                target={"uri": stripped.split(maxsplit=1)[-1]},
+                reason="user asked to open an explicit browser URL",
+            )
         browser_intent = infer_browser_intent_from_open_request(stripped)
         if browser_intent is not None:
             return browser_intent

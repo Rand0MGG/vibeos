@@ -3,6 +3,10 @@
 > 历史愿景，非当前实现承诺。当前能力范围、明确禁止项和已验证路径以
 > [`../architecture/current_status.md`](../architecture/current_status.md) 与
 > [`../architecture_completion_final_audit.md`](../architecture_completion_final_audit.md) 为准。
+> 当前产品使命、目标用户、边界和战略优先级以
+> [`../product/product_charter.md`](../product/product_charter.md) 与
+> [`../product/strategic_goals.md`](../product/strategic_goals.md) 为准；目标系统设计以
+> [`../product/agent_system_framework.md`](../product/agent_system_framework.md) 为准。
 
 Last updated: 2026-06-10
 

@@ -9,7 +9,10 @@ description = "Agent-first Linux session capability runtime prototype."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "alembic>=1.15,<2",
   "dbus-next>=0.2.3; platform_system == 'Linux'",
+  "pydantic>=2.11,<3",
+  "SQLAlchemy>=2.0,<3",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +47,7 @@ select = ["F"]
 [tool.mypy]
 python_version = "3.11"
 files = [
+  "src/vibeos/core",
   "src/vibeos/command_service.py",
   "src/vibeos/task_application.py",
   "src/vibeos/goal_loop.py",
@@ -58,6 +62,7 @@ files = [
   "src/vibeos/recovery_service.py",
   "src/vibeos/result_projection.py",
   "src/vibeos/runtime_composition.py",
+  "src/vibeos/review_identifiers.py",
   "src/vibeos/reviews.py",
   "src/vibeos/tools/registry.py",
 ]
@@ -67,3 +72,7 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 no_implicit_optional = true
 check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["pydantic", "pydantic.*"]
+follow_imports = "normal"

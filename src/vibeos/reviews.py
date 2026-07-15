@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sqlite3
@@ -12,7 +11,9 @@ from pathlib import Path
 from typing import Any, Concatenate, Never, ParamSpec, TypeVar
 
 from .audit import default_audit_path
+from .core.adapters.database import CoreDatabase, DatabaseMigrationError
 from .models import Intent, PermissionReview, ReviewRequest, utc_now_iso
+from .review_identifiers import canonical_payload_hash, make_plan_review_id, make_review_id
 from .task_trace import record_trace_event
 from .task_models import TaskPlanReviewResult
 
@@ -34,9 +35,9 @@ def review_execution_binding(request: ReviewRequest) -> dict[str, str | None]:
         "review_kind": request.review_kind,
         "plan_id": request.plan_id,
         "step_id": _step_id_from_payload(review_to_payload(request)),
-        "plan_hash": _canonical_payload_hash(request.plan_payload),
-        "snapshot_hash": _canonical_payload_hash(request.snapshot_payload),
-        "intent_hash": _canonical_payload_hash(asdict(request.intent)),
+        "plan_hash": canonical_payload_hash(request.plan_payload),
+        "snapshot_hash": canonical_payload_hash(request.snapshot_payload),
+        "intent_hash": canonical_payload_hash(asdict(request.intent)),
     }
 
 
@@ -79,9 +80,18 @@ class ReviewStore:
     intent that was reviewed, not a fresh model parse of the same utterance.
     """
 
-    def __init__(self, path: Path | None = None, ttl_seconds: int | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        ttl_seconds: int | None = None,
+        *,
+        database: CoreDatabase | None = None,
+    ) -> None:
         self.path = path or default_review_path()
         self.db_path = self.path.with_suffix(".sqlite3")
+        if database is not None and database.path != self.db_path.expanduser().resolve():
+            raise ValueError("ReviewStore path and CoreDatabase path must identify the same authoritative database")
+        self.database = database or CoreDatabase(self.db_path)
         self.ttl_seconds = default_review_ttl_seconds() if ttl_seconds is None else ttl_seconds
         self._lock = _review_lock_for(self.path)
         self._connection = self._open_state_connection()
@@ -635,56 +645,30 @@ class ReviewStore:
 
     def _open_state_connection(self) -> sqlite3.Connection | None:
         try:
-            self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            connection = sqlite3.connect(self.db_path, check_same_thread=False)
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute("PRAGMA synchronous=FULL")
-            connection.execute("PRAGMA busy_timeout=5000")
-            connection.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)")
-            connection.execute(
-                "CREATE TABLE IF NOT EXISTS review_events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, review_id TEXT, event_type TEXT, created_at TEXT, payload TEXT NOT NULL)"
-            )
-            columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(review_events)").fetchall()}
-            for name, declaration in (
-                ("review_id", "TEXT"),
-                ("event_type", "TEXT"),
-                ("created_at", "TEXT"),
-            ):
-                if name not in columns:
-                    connection.execute(f"ALTER TABLE review_events ADD COLUMN {name} {declaration}")
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS reviews (
-                    review_id TEXT PRIMARY KEY,
-                    status TEXT NOT NULL,
-                    review_kind TEXT NOT NULL,
-                    plan_id TEXT,
-                    step_id TEXT,
-                    utterance TEXT NOT NULL,
-                    intent_payload TEXT NOT NULL,
-                    review_payload TEXT NOT NULL,
-                    plan_payload TEXT,
-                    snapshot_payload TEXT,
-                    supplemental_input TEXT,
-                    pending_reason TEXT,
-                    created_at TEXT NOT NULL,
-                    expires_at TEXT,
-                    version INTEGER NOT NULL DEFAULT 0,
-                    payload TEXT NOT NULL
-                )
-                """
-            )
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_reviews_status_created_at ON reviews(status, created_at)")
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_reviews_lookup_kind_step ON reviews(review_kind, plan_id, step_id)")
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_review_events_review_id_event_id ON review_events(review_id, event_id)")
-            connection.execute(
-                "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?)",
-                (utc_now_iso(),),
-            )
-            connection.commit()
-            return connection
-        except sqlite3.Error:
+            with self._lock:
+                self.database.upgrade()
+                return self.database.compatibility_connection()
+        except (sqlite3.Error, DatabaseMigrationError):
             return None
+
+    def reconnect_after_database_ready(self) -> None:
+        """Bind the compatibility facade after daemon-owned migration succeeds."""
+
+        with self._lock:
+            previous = self._connection
+            self._connection = None
+            if previous is not None:
+                previous.close()
+            try:
+                connection = self.database.compatibility_connection()
+                self._connection = connection
+                self._import_legacy_jsonl_if_needed()
+                if self._connection is None:
+                    connection.close()
+                    raise ReviewPersistenceError("review schema is unavailable after database migration")
+            except (sqlite3.Error, ReviewPersistenceError) as exc:
+                self._connection = None
+                raise ReviewPersistenceError("review persistence could not bind to the authoritative database") from exc
 
     def _import_legacy_jsonl_if_needed(self) -> None:
         if self._connection is None:
@@ -728,23 +712,6 @@ class ReviewStore:
             raise
 
 
-def make_review_id(utterance: str, intent: Intent, created_at: str) -> str:
-    digest = hashlib.sha256(
-        json.dumps(
-            {"utterance": utterance, "intent": asdict(intent), "created_at": created_at},
-            ensure_ascii=False,
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()[:12]
-    return f"rev_{digest}"
-
-
-def _canonical_payload_hash(payload: object) -> str | None:
-    if payload is None:
-        return None
-    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
-
-
 def _step_id_from_payload(payload: dict[str, Any]) -> str | None:
     snapshot = payload.get("snapshot_payload")
     if isinstance(snapshot, dict) and snapshot.get("current_step_id") is not None:
@@ -754,17 +721,6 @@ def _step_id_from_payload(payload: dict[str, Any]) -> str | None:
         step_id = target["target"].get("step_id")
         return str(step_id) if step_id is not None else None
     return None
-
-
-def make_plan_review_id(plan_payload: dict[str, Any], created_at: str) -> str:
-    digest = hashlib.sha256(
-        json.dumps(
-            {"plan": plan_payload, "created_at": created_at},
-            ensure_ascii=False,
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()[:12]
-    return f"rev_{digest}"
 
 
 def review_to_payload(request: ReviewRequest) -> dict[str, Any]:

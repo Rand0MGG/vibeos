@@ -103,7 +103,7 @@ python -m pytest -q
 当前基线：
 
 - 已在 Fedora 44 WSL 中实际跑通
-- 最近一次完整验证（2026-07-12）：`263 passed in 11.90s`
+- 最近一次完整验证（2026-07-16）：`302 passed in 25.54s`
 
 ### 4.1.1 静态质量检查
 
@@ -282,7 +282,8 @@ python scripts/collect_vm_evidence.py --real
 - `vibed.service` 未激活
 - `runtime_entry` 提示会回退到 `local`
 - `app_registry` 为 0
-- `notify-send`、`wl-copy/xclip/xsel` 缺失
+- 未执行可选 WSLg 配置时，`notify-send` 可能缺失
+- `wl-copy/xclip/xsel` 等未配置能力的 helper 缺失
 
 这些都是 WSL 不是 GNOME 桌面会话带来的正常结果。
 
@@ -340,3 +341,56 @@ WSL 的标准不是“模拟完整 Linux 桌面”，而是：
 - 把必须回到 VM 的范围压缩到真正的桌面集成和最终验收
 
 只要这个边界守住，WSL 就是高价值开发环境，而不是一个失败的 VM 替代品。
+
+## 13. Goal 01 核心底座专项验证
+
+完成核心底座、数据库或 daemon 变更后，在前述通用门禁之外运行：
+
+```bash
+cd /mnt/e/codex_project/vibeos
+source /home/rand0mg/.venvs/vibeos/bin/activate
+python scripts/architecture_guard.py
+python scripts/verify_foundation_dbus.py
+```
+
+`verify_foundation_dbus.py` 会临时启动
+`vibed --dbus --offline --port 0`，使用 WSL 已有的 user session bus 验证：
+
+- daemon 进入 `ready`，结束时可正常停止；
+- D-Bus 可发现 19 个 capability；
+- `system.status` 经真实 D-Bus、核心切片和统一数据库成功执行；
+- `notification.send` 经同一真实链路到达生产通知适配器；
+- 外部请求的未知字段被严格拒绝；
+- 权威 SQLite 数据库确实创建。
+
+如果环境没有现成的 user session bus，但安装了 `dbus-run-session`，可改用：
+
+```bash
+dbus-run-session -- python scripts/verify_foundation_dbus.py
+```
+
+WSL 中 E1 通知结果为 `adapter_status=unavailable` 是准确的环境证据，不是
+桌面验收失败，也不能声称通知已显示。`notification.send` 的成功生产 adapter
+receipt 与独立可视观察仍必须按 GNOME VM 验收清单完成。
+
+### 13.1 可选 WSLg 真实动作验证
+
+若当前 WSL 提供 `DISPLAY`/`WAYLAND_DISPLAY`，可以配置真实 freedesktop 通知
+客户端和轻量通知服务：
+
+```bash
+sudo dnf install -y libnotify dunst
+python scripts/verify_wsl_real_actions.py
+```
+
+验证器会临时启动真实 dunst 服务，执行 `vibe ask "status" --offline` 和
+`notification.send`，再通过真实 daemon/D-Bus 重复 E1。通过条件包括：
+
+- Agent 的 E0/E1 均为 `executed`，receipt 为 `succeeded`；
+- 生产适配器是系统 `notify-send`；
+- D-Bus 监视器独立捕获两次 `org.freedesktop.Notifications.Notify`；
+- dunst 独立报告至少一条正在显示的通知。
+
+本机配置后的结果为两次 `Notify`、两条 displayed notification，CLI 与 daemon
+D-Bus 的 E1 均成功。该结果属于真实 WSLg 集成预验证，仍不能替代 Fedora GNOME
+Wayland VM 的最终验收。

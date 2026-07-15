@@ -26,11 +26,13 @@ _SENSITIVE_TRACE_KEYS = {
     "token",
 }
 _CONTENT_TRACE_KEYS = {
+    "body",
     "content",
     "raw_output",
     "response_payload",
     "request_payload",
     "supplemental_input",
+    "text",
     "utterance",
 }
 

@@ -1,5 +1,7 @@
+import json
+
 from vibeos.models import WindowEntry
-from vibeos.windows import WindowRegistry, parse_shell_action
+from vibeos.windows import WindowRegistry, parse_shell_action, unwrap_gdbus_string
 
 
 class StaticWindows(WindowRegistry):
@@ -55,3 +57,9 @@ def test_parse_shell_action_rejects_invalid_json() -> None:
     assert result["status"] == "failed"
     assert result["window_id"] == "7"
     assert "invalid shell response" in result["error"]
+
+
+def test_unwrap_gdbus_string_preserves_nested_json_escaping() -> None:
+    payload = json.dumps({"raw_output": json.dumps({"status": "unsupported"}), "message": "provider isn't available"})
+
+    assert unwrap_gdbus_string(repr((payload,))) == payload

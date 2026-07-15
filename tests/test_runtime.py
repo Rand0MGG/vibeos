@@ -1,8 +1,10 @@
+import subprocess
+
 import pytest
 
 from vibeos.audit import AuditLog
 from vibeos.models import CommandRequest
-from vibeos.runtime import DBusDaemonRuntime, HTTPDaemonRuntime, LocalRuntime, RuntimeSelectionError, build_runtime, detect_runtime_entry
+from vibeos.runtime import DBusDaemonClient, DBusDaemonRuntime, HTTPDaemonRuntime, LocalRuntime, RuntimeSelectionError, build_runtime, detect_runtime_entry
 
 
 class FakeDaemonClient:
@@ -274,6 +276,28 @@ class FakePlanApproveHttpClient(FakeHttpClient):
         }
 
 
+def test_dbus_client_applies_vibeos_timeout_to_gdbus(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return subprocess.CompletedProcess(command, 0, stdout="('{}',)\n", stderr="")
+
+    monkeypatch.setenv("VIBEOS_TRANSPORT_TIMEOUT_SECONDS", "67")
+    monkeypatch.setattr("vibeos.runtime.shutil.which", lambda name: "/usr/bin/gdbus" if name == "gdbus" else None)
+    monkeypatch.setattr("vibeos.runtime.subprocess.run", run)
+
+    assert DBusDaemonClient().call_json_method("Status") == {}
+    command = captured["command"]
+    kwargs = captured["kwargs"]
+    assert isinstance(command, list)
+    assert command[command.index("--timeout") + 1] == "67"
+    assert isinstance(kwargs, dict)
+    assert kwargs["timeout"] == 72
+    assert kwargs["env"]["LC_ALL"] == "C"
+
+
 def test_build_runtime_uses_dbus_daemon_when_available(monkeypatch) -> None:
     monkeypatch.delenv("VIBEOS_RUNTIME", raising=False)
     monkeypatch.setattr("vibeos.runtime.DBusDaemonClient.is_available", lambda self: True)
@@ -385,6 +409,7 @@ def test_dbus_runtime_serializes_full_command_request() -> None:
 
     assert client.payloads == [
         {
+            "schema_version": "v1",
             "utterance": "open browser",
             "mode": "auto_low_risk",
             "dry_run": True,
@@ -407,6 +432,7 @@ def test_http_runtime_uses_http_contract() -> None:
 
     assert client.payloads == [
         {
+            "schema_version": "v1",
             "utterance": "list windows",
             "mode": "auto_low_risk",
             "dry_run": False,
@@ -429,7 +455,8 @@ def test_dbus_runtime_exposes_audit_tail() -> None:
     assert runtime.audit_tail(5) == [{"audit_id": "aud_123", "transport": "dbus"}]
 
 
-def test_dbus_runtime_returns_structured_transport_timeout() -> None:
+def test_dbus_runtime_returns_structured_transport_timeout(monkeypatch) -> None:
+    monkeypatch.setenv("VIBEOS_RUNTIME", "dbus")
     runtime = DBusDaemonRuntime(FailingDaemonClient(), audit=AuditLog(make_audit_path("dbus-transport-timeout")))
 
     result = runtime.handle(CommandRequest("open browser"))

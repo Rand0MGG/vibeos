@@ -1,14 +1,17 @@
 from vibeos.apps import AppRegistry
-from vibeos.capabilities import CAPABILITIES
+from pathlib import Path
+
+from vibeos.capabilities import CAPABILITIES, capability_payload, executable_actions, permission_summary
 from vibeos.clipboard import ClipboardAdapter
 from vibeos.notifications import NotificationAdapter
+from vibeos.core.adapters.database import CoreDatabase
+from vibeos.core.composition import compose_foundation
 from vibeos.portal import PortalAdapter
 from vibeos.tool_protocol import ToolRegistry
 from vibeos.tools.apps import app_tool_specs
 from vibeos.tools.browser import browser_tool_specs
 from vibeos.tools.clipboard import clipboard_tool_specs
 from vibeos.tools.fixtures import fixture_tool_specs
-from vibeos.tools.notifications import notification_tool_specs
 from vibeos.tools.system import system_tool_specs
 from vibeos.tools.registry import CapabilityRecipeRegistry, build_tool_registry
 from vibeos.tools.windows import window_tool_specs
@@ -17,14 +20,15 @@ from vibeos.verifiers import VerifierHarness
 from vibeos.task_models import DisplayFields, TaskPlan, TaskRoute, TaskStep
 
 
-def test_extracted_domain_tool_specs_preserve_registered_tool_ids() -> None:
+def test_extracted_domain_tool_specs_preserve_registered_tool_ids(tmp_path: Path) -> None:
+    foundation = make_foundation(tmp_path / "specs.sqlite3")
     registry = ToolRegistry(
         (
             *app_tool_specs(AppRegistry()),
             *window_tool_specs(WindowRegistry()),
             *clipboard_tool_specs(ClipboardAdapter()),
-            *notification_tool_specs(NotificationAdapter()),
-            *system_tool_specs(PortalAdapter(), lambda: {"capabilities": ["system.status"]}),
+            *system_tool_specs(PortalAdapter()),
+            *foundation.tool_specs,
             *browser_tool_specs(PortalAdapter(), VerifierHarness()),
             *fixture_tool_specs(),
         )
@@ -95,15 +99,15 @@ def test_capability_recipes_cover_every_registered_capability() -> None:
     assert uncovered == []
 
 
-def test_composed_tool_registry_contains_every_recipe_tool() -> None:
+def test_composed_tool_registry_contains_every_recipe_tool(tmp_path: Path) -> None:
+    foundation = make_foundation(tmp_path / "registry.sqlite3")
     registry = build_tool_registry(
         apps=AppRegistry(),
         windows=WindowRegistry(),
         portal=PortalAdapter(),
-        notifications=NotificationAdapter(),
         clipboard=ClipboardAdapter(),
         verifiers=VerifierHarness(),
-        capabilities=lambda: {"capabilities": []},
+        foundation_specs=foundation.tool_specs,
     )
     recipes = CapabilityRecipeRegistry()
     plan = TaskPlan(
@@ -122,3 +126,18 @@ def test_composed_tool_registry_contains_every_recipe_tool() -> None:
     }
 
     assert recipe_tools <= set(registry.ids())
+
+
+def make_foundation(path: Path):
+    database = CoreDatabase(path)
+    database.upgrade()
+    return compose_foundation(
+        database=database,
+        portal=PortalAdapter(),
+        notifications=NotificationAdapter(),
+        capabilities=lambda: {
+            "capabilities": executable_actions(),
+            "capability_details": capability_payload(),
+            "permission_policy": permission_summary(),
+        },
+    )

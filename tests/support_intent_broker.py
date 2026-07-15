@@ -61,7 +61,7 @@ class FixtureIntentBroker(IntentBroker):
 
         if text.startswith("打开 http://") or text.startswith("打开 https://") or text.startswith("open http://") or text.startswith("open https://"):
             uri = stripped.split(maxsplit=1)[-1]
-            return Intent(action="portal.open_uri", target={"uri": uri}, reason="fixture asked to open a URI")
+            return Intent(action="browser.open_url", target={"uri": uri}, reason="fixture asked to open an explicit browser URL")
 
         browser_intent = _infer_browser_intent_from_open_request(stripped)
         if browser_intent is not None:

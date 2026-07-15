@@ -48,5 +48,20 @@ def test_audit_log_records_execution_status_fields() -> None:
     assert payload["loop_snapshot_id"] == "lsnap_1"
 
 
+def test_content_bearing_actions_are_redacted_from_audit(tmp_path: Path) -> None:
+    canary = "sk-canary person@example.com"
+    audit_path = tmp_path / "audit.jsonl"
+    AuditLog(audit_path).record(
+        request=CommandRequest(f"notify {canary}"),
+        intent=Intent(action="notification.send", target={"title": "VibeOS", "body": canary}),
+        status="executed",
+        result={"tool_invocations": [{"input_payload": {"body": canary}, "message": canary}]},
+    )
+
+    serialized = audit_path.read_text(encoding="utf-8")
+    assert canary not in serialized
+    assert serialized.count("[REDACTED]") >= 3
+
+
 def make_audit_path(name: str) -> Path:
     return Path(".vibeos") / f"audit-{name}-{uuid4().hex}.jsonl"

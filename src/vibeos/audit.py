@@ -9,6 +9,10 @@ from dataclasses import asdict
 
 from .models import CommandRequest, Intent, PermissionReview, utc_now_iso
 
+_CONTENT_BEARING_ACTIONS = {"clipboard.write", "notification.send"}
+_SENSITIVE_PAYLOAD_KEYS = {"body", "content", "message", "supplemental_input", "text"}
+_SECRET_KEY_PARTS = {"api_key", "authorization", "credential", "password", "secret", "token"}
+
 
 def default_audit_path() -> Path:
     base = os.environ.get("VIBEOS_STATE_DIR")
@@ -56,10 +60,11 @@ class AuditLog:
     ) -> str:
         timestamp = utc_now_iso()
         audit_id = f"{timestamp}-{os.getpid()}"
+        content_bearing = intent.action in _CONTENT_BEARING_ACTIONS
         entry = {
             "audit_id": audit_id,
             "timestamp": timestamp,
-            "utterance": request.utterance,
+            "utterance": "[REDACTED USER CONTENT]" if content_bearing else request.utterance,
             "mode": request.mode,
             "transport": request.transport,
             "dry_run": request.dry_run,
@@ -67,7 +72,7 @@ class AuditLog:
             "review_id": review_id or request.review_id,
             "intent": {
                 "action": intent.action,
-                "target": intent.target,
+                "target": _redact_payload(intent.target) if content_bearing else intent.target,
                 "reason": intent.reason,
                 "requires_confirmation": intent.requires_confirmation,
             },
@@ -88,7 +93,7 @@ class AuditLog:
             "step_safety_review_id": step_safety_review_id,
             "layer": layer,
             "selected_target": selected_target,
-            "result": result,
+            "result": _redact_payload(result) if content_bearing else result,
             "message": message,
         }
         self._append(entry)
@@ -112,3 +117,18 @@ class AuditLog:
                 handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
             self.path = fallback
             print(f"vibeos: audit log fell back to {fallback}", file=sys.stderr)
+
+
+def _redact_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized = str(key).lower()
+            if normalized in _SENSITIVE_PAYLOAD_KEYS or any(part in normalized for part in _SECRET_KEY_PARTS):
+                sanitized[str(key)] = "[REDACTED]"
+            else:
+                sanitized[str(key)] = _redact_payload(item)
+        return sanitized
+    if isinstance(value, (list, tuple)):
+        return [_redact_payload(item) for item in value]
+    return value

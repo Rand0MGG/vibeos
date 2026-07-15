@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "new_code": {
+    "paths": [
+      "src/vibeos/core",
+      "src/vibeos/daemon.py",
+      "src/vibeos/dbus_service.py",
+      "migrations"
+    ],
+    "max_module_lines": 400,
+    "max_function_complexity": 18,
+    "forbidden_imports": [
+      "vibeos.agent_runtime",
+      "vibeos.daemon",
+      "vibeos.goal_loop",
+      "vibeos.planner",
+      "vibeos.reviews",
+      "vibeos.runtime"
+    ]
+  },
+  "legacy_debt": {
+    "src/vibeos/planner.py": {
+      "max_lines": 1515,
+      "max_function_complexity": 43,
+      "owner": "Goal 02-04 vertical migration",
+      "deletion_gate": "planning and model calls are owned by the durable kernel and model gateway"
+    },
+    "src/vibeos/goal_loop.py": {
+      "max_lines": 1173,
+      "max_function_complexity": 42,
+      "owner": "Goal 02",
+      "deletion_gate": "all 19 capabilities and review resumes use the durable task engine"
+    },
+    "src/vibeos/reviews.py": {
+      "max_lines": 810,
+      "max_function_complexity": 19,
+      "owner": "Goal 02",
+      "deletion_gate": "review state is served directly by typed unified repositories"
+    },
+    "src/vibeos/understanding.py": {
+      "max_lines": 754,
+      "max_function_complexity": 35,
+      "owner": "Goal 03",
+      "deletion_gate": "provider calls use the model gateway and strict contracts"
+    },
+    "src/vibeos/agent_runtime.py": {
+      "max_lines": 749,
+      "max_function_complexity": 19,
+      "owner": "Goal 02",
+      "deletion_gate": "historical compatibility callers are removed or migrated"
+    },
+    "src/vibeos/runtime.py": {
+      "max_lines": 587,
+      "max_function_complexity": 12,
+      "owner": "Goal 02",
+      "deletion_gate": "D-Bus is the sole supported local daemon transport"
+    }
+  }
+}

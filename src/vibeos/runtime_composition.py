@@ -11,6 +11,9 @@ from .candidate_selection import CandidateSelectionProvider
 from .clarification import ClarificationProvider
 from .clipboard import ClipboardAdapter
 from .command_service import CommandService
+from .core.adapters.database import CoreDatabase
+from .core.application import FoundationSliceService
+from .core.composition import compose_foundation
 from .execution_service import StepExecutionService
 from .failure_classifier import FailureClassifier
 from .goal_synthesizer import GoalSynthesisProvider
@@ -27,7 +30,7 @@ from .recovery_service import RecoveryService
 from .replanner import EvidenceDrivenReplanner, Replanner
 from .result_projection import AuditResultRecorder, CommandResultProjector
 from .review_service import ReviewService
-from .reviews import ReviewStore
+from .reviews import ReviewStore, default_review_path
 from .semantic_acceptance import SemanticAcceptanceProvider
 from .strategy import StrategySelectionProvider
 from .task_application import TaskApplicationService
@@ -69,6 +72,8 @@ class RuntimeComponents:
     verifier_registry: VerifierRegistry
     verifier_harness: VerifierHarness
     loop_policy: LoopPolicy
+    database: CoreDatabase
+    foundation_slices: FoundationSliceService
 
 
 def compose_runtime(
@@ -98,6 +103,7 @@ def compose_runtime(
     browser_site_catalog: dict[str, str] | None = None,
     browser_search_catalog: dict[str, dict[str, object]] | None = None,
     app_fixture_catalog: dict[str, AppSearchFixture] | None = None,
+    database: CoreDatabase | None = None,
 ) -> RuntimeComponents:
     resolved_intent_broker = intent_broker or OpenAICompatibleIntentBroker()
     resolved_apps = apps or AppRegistry()
@@ -107,7 +113,14 @@ def compose_runtime(
     resolved_clipboard = clipboard or ClipboardAdapter()
     resolved_policy = policy or PermissionPolicy()
     resolved_audit = audit or AuditLog()
-    resolved_reviews = reviews or ReviewStore()
+    if reviews is not None:
+        if database is not None and reviews.database.path != database.path:
+            raise ValueError("runtime composition received two authoritative database paths")
+        resolved_database = reviews.database
+        resolved_reviews = reviews
+    else:
+        resolved_database = database or CoreDatabase(default_review_path().with_suffix(".sqlite3"))
+        resolved_reviews = ReviewStore(database=resolved_database)
     resolved_trace_store = trace_store or TaskTraceStore()
     resolved_verifier_registry = verifier_registry or default_verifier_registry()
     resolved_verifier_harness = verifier_harness or VerifierHarness()
@@ -128,14 +141,19 @@ def compose_runtime(
         planning=planning,
         loop_policy=resolved_loop_policy,
     )
+    foundation = compose_foundation(
+        database=resolved_database,
+        portal=resolved_portal,
+        notifications=resolved_notifications,
+        capabilities=_capabilities_payload,
+    )
     tool_registry = build_tool_registry(
         apps=resolved_apps,
         windows=resolved_windows,
         portal=resolved_portal,
-        notifications=resolved_notifications,
         clipboard=resolved_clipboard,
         verifiers=resolved_verifier_harness,
-        capabilities=_capabilities_payload,
+        foundation_specs=foundation.tool_specs,
     )
     execution = StepExecutionService(
         tools=tool_registry,
@@ -197,6 +215,8 @@ def compose_runtime(
         verifier_registry=resolved_verifier_registry,
         verifier_harness=resolved_verifier_harness,
         loop_policy=resolved_loop_policy,
+        database=resolved_database,
+        foundation_slices=foundation.slices,
     )
 
 

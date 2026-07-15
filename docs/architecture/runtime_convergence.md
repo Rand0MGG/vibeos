@@ -1,6 +1,6 @@
 # Runtime Convergence Architecture
 
-Last updated: 2026-07-12
+Last updated: 2026-07-15
 
 ## Default supported-task path
 
@@ -13,6 +13,21 @@ CLI / HTTP / D-Bus
              -> retry, repair, replan, suspend, resume, or finish
         -> CommandResultProjector / AuditResultRecorder
 ```
+
+Two capabilities now cross a narrower replacement boundary after GoalLoop
+selects their sole production tool:
+
+```text
+system.status / notification.send ToolSpec
+  -> strict adapter contract -> FoundationSliceService -> typed ports
+  -> current_state + domain_events + outbox (one transaction)
+```
+
+This is a vertical replacement, not a second task runtime. GoalLoop remains the
+compatibility state machine until Goal 02, while the two migrated capabilities
+contain no legacy business-logic implementation or dual write. Full ownership,
+schema, HTTP-caller evidence, and deletion gates are in
+[`core_foundation.md`](core_foundation.md).
 
 `CapabilityBroker.handle()` is a source-compatible facade over `CommandService`.
 `runtime_composition.py` owns dependency assembly. Broker keeps only
@@ -29,8 +44,8 @@ any registered domain-tool handler.
   are `PlanningPort`, `ObservationPort`, `ReviewPort`, `ExecutionPort`,
   `AcceptancePort`, and `RecoveryPort`.
 - `src/vibeos/tools/`: independently owned app, window, browser, clipboard,
-  notification, system, and fixture tool registrations. The composition root
-  constructs their registry.
+  portal, and fixture compatibility tool registrations. The composition root
+  supplies the core-owned `system.status` and `notification.send` ToolSpecs.
 - `ReviewService`, `AcceptanceService`, and `RecoveryService`: respectively
   own safety review and suspension persistence, postcondition/acceptance, and
   failure/recovery decisions.
@@ -38,8 +53,11 @@ any registered domain-tool handler.
   projection and final audit metadata persistence.
 - `PermissionPolicy`: the sole authority for `allow`, `deny`, and
   `review_required` decisions.
-- `ReviewStore`: the authority for review state; `review_events` is audit
-  history, not the current-state authority.
+- `CoreDatabase`: the sole SQLite engine/schema lifecycle. `ReviewStore` is a
+  temporary Goal 02 compatibility API sharing that database; `review_events`
+  is audit history, not current-state authority. Daemon readiness requires a
+  successful Alembic upgrade, the current revision, every authoritative table,
+  and a successful ReviewStore compatibility rebind.
 
 Historical `review_kind=plan` payloads are an explicit compatibility path only.
 They migrate only after immutable plan, step, target, safety-review, policy,
@@ -85,11 +103,16 @@ vibe capabilities --json
 vibe ask "search web for hello" --json --offline --dry-run
 ```
 
-The final Fedora 44 WSL verification passed `263` tests in `11.90s`, and the
+The 2026-07-15 Fedora 44 WSL verification passed `300` tests in `24.25s`, and the
 offline dry-run returned `overall_status=dry_run`. `vibe doctor --json`
 reported `warn` with zero failures, which is expected without a GNOME desktop
-session. Exact static and smoke-test evidence is recorded in the
-[`final acceptance audit`](../architecture_completion_final_audit.md).
+session. Strict typing passed for 35 source files, the architecture guard
+reported zero violations, and the real WSL user-session D-Bus foundation
+verifier passed. With `libnotify` plus temporary dunst on WSLg, the optional
+real-action verifier also observed successful CLI and daemon/D-Bus E1 receipts,
+two D-Bus `Notify` calls, and two displayed notifications. The earlier full static and smoke-test evidence is recorded in the
+[`final acceptance audit`](../architecture_completion_final_audit.md), while
+the current baseline is tracked in [`current_status.md`](current_status.md).
 
 [`.github/workflows/test.yml`](../../.github/workflows/test.yml) runs the same
 deterministic checks plus Ruff lint/format and scoped strict typing on `push`

@@ -85,6 +85,7 @@ class ToolRegistry:
         return spec.is_available(environment)
 
     def invoke(self, tool_id: str, payload: dict[str, Any], context: ToolExecutionContext) -> tuple[ToolInvocationEnvelope, ToolResult]:
+        recorded_input = _redacted_input_payload(payload)
         spec = self.get(tool_id)
         if spec is None:
             result = ToolResult(status="unavailable", message="tool is not registered", failure_class="unsupported_request")
@@ -97,7 +98,7 @@ class ToolRegistry:
                     attempt_id=context.attempt_id,
                     status=result.status,
                     message=result.message,
-                    input_payload=dict(payload),
+                    input_payload=recorded_input,
                     output_payload=result.output,
                     evidence=result.evidence,
                     failure_class=result.failure_class,
@@ -119,7 +120,7 @@ class ToolRegistry:
                     attempt_id=context.attempt_id,
                     status=result.status,
                     message=result.message,
-                    input_payload=dict(payload),
+                    input_payload=recorded_input,
                     output_payload=result.output,
                     evidence=result.evidence,
                     failure_class=result.failure_class,
@@ -136,10 +137,25 @@ class ToolRegistry:
                 attempt_id=context.attempt_id,
                 status=result.status,
                 message=result.message,
-                input_payload=dict(payload),
+                input_payload=recorded_input,
                 output_payload=result.output,
                 evidence=result.evidence,
                 failure_class=result.failure_class,
             ),
             result,
         )
+
+
+_USER_CONTENT_KEYS = {"body", "content", "message", "supplemental_input", "text"}
+_SECRET_KEYS = {"api_key", "authorization", "credential", "password", "secret", "token"}
+
+
+def _redacted_input_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in payload.items():
+        normalized = key.lower()
+        if normalized in _USER_CONTENT_KEYS or any(token in normalized for token in _SECRET_KEYS):
+            sanitized[key] = "[REDACTED]"
+        else:
+            sanitized[key] = value
+    return sanitized

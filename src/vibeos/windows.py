@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
 import shutil
@@ -99,6 +100,12 @@ def call_vibeos_shell(method: str, *args: str) -> str | None:
 
 
 def unwrap_gdbus_string(value: str) -> str:
+    try:
+        parsed = ast.literal_eval(value)
+    except (SyntaxError, ValueError):
+        parsed = None
+    if isinstance(parsed, tuple) and len(parsed) == 1 and isinstance(parsed[0], str):
+        return parsed[0]
     if value.startswith("('") and value.endswith("',)"):
         return value[2:-3].replace("\\'", "'")
     if value.startswith('("') and value.endswith('",)'):

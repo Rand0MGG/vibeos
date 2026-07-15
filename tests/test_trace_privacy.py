@@ -19,6 +19,12 @@ def test_normal_trace_omits_raw_user_and_provider_content(tmp_path) -> None:
         actor="test",
         data={"utterance": "private user request", "safe": "metadata"},
     )
+    session.append_event(
+        phase="execution",
+        event_type="notification",
+        actor="test",
+        data={"body": "person@example.com", "text": "private clipboard text"},
+    )
     session.append_model_io(
         phase="analysis",
         provider="test",
@@ -34,6 +40,8 @@ def test_normal_trace_omits_raw_user_and_provider_content(tmp_path) -> None:
 
     assert manifest["utterance"] is None
     assert "private user request" not in events
+    assert "person@example.com" not in events
+    assert "private clipboard text" not in events
     assert "private provider request" not in model_io
     assert "private provider response" not in model_io
     assert "private normalized output" not in model_io

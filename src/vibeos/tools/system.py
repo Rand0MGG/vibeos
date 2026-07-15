@@ -1,21 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
 from ..portal import PortalAdapter
 from ..tool_protocol import ToolExecutionContext, ToolResult, ToolSpec
 
 
-def system_tool_specs(portal: PortalAdapter, capabilities: Callable[[], dict[str, object]]) -> tuple[ToolSpec, ...]:
-    def status(_payload: dict[str, Any], _context: ToolExecutionContext) -> ToolResult:
-        payload = {"portal": portal.status(), **capabilities()}
-        return ToolResult(
-            status="succeeded",
-            output={"adapter": "system.status", "adapter_status": "succeeded", **payload},
-            evidence={"capability_count": len(payload.get("capabilities", []))},
-        )
-
+def system_tool_specs(portal: PortalAdapter) -> tuple[ToolSpec, ...]:
     def open_uri(payload: dict[str, Any], context: ToolExecutionContext) -> ToolResult:
         uri = str(payload.get("uri") or payload.get("url") or "").strip()
         if not uri:
@@ -42,7 +33,4 @@ def system_tool_specs(portal: PortalAdapter, capabilities: Callable[[], dict[str
             failure_class="tool_timeout" if status == "timeout" else "environment_unreachable",
         )
 
-    return (
-        ToolSpec("system.status", "action", "desktop-linux", status),
-        ToolSpec("portal.open_uri", "action", "desktop-linux", open_uri),
-    )
+    return (ToolSpec("portal.open_uri", "action", "desktop-linux", open_uri),)

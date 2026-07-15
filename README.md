@@ -209,9 +209,25 @@ VMware is recommended for early testing. Use NAT networking and snapshots before
 
 ## Status
 
+See [docs/product/product_charter.md](docs/product/product_charter.md) for the
+current product mission, target users, boundaries, and north-star outcome.
+See [docs/product/strategic_goals.md](docs/product/strategic_goals.md) for the
+strategic goal hierarchy and recommended sequence of work.
+See [docs/product/agent_system_framework.md](docs/product/agent_system_framework.md)
+for the target Agent-native architecture, privilege review, rollback, secret
+handling, durable-task runtime, and cloud/local model routing.
+See [docs/product/decisions/0001-agent-native-direction.md](docs/product/decisions/0001-agent-native-direction.md)
+for the accepted direction decisions and open design questions.
+See [docs/product/decisions/0002-implementation-foundation.md](docs/product/decisions/0002-implementation-foundation.md)
+for the accepted implementation stack, isolation boundaries, and replacement
+strategy.
+See [docs/goals/agent_native/README.md](docs/goals/agent_native/README.md) for
+the dependency-ordered implementation plan and nine directly executable Codex
+goal contracts.
 See [docs/README.md](docs/README.md) for the current documentation map.
 See [docs/architecture/current_status.md](docs/architecture/current_status.md) for implemented scope and exact verification evidence.
 See [docs/architecture/runtime_convergence.md](docs/architecture/runtime_convergence.md) for the current default execution architecture.
+See [docs/architecture/core_foundation.md](docs/architecture/core_foundation.md) for the Goal 01 layered core, unified database, daemon lifecycle, and migration inventory.
 See [docs/operations/gnome_vm_acceptance.md](docs/operations/gnome_vm_acceptance.md) for the manual GNOME VM boundary.
 See [docs/zh_cn/README.md](docs/zh_cn/README.md) for the Chinese documentation set.
 See [docs/zh_cn/07_wsl_test_standard.md](docs/zh_cn/07_wsl_test_standard.md) for the WSL-specific test scope and workflow.

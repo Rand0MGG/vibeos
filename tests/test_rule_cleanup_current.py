@@ -3,7 +3,7 @@ import pytest
 from vibeos.clarification import OpenAICompatibleClarificationProvider
 from vibeos.domain_registry import default_domain_registry
 from vibeos.goal_synthesizer import synthesize_assistant_intent
-from vibeos.intent import IntentBroker
+from vibeos.intent import IntentBroker, RuleIntentBroker
 from vibeos.models import Intent
 from vibeos.planner import (
     build_browser_open_url_plan,
@@ -13,6 +13,7 @@ from vibeos.planner import (
     build_media_pause_plan,
     build_media_play_plan,
     build_media_search_plan,
+    build_notification_send_plan,
 )
 from vibeos.task_models import FailureClassification, ReplanDecision, TaskSpan, UtteranceAnalysis
 from vibeos.understanding import OpenAICompatibleUnderstandingTransitionProvider, UnderstandingArtifact
@@ -25,6 +26,13 @@ class StaticIntentBroker(IntentBroker):
 
     def parse(self, utterance: str) -> Intent:
         return self.intent
+
+
+def test_offline_explicit_https_uses_browser_url_domain() -> None:
+    intent = RuleIntentBroker().parse("open https://example.com")
+
+    assert intent.action == "browser.open_url"
+    assert intent.target == {"uri": "https://example.com"}
 
 
 @pytest.mark.parametrize(
@@ -68,6 +76,23 @@ def test_search_web_intent_stays_search_web_without_named_website_guess() -> Non
     assert assistant_intent is not None
     assert assistant_intent.objective_kind == "search_web"
     assert assistant_intent.target.display_name == "百度官网"
+
+
+def test_notification_plan_canonicalizes_provider_generic_target_for_strict_slice() -> None:
+    route_definition = default_domain_registry(default_verifier_registry().ids()).get_route("notification_send_route")
+    assert route_definition is not None
+    utterance = "notify Goal 01 GNOME VM live verification"
+    span = TaskSpan(id="span_1", text=utterance, start=0, end=len(utterance), domain="notification", confidence=0.7)
+    intent = Intent(
+        action="notification.send",
+        target={"name": "Goal 01 GNOME VM live verification", "kind": "notification"},
+        reason="provider notification target",
+    )
+
+    plan = build_notification_send_plan(utterance, span, route_definition, StaticIntentBroker(intent))
+
+    assert plan is not None
+    assert plan.steps[0].target == {"body": "Goal 01 GNOME VM live verification"}
 
 
 def test_clarification_fallback_uses_generic_host_hint(monkeypatch) -> None:

@@ -100,7 +100,14 @@ def main() -> int:
             )
         )
     else:
-        steps.append(blocked_step("window_close_approve_dry_run", "missing review_id from window_close_review_required", depends_on=["window_close_review_required"], category="review_flow"))
+        steps.append(
+            blocked_step(
+                "window_close_approve_dry_run",
+                "missing review_id from window_close_review_required",
+                depends_on=["window_close_review_required"],
+                category="review_flow",
+            )
+        )
 
     reject_review = run_json_step(
         "window_close_reject_review_required",
@@ -139,7 +146,14 @@ def main() -> int:
             )
         )
     else:
-        steps.append(blocked_step("window_close_reject", "missing review_id from window_close_reject_review_required", depends_on=["window_close_reject_review_required"], category="review_flow"))
+        steps.append(
+            blocked_step(
+                "window_close_reject",
+                "missing review_id from window_close_reject_review_required",
+                depends_on=["window_close_reject_review_required"],
+                category="review_flow",
+            )
+        )
         steps.append(
             blocked_step(
                 "window_close_rejected_review_cannot_approve",
@@ -276,8 +290,22 @@ def collect_real_action_evidence(steps: list[dict[str, Any]], env: dict[str, str
             )
         )
     else:
-        steps.append(blocked_step("real_clipboard_approve", "missing review_id from real_clipboard_review_required", depends_on=["real_clipboard_review_required"], category="real_action"))
-        steps.append(blocked_step("real_clipboard_reapprove_rejected", "missing review_id from real_clipboard_review_required", depends_on=["real_clipboard_approve"], category="real_action"))
+        steps.append(
+            blocked_step(
+                "real_clipboard_approve",
+                "missing review_id from real_clipboard_review_required",
+                depends_on=["real_clipboard_review_required"],
+                category="real_action",
+            )
+        )
+        steps.append(
+            blocked_step(
+                "real_clipboard_reapprove_rejected",
+                "missing review_id from real_clipboard_review_required",
+                depends_on=["real_clipboard_approve"],
+                category="real_action",
+            )
+        )
 
     uri_review = run_json_step(
         "real_open_uri_review_required",
@@ -315,8 +343,22 @@ def collect_real_action_evidence(steps: list[dict[str, Any]], env: dict[str, str
             )
         )
     else:
-        steps.append(blocked_step("real_open_uri_approve", "missing review_id from real_open_uri_review_required", depends_on=["real_open_uri_review_required"], category="real_action"))
-        steps.append(blocked_step("real_open_uri_reapprove_rejected", "missing review_id from real_open_uri_review_required", depends_on=["real_open_uri_approve"], category="real_action"))
+        steps.append(
+            blocked_step(
+                "real_open_uri_approve",
+                "missing review_id from real_open_uri_review_required",
+                depends_on=["real_open_uri_review_required"],
+                category="real_action",
+            )
+        )
+        steps.append(
+            blocked_step(
+                "real_open_uri_reapprove_rejected",
+                "missing review_id from real_open_uri_review_required",
+                depends_on=["real_open_uri_approve"],
+                category="real_action",
+            )
+        )
 
 
 def collect_real_daemon_evidence(env: dict[str, str]) -> list[dict[str, Any]]:
@@ -391,17 +433,17 @@ def run_json_step(
         ok = ok and bool(validator(parsed))
     return enrich_step_context(
         annotate_step(
-        {
-        "name": name,
-        "ok": ok,
-        "command": command,
-        "returncode": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
-        "parsed": parsed,
-        },
-        category=category,
-        depends_on=depends_on,
+            {
+                "name": name,
+                "ok": ok,
+                "command": command,
+                "returncode": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+                "parsed": parsed,
+            },
+            category=category,
+            depends_on=depends_on,
         ),
         env,
     )
@@ -424,17 +466,17 @@ def run_text_step(
         ok = ok and bool(validator(stdout))
     return enrich_step_context(
         annotate_step(
-        {
-        "name": name,
-        "ok": ok,
-        "command": command,
-        "returncode": completed.returncode,
-        "stdout": stdout,
-        "stderr": completed.stderr,
-        "parsed": None,
-        },
-        category=category,
-        depends_on=depends_on,
+            {
+                "name": name,
+                "ok": ok,
+                "command": command,
+                "returncode": completed.returncode,
+                "stdout": stdout,
+                "stderr": completed.stderr,
+                "parsed": None,
+            },
+            category=category,
+            depends_on=depends_on,
         ),
         env,
     )
@@ -462,17 +504,17 @@ def run_json_text_step(
         ok = ok and bool(validator(parsed))
     return enrich_step_context(
         annotate_step(
-        {
-        "name": name,
-        "ok": ok,
-        "command": command,
-        "returncode": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
-        "parsed": parsed,
-        },
-        category=category,
-        depends_on=depends_on,
+            {
+                "name": name,
+                "ok": ok,
+                "command": command,
+                "returncode": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+                "parsed": parsed,
+            },
+            category=category,
+            depends_on=depends_on,
         ),
         env,
     )
@@ -491,36 +533,36 @@ def run_value_step(
     except Exception as exc:
         return enrich_step_context(
             annotate_step(
-            {
-                "name": name,
-                "ok": False,
-                "command": [],
-                "returncode": None,
-                "stdout": "",
-                "stderr": str(exc),
-                "parsed": None,
-                "meta": meta or {},
-            },
-            category=category,
-            depends_on=depends_on,
+                {
+                    "name": name,
+                    "ok": False,
+                    "command": [],
+                    "returncode": None,
+                    "stdout": "",
+                    "stderr": str(exc),
+                    "parsed": None,
+                    "meta": meta or {},
+                },
+                category=category,
+                depends_on=depends_on,
             ),
             None,
         )
     ok = validator(parsed) if validator is not None else True
     return enrich_step_context(
         annotate_step(
-        {
-            "name": name,
-            "ok": bool(ok),
-            "command": [],
-            "returncode": 0,
-            "stdout": json.dumps(parsed, ensure_ascii=False),
-            "stderr": "",
-            "parsed": parsed,
-            "meta": meta or {},
-        },
-        category=category,
-        depends_on=depends_on,
+            {
+                "name": name,
+                "ok": bool(ok),
+                "command": [],
+                "returncode": 0,
+                "stdout": json.dumps(parsed, ensure_ascii=False),
+                "stderr": "",
+                "parsed": parsed,
+                "meta": meta or {},
+            },
+            category=category,
+            depends_on=depends_on,
         ),
         None,
     )
@@ -696,14 +738,14 @@ def fetch_http_json(url: str) -> Any:
 def blocked_step(name: str, message: str, *, depends_on: list[str] | None = None, category: str = "general") -> dict[str, Any]:
     return annotate_step(
         {
-        "name": name,
-        "ok": False,
-        "command": [],
-        "returncode": None,
-        "stdout": "",
-        "stderr": message,
-        "parsed": None,
-        "status": "blocked",
+            "name": name,
+            "ok": False,
+            "command": [],
+            "returncode": None,
+            "stdout": "",
+            "stderr": message,
+            "parsed": None,
+            "status": "blocked",
         },
         category=category,
         depends_on=depends_on,
@@ -747,18 +789,10 @@ def compact_command_result(value: dict[str, Any]) -> dict[str, Any]:
     if isinstance(result, dict):
         run_payload = result.get("run")
         if isinstance(run_payload, dict):
-            summary["run"] = {
-                key: run_payload.get(key)
-                for key in ("run_id", "goal_id", "status", "final_outcome")
-                if run_payload.get(key) is not None
-            }
+            summary["run"] = {key: run_payload.get(key) for key in ("run_id", "goal_id", "status", "final_outcome") if run_payload.get(key) is not None}
         plan_review = result.get("plan_review")
         if isinstance(plan_review, dict):
-            summary["plan_review"] = {
-                key: plan_review.get(key)
-                for key in ("status", "review_id", "message")
-                if plan_review.get(key) is not None
-            }
+            summary["plan_review"] = {key: plan_review.get(key) for key in ("status", "review_id", "message") if plan_review.get(key) is not None}
     return summary
 
 

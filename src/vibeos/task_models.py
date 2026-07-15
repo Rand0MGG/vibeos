@@ -352,12 +352,12 @@ def canonicalize_target_for_action(action: str, target: dict[str, Any]) -> dict[
     if action == "notification.send":
         canonical: dict[str, Any] = {}
         title = _first_text(target, "title")
-        body = _first_text(target, "body", "message")
+        body = _first_text(target, "body", "message", "name")
         if title:
             canonical["title"] = title
         if body:
             canonical["body"] = body
-        return canonical or dict(target)
+        return canonical
 
     return dict(target)
 

@@ -108,6 +108,8 @@ class CapabilityBroker:
         self.verifier_registry = self._runtime.verifier_registry
         self.verifier_harness = self._runtime.verifier_harness
         self.loop_policy = self._runtime.loop_policy
+        self.database = self._runtime.database
+        self.foundation_slices = self._runtime.foundation_slices
         self.planning_service = self._runtime.planning
         self.review_service = self._runtime.review_service
         self.step_execution_service = self._runtime.execution

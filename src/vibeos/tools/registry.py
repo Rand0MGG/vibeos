@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from collections.abc import Callable
-
 from ..apps import AppRegistry
 from ..clipboard import ClipboardAdapter
-from ..notifications import NotificationAdapter
 from ..portal import PortalAdapter
 from ..task_models import TaskPlan, TaskStep
-from ..tool_protocol import ToolRegistry
+from ..tool_protocol import ToolRegistry, ToolSpec
 from ..verifiers import VerifierHarness
 from ..windows import WindowRegistry
 from .apps import app_tool_specs
@@ -16,7 +13,6 @@ from .browser import browser_tool_specs
 from .clipboard import clipboard_tool_specs
 from .fixtures import fixture_tool_specs
 from .media import media_tool_specs
-from .notifications import notification_tool_specs
 from .system import system_tool_specs
 from .windows import window_tool_specs
 
@@ -84,10 +80,9 @@ def build_tool_registry(
     apps: AppRegistry,
     windows: WindowRegistry,
     portal: PortalAdapter,
-    notifications: NotificationAdapter,
     clipboard: ClipboardAdapter,
     verifiers: VerifierHarness,
-    capabilities: Callable[[], dict[str, object]],
+    foundation_specs: tuple[ToolSpec, ...],
 ) -> ToolRegistry:
     """Compose domain-owned ToolSpecs without broker-owned handlers."""
 
@@ -95,9 +90,9 @@ def build_tool_registry(
         (
             *app_tool_specs(apps),
             *window_tool_specs(windows),
-            *notification_tool_specs(notifications),
             *clipboard_tool_specs(clipboard),
-            *system_tool_specs(portal, capabilities),
+            *system_tool_specs(portal),
+            *foundation_specs,
             *browser_tool_specs(portal, verifiers),
             *fixture_tool_specs(),
             *media_tool_specs(),

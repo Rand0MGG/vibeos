@@ -92,17 +92,7 @@ class DBusDaemonRuntime:
         self.http_fallback_client = http_fallback_client
 
     def handle(self, request: CommandRequest) -> CommandResult:
-        payload = {
-            "utterance": request.utterance,
-            "mode": request.mode,
-            "dry_run": request.dry_run,
-            "approve": request.approve,
-            "review_id": request.review_id,
-        }
-        if request.supplemental_input is not None:
-            payload["supplemental_input"] = request.supplemental_input
-        if request.debug:
-            payload["debug"] = True
+        payload = command_request_payload(request)
         try:
             response = self.client.request_payload(payload)
         except RuntimeError as exc:
@@ -126,7 +116,7 @@ class DBusDaemonRuntime:
 
     def reject_review(self, review_id: str) -> CommandResult:
         try:
-            response = self.client.request_payload({"review_id": review_id, "reject": True})
+            response = self.client.request_payload({"schema_version": "v1", "review_id": review_id, "reject": True})
         except RuntimeError as exc:
             request = CommandRequest("", review_id=review_id, transport=self.transport_name)
             fallback = self._maybe_fallback_to_http(request, str(exc))
@@ -178,17 +168,7 @@ class HTTPDaemonRuntime:
         self.audit = audit or AuditLog()
 
     def handle(self, request: CommandRequest) -> CommandResult:
-        payload = {
-            "utterance": request.utterance,
-            "mode": request.mode,
-            "dry_run": request.dry_run,
-            "approve": request.approve,
-            "review_id": request.review_id,
-        }
-        if request.supplemental_input is not None:
-            payload["supplemental_input"] = request.supplemental_input
-        if request.debug:
-            payload["debug"] = True
+        payload = command_request_payload(request)
         try:
             response = self.client.request_payload(payload)
         except RuntimeError as exc:
@@ -213,7 +193,7 @@ class HTTPDaemonRuntime:
 
     def reject_review(self, review_id: str) -> CommandResult:
         try:
-            response = self.client.request_payload({"review_id": review_id, "reject": True})
+            response = self.client.request_payload({"schema_version": "v1", "review_id": review_id, "reject": True})
         except RuntimeError as exc:
             return self._record_transport_failure(CommandRequest("", review_id=review_id, transport=self.transport_name), str(exc))
         return with_transport(command_result_from_payload(response), self.transport_name)
@@ -272,10 +252,13 @@ class DBusDaemonClient:
         gdbus = shutil.which("gdbus")
         if not gdbus or os.name != "posix":
             raise RuntimeError("gdbus is unavailable")
+        timeout = transport_timeout_seconds()
         command = [
             gdbus,
             "call",
             "--session",
+            "--timeout",
+            str(timeout),
             "--dest",
             self.BUS_NAME,
             "--object-path",
@@ -290,10 +273,11 @@ class DBusDaemonClient:
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=transport_timeout_seconds(),
+                timeout=timeout + 5,
+                env={**os.environ, "LC_ALL": "C"},
             )
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"{method} timed out") from exc
+            raise RuntimeError(f"{method} timed out after {timeout} seconds") from exc
         if completed.returncode != 0:
             raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or f"{method} failed")
         return unwrap_gdbus_string(completed.stdout.strip())
@@ -352,6 +336,22 @@ def env_flag(name: str) -> bool:
 
 def daemon_required() -> bool:
     return env_flag("VIBEOS_REQUIRE_DAEMON")
+
+
+def command_request_payload(request: CommandRequest) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "schema_version": "v1",
+        "utterance": request.utterance,
+        "mode": request.mode,
+        "dry_run": request.dry_run,
+        "approve": request.approve,
+        "review_id": request.review_id,
+    }
+    if request.supplemental_input is not None:
+        payload["supplemental_input"] = request.supplemental_input
+    if request.debug:
+        payload["debug"] = True
+    return payload
 
 
 def build_runtime() -> LocalRuntime | DBusDaemonRuntime | HTTPDaemonRuntime:
