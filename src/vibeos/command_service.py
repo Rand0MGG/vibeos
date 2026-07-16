@@ -5,7 +5,7 @@ from dataclasses import replace
 from typing import Protocol
 
 from .models import CommandRequest, CommandResult, Intent
-from .reviews import ReviewPersistenceError
+from .core.adapters.task_repository import TaskRepositoryError
 from .run_context import RunContext
 from .task_trace import TaskTraceStore, bind_trace_session, current_trace_session, record_trace_event
 
@@ -80,13 +80,13 @@ class CommandService:
             try:
                 context = RunContext.from_request(request, run_id=trace_session.run_id, goal_id="goal_pending")
                 result = self._dispatch(request, context)
-            except ReviewPersistenceError:
+            except TaskRepositoryError:
                 result = _with_transport(
                     CommandResult(
                         status="failed",
-                        intent=Intent.unknown("review persistence is unavailable"),
-                        result={"error_code": "review_persistence_unavailable"},
-                        message="review persistence is unavailable; no review-backed action was dispatched",
+                        intent=Intent.unknown("task persistence is unavailable"),
+                        result={"error_code": "task_persistence_unavailable"},
+                        message="task persistence is unavailable; unresolved proposals require reconciliation before replay",
                         execution_status="not_started",
                         acceptance_status="skipped",
                         overall_status="blocked",

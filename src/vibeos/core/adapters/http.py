@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 MAX_HEADER_BYTES = 64 * 1024
 MAX_BODY_BYTES = 1024 * 1024
@@ -21,6 +22,7 @@ class HttpResponse:
     status: int
     body: bytes
     content_type: str = "application/json; charset=utf-8"
+    headers: Mapping[str, str] = field(default_factory=dict)
 
 
 HttpHandler = Callable[[HttpRequest], Awaitable[HttpResponse]]
@@ -30,6 +32,7 @@ class AsyncHttpServer:
     name = "http"
 
     def __init__(self, host: str, port: int, handler: HttpHandler, *, request_timeout_seconds: float = 15.0) -> None:
+        _require_loopback(host)
         self.host = host
         self.port = port
         self._handler = handler
@@ -128,7 +131,22 @@ def _encode_response(response: HttpResponse) -> bytes:
         503: "Service Unavailable",
     }
     reason = reasons.get(response.status, "Error")
+    extra_headers = "".join(f"{name}: {value}\r\n" for name, value in response.headers.items())
     headers = (
-        f"HTTP/1.1 {response.status} {reason}\r\nContent-Type: {response.content_type}\r\nContent-Length: {len(response.body)}\r\nConnection: close\r\n\r\n"
+        f"HTTP/1.1 {response.status} {reason}\r\n"
+        f"Content-Type: {response.content_type}\r\n"
+        f"Content-Length: {len(response.body)}\r\n"
+        f"{extra_headers}Connection: close\r\n\r\n"
     ).encode("ascii")
     return headers + response.body
+
+
+def _require_loopback(host: str) -> None:
+    if host.lower() == "localhost":
+        return
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise ValueError("HTTP compatibility adapter host must be a loopback address") from exc
+    if not address.is_loopback:
+        raise ValueError("HTTP compatibility adapter is loopback-only")

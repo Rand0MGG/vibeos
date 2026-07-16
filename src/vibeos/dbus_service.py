@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from .broker import CapabilityBroker
 from .core.adapters.contracts import TransportCommandRequestV1
+from .core.adapters.task_contracts import TaskControlRequestV1, TaskListRequestV1
 from .core.application import AsyncSupervisor, SupervisorNotReady
 from .models import CommandRequest, CommandResult, Intent
 
@@ -80,11 +81,11 @@ class DBusServiceComponent:
 
             @method()
             async def AppsList(self) -> "s":
-                return await owner._read(lambda: json.dumps([asdict(app) for app in owner._broker.apps.list_apps()], ensure_ascii=False))
+                return await owner._read(lambda: json.dumps(owner._broker.list_apps(transport="dbus"), ensure_ascii=False))
 
             @method()
             async def WindowsList(self) -> "s":
-                return await owner._read(lambda: json.dumps([asdict(window) for window in owner._broker.windows.list_windows()], ensure_ascii=False))
+                return await owner._read(lambda: json.dumps(owner._broker.list_windows(transport="dbus"), ensure_ascii=False))
 
             @method()
             async def ApproveReview(self, review_id: "s") -> "s":
@@ -103,6 +104,40 @@ class DBusServiceComponent:
             @method()
             async def PendingReviews(self) -> "s":
                 return await owner._read(lambda: json.dumps(owner._broker.pending_reviews(), ensure_ascii=False))
+
+            @method()
+            async def TasksList(self, payload_json: "s") -> "s":
+                try:
+                    contract = TaskListRequestV1.model_validate_json(payload_json, strict=True)
+                except ValidationError as exc:
+                    return json.dumps({"error": "invalid_contract", "exception_type": type(exc).__name__})
+                return await owner._read(lambda: json.dumps(owner._broker.tasks(status=contract.status, limit=contract.limit), ensure_ascii=False))
+
+            @method()
+            async def TaskShow(self, task_id: "s") -> "s":
+                return await owner._read(lambda: json.dumps(owner._broker.task(task_id), ensure_ascii=False))
+
+            @method()
+            async def TaskControl(self, payload_json: "s") -> "s":
+                try:
+                    contract = TaskControlRequestV1.model_validate_json(payload_json, strict=True)
+                except ValidationError as exc:
+                    return json.dumps({"error": "invalid_contract", "exception_type": type(exc).__name__})
+
+                def control() -> str:
+                    try:
+                        payload = owner._broker.control_task(
+                            contract.task_id,
+                            contract.operation,
+                            expected_revision=contract.expected_revision,
+                            owner=contract.owner,
+                            reason=contract.reason,
+                        )
+                    except (KeyError, ValueError, RuntimeError) as exc:
+                        return json.dumps({"error": type(exc).__name__, "message": str(exc)}, ensure_ascii=False)
+                    return json.dumps(payload, ensure_ascii=False)
+
+                return await owner._read(control)
 
             @method()
             async def AuditTail(self, count: "i") -> "s":

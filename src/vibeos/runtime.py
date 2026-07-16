@@ -5,9 +5,11 @@ import os
 import shutil
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import asdict, replace
 from hashlib import sha256
+from ipaddress import ip_address
 from typing import Any
 
 from .audit import AuditLog
@@ -21,15 +23,7 @@ TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 
 
 class RuntimeSelectionError(RuntimeError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        mode: str,
-        configured_transport: str,
-        require_daemon: bool,
-        detail: dict[str, Any] | None = None,
-    ) -> None:
+    def __init__(self, message: str, *, mode: str, configured_transport: str, require_daemon: bool, detail: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.mode = mode
         self.configured_transport = configured_transport
@@ -60,10 +54,10 @@ class LocalRuntime:
         return self.broker.handle(replace(request, transport=self.transport_name))
 
     def list_apps(self) -> list[dict[str, Any]]:
-        return [asdict(app) for app in self.broker.apps.list_apps()]
+        return [dict(item) for item in self.broker.list_apps(transport=self.transport_name)]
 
     def list_windows(self) -> list[dict[str, Any]]:
-        return [asdict(window) for window in self.broker.windows.list_windows()]
+        return [dict(item) for item in self.broker.list_windows(transport=self.transport_name)]
 
     def capabilities(self) -> dict[str, Any]:
         return self.broker.capabilities()
@@ -76,6 +70,18 @@ class LocalRuntime:
 
     def audit_tail(self, count: int = 20) -> list[dict[str, Any]]:
         return self.broker.audit.tail(count)
+
+    def tasks(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, object]]:
+        return self.broker.tasks(status=status, limit=limit)
+
+    def task(self, task_id: str) -> dict[str, object] | None:
+        return self.broker.task(task_id)
+
+    def control_task(self, task_id: str, operation: str, *, expected_revision: int, owner: str | None = None, reason: str = "") -> dict[str, object]:
+        try:
+            return self.broker.control_task(task_id, operation, expected_revision=expected_revision, owner=owner, reason=reason)
+        except (KeyError, ValueError, RuntimeError) as exc:
+            return {"error": type(exc).__name__, "message": str(exc)}
 
 
 class DBusDaemonRuntime:
@@ -92,11 +98,10 @@ class DBusDaemonRuntime:
         self.http_fallback_client = http_fallback_client
 
     def handle(self, request: CommandRequest) -> CommandResult:
-        payload = command_request_payload(request)
         try:
-            response = self.client.request_payload(payload)
+            response = self.client.request_payload(command_request_payload(request))
         except RuntimeError as exc:
-            fallback = self._maybe_fallback_to_http(request, str(exc))
+            fallback = self._maybe_fallback_to_http(request)
             if fallback is not None:
                 return fallback
             return self._record_transport_failure(request, str(exc))
@@ -115,11 +120,11 @@ class DBusDaemonRuntime:
         return self.client.call_json_method("PendingReviews")
 
     def reject_review(self, review_id: str) -> CommandResult:
+        request = CommandRequest("", review_id=review_id, transport=self.transport_name)
         try:
             response = self.client.request_payload({"schema_version": "v1", "review_id": review_id, "reject": True})
         except RuntimeError as exc:
-            request = CommandRequest("", review_id=review_id, transport=self.transport_name)
-            fallback = self._maybe_fallback_to_http(request, str(exc))
+            fallback = self._maybe_fallback_to_http(request)
             if fallback is not None:
                 return fallback
             return self._record_transport_failure(request, str(exc))
@@ -131,8 +136,25 @@ class DBusDaemonRuntime:
             remote_entries = self.client.call_json_method("AuditTail", str(count))
         except RuntimeError:
             remote_entries = []
-        merged = [*remote_entries, *local_entries]
-        return merged[-count:]
+        return [*remote_entries, *local_entries][-count:]
+
+    def tasks(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, object]]:
+        payload = {"schema_version": "v1", "status": status, "limit": limit}
+        return self.client.call_json_method("TasksList", json.dumps(payload, separators=(",", ":")))
+
+    def task(self, task_id: str) -> dict[str, object] | None:
+        return self.client.call_json_method("TaskShow", task_id)
+
+    def control_task(self, task_id: str, operation: str, *, expected_revision: int, owner: str | None = None, reason: str = "") -> dict[str, object]:
+        payload = {
+            "schema_version": "v1",
+            "task_id": task_id,
+            "operation": operation,
+            "expected_revision": expected_revision,
+            "owner": owner,
+            "reason": reason,
+        }
+        return self.client.call_json_method("TaskControl", json.dumps(payload, separators=(",", ":")))
 
     def _record_transport_failure(self, request: CommandRequest, message: str) -> CommandResult:
         result = transport_error_result(self.transport_name, message, request=request)
@@ -149,14 +171,16 @@ class DBusDaemonRuntime:
         )
         return replace(result, audit_id=audit_id)
 
-    def _maybe_fallback_to_http(self, request: CommandRequest, message: str) -> CommandResult | None:
+    def _maybe_fallback_to_http(self, request: CommandRequest) -> CommandResult | None:
         if runtime_mode() != "auto":
             return None
-        client = self.http_fallback_client
-        if client is None:
-            client = HTTPDaemonClient()
-            if not client.is_available():
-                return None
+        supplied_client = self.http_fallback_client
+        try:
+            client = supplied_client or HTTPDaemonClient()
+        except ValueError:
+            return None
+        if supplied_client is None and not client.is_available():
+            return None
         return HTTPDaemonRuntime(client, audit=self.audit).handle(replace(request, transport="http"))
 
 
@@ -168,9 +192,8 @@ class HTTPDaemonRuntime:
         self.audit = audit or AuditLog()
 
     def handle(self, request: CommandRequest) -> CommandResult:
-        payload = command_request_payload(request)
         try:
-            response = self.client.request_payload(payload)
+            response = self.client.request_payload(command_request_payload(request))
         except RuntimeError as exc:
             return self._record_transport_failure(request, str(exc))
         return with_transport(command_result_from_payload(response), self.transport_name)
@@ -192,10 +215,11 @@ class HTTPDaemonRuntime:
         return payload.get("reviews", []) if isinstance(payload, dict) else []
 
     def reject_review(self, review_id: str) -> CommandResult:
+        request = CommandRequest("", review_id=review_id, transport=self.transport_name)
         try:
             response = self.client.request_payload({"schema_version": "v1", "review_id": review_id, "reject": True})
         except RuntimeError as exc:
-            return self._record_transport_failure(CommandRequest("", review_id=review_id, transport=self.transport_name), str(exc))
+            return self._record_transport_failure(request, str(exc))
         return with_transport(command_result_from_payload(response), self.transport_name)
 
     def audit_tail(self, count: int = 20) -> list[dict[str, Any]]:
@@ -205,8 +229,37 @@ class HTTPDaemonRuntime:
             remote_entries = payload.get("entries", []) if isinstance(payload, dict) else []
         except RuntimeError:
             remote_entries = []
-        merged = [*remote_entries, *local_entries]
-        return merged[-count:]
+        return [*remote_entries, *local_entries][-count:]
+
+    def tasks(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, object]]:
+        query = urllib.parse.urlencode({"status": status, "limit": limit} if status is not None else {"limit": limit})
+        payload = self.client.get_json(f"/v1/tasks?{query}")
+        return payload.get("tasks", []) if isinstance(payload, dict) else []
+
+    def task(self, task_id: str) -> dict[str, object] | None:
+        payload = self.client.get_json(f"/v1/tasks/{urllib.parse.quote(task_id, safe='')}")
+        return payload if isinstance(payload, dict) else None
+
+    def control_task(
+        self,
+        task_id: str,
+        operation: str,
+        *,
+        expected_revision: int,
+        owner: str | None = None,
+        reason: str = "",
+    ) -> dict[str, object]:
+        payload = self.client.post_json(
+            f"/v1/tasks/{urllib.parse.quote(task_id, safe='')}/control",
+            {
+                "schema_version": "v1",
+                "operation": operation,
+                "expected_revision": expected_revision,
+                "owner": owner,
+                "reason": reason,
+            },
+        )
+        return payload if isinstance(payload, dict) else {"error": "invalid_response"}
 
     def _record_transport_failure(self, request: CommandRequest, message: str) -> CommandResult:
         result = transport_error_result(self.transport_name, message, request=request)
@@ -268,14 +321,7 @@ class DBusDaemonClient:
             *args,
         ]
         try:
-            completed = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=timeout + 5,
-                env={**os.environ, "LC_ALL": "C"},
-            )
+            completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout + 5, env={**os.environ, "LC_ALL": "C"})
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"{method} timed out after {timeout} seconds") from exc
         if completed.returncode != 0:
@@ -286,6 +332,7 @@ class DBusDaemonClient:
 class HTTPDaemonClient:
     def __init__(self, base_url: str | None = None) -> None:
         self.base_url = (base_url or os.environ.get("VIBEOS_DAEMON_URL") or "http://127.0.0.1:8765").rstrip("/")
+        _require_loopback_http_url(self.base_url)
 
     def is_available(self) -> bool:
         if os.environ.get("VIBEOS_PREFER_LOCAL_BROKER") == "1":
@@ -359,57 +406,32 @@ def build_runtime() -> LocalRuntime | DBusDaemonRuntime | HTTPDaemonRuntime:
     require_daemon = daemon_required()
     if mode == "local" or env_flag("VIBEOS_PREFER_LOCAL_BROKER"):
         if require_daemon:
-            raise RuntimeSelectionError(
-                "daemon transport is required, but the local broker was forced",
-                mode=mode,
-                configured_transport="local",
-                require_daemon=True,
-                detail={"reason": "local broker override conflicts with daemon-required mode"},
-            )
+            raise _selection_error("local broker conflicts with daemon-required mode", mode, "local", require_daemon)
         return LocalRuntime()
     if mode == "dbus":
         client = DBusDaemonClient()
-        if not client.is_available():
-            raise RuntimeSelectionError(
-                "configured D-Bus daemon transport is unavailable",
-                mode=mode,
-                configured_transport="dbus",
-                require_daemon=require_daemon,
-                detail={"reason": "gdbus call to org.vibeos.Agent did not succeed"},
-            )
-        return DBusDaemonRuntime(client)
+        if client.is_available():
+            return DBusDaemonRuntime(client)
+        raise _selection_error("D-Bus daemon transport is unavailable", mode, "dbus", require_daemon)
     if mode == "http":
-        client = HTTPDaemonClient()
-        if not client.is_available():
-            raise RuntimeSelectionError(
-                "configured HTTP daemon transport is unavailable",
-                mode=mode,
-                configured_transport="http",
-                require_daemon=require_daemon,
-                detail={"base_url": client.base_url, "reason": "HTTP daemon status check did not succeed"},
-            )
-        return HTTPDaemonRuntime(client)
+        client = _http_client(mode, require_daemon)
+        if client.is_available():
+            return HTTPDaemonRuntime(client)
+        raise _selection_error("HTTP daemon transport is unavailable", mode, "http", require_daemon)
     if mode != "auto":
-        raise RuntimeSelectionError(
-            f"unknown runtime mode: {mode}",
-            mode=mode,
-            configured_transport="unknown",
-            require_daemon=require_daemon,
-        )
-
-    client = DBusDaemonClient()
-    if client.is_available():
-        return DBusDaemonRuntime(client)
-    http_client = HTTPDaemonClient()
+        raise _selection_error(f"unsupported runtime transport: {mode}", mode, mode, require_daemon)
+    dbus_client = DBusDaemonClient()
+    if dbus_client.is_available():
+        return DBusDaemonRuntime(dbus_client)
+    http_client = _http_client(mode, require_daemon)
     if http_client.is_available():
         return HTTPDaemonRuntime(http_client)
     if require_daemon:
-        raise RuntimeSelectionError(
+        raise _selection_error(
             "daemon transport is required, but neither D-Bus nor HTTP is available",
-            mode=mode,
-            configured_transport="daemon",
-            require_daemon=True,
-            detail={"base_url": http_client.base_url, "reason": "no daemon transport passed availability checks"},
+            mode,
+            "daemon",
+            require_daemon,
         )
     return LocalRuntime()
 
@@ -418,66 +440,52 @@ def detect_runtime_entry() -> tuple[str, str, dict[str, Any]]:
     mode = runtime_mode()
     require_daemon = daemon_required()
     if mode == "local" or env_flag("VIBEOS_PREFER_LOCAL_BROKER"):
-        if require_daemon:
-            return (
-                "local",
-                "fail",
-                {
-                    "mode": mode,
-                    "require_daemon": True,
-                    "reason": "local broker override conflicts with daemon-required mode",
-                },
-            )
-        return ("local", "warn", {"mode": mode, "reason": "forced local broker"})
+        status = "fail" if require_daemon else "warn"
+        return "local", status, {"mode": mode, "require_daemon": require_daemon, "reason": "forced local broker"}
     if mode == "dbus":
-        client = DBusDaemonClient()
-        if client.is_available():
-            return ("dbus", "ok", {"mode": mode, "require_daemon": require_daemon})
-        return ("dbus", "fail", {"mode": mode, "require_daemon": require_daemon, "reason": "configured dbus transport is unavailable"})
+        available = DBusDaemonClient().is_available()
+        status = "ok" if available else "fail"
+        reason = None if available else "configured D-Bus transport is unavailable"
+        return "dbus", status, {"mode": mode, "require_daemon": require_daemon, "reason": reason}
     if mode == "http":
-        client = HTTPDaemonClient()
-        if client.is_available():
-            return ("http", "ok", {"mode": mode, "base_url": client.base_url, "require_daemon": require_daemon})
-        return (
-            "http",
-            "fail",
-            {
-                "mode": mode,
-                "base_url": client.base_url,
-                "require_daemon": require_daemon,
-                "reason": "configured http transport is unavailable",
-            },
-        )
+        try:
+            client = HTTPDaemonClient()
+        except ValueError as exc:
+            return "http", "fail", {"mode": mode, "require_daemon": require_daemon, "reason": str(exc)}
+        available = client.is_available()
+        status = "ok" if available else "fail"
+        reason = None if available else "configured HTTP transport is unavailable"
+        return "http", status, {"mode": mode, "require_daemon": require_daemon, "base_url": client.base_url, "reason": reason}
     if mode != "auto":
-        return ("local", "fail", {"mode": mode, "require_daemon": require_daemon, "reason": "unknown runtime mode"})
-
-    dbus_client = DBusDaemonClient()
-    if dbus_client.is_available():
-        return ("dbus", "ok", {"mode": "auto", "require_daemon": require_daemon})
-    http_client = HTTPDaemonClient()
+        return mode, "fail", {"mode": mode, "require_daemon": require_daemon, "reason": "unsupported transport"}
+    if DBusDaemonClient().is_available():
+        return "dbus", "ok", {"mode": mode, "require_daemon": require_daemon}
+    try:
+        http_client = HTTPDaemonClient()
+    except ValueError as exc:
+        return "http", "fail", {"mode": mode, "require_daemon": require_daemon, "reason": str(exc)}
     if http_client.is_available():
         return (
             "http",
             "ok",
             {
-                "mode": "auto",
-                "base_url": http_client.base_url,
+                "mode": mode,
                 "require_daemon": require_daemon,
-                "reason": "dbus unavailable; using http daemon",
-            },
-        )
-    if require_daemon:
-        return (
-            "local",
-            "fail",
-            {
-                "mode": "auto",
                 "base_url": http_client.base_url,
-                "require_daemon": True,
-                "reason": "no daemon transport available",
+                "reason": "D-Bus unavailable; using deprecated HTTP compatibility",
             },
         )
-    return ("local", "warn", {"mode": "auto", "require_daemon": False, "reason": "no daemon transport available; falling back to local broker"})
+    status = "fail" if require_daemon else "warn"
+    return (
+        "local",
+        status,
+        {
+            "mode": mode,
+            "require_daemon": require_daemon,
+            "base_url": http_client.base_url,
+            "reason": "no daemon transport available; using local broker" if not require_daemon else "no daemon transport available",
+        },
+    )
 
 
 def command_result_from_payload(payload: dict[str, Any]) -> CommandResult:
@@ -492,11 +500,11 @@ def command_result_from_payload(payload: dict[str, Any]) -> CommandResult:
             requires_confirmation=bool(intent_payload.get("requires_confirmation", False)),
         ),
         result=payload.get("result"),
-        selected_target=str(payload["selected_target"]) if payload.get("selected_target") is not None else None,
-        trace_run_id=str(payload["trace_run_id"]) if payload.get("trace_run_id") is not None else None,
-        audit_id=str(payload["audit_id"]) if payload.get("audit_id") is not None else None,
-        review_id=str(payload["review_id"]) if payload.get("review_id") is not None else None,
-        transport=str(payload["transport"]) if payload.get("transport") is not None else None,
+        selected_target=_optional_text(payload.get("selected_target")),
+        trace_run_id=_optional_text(payload.get("trace_run_id")),
+        audit_id=_optional_text(payload.get("audit_id")),
+        review_id=_optional_text(payload.get("review_id")),
+        transport=_optional_text(payload.get("transport")),
         message=str(payload.get("message", "")),
         review=permission_review_from_payload(review_payload),
         execution_status=str(payload.get("execution_status", "not_started")),
@@ -519,17 +527,14 @@ def permission_review_from_payload(payload: dict[str, Any] | None) -> Permission
 
 
 def with_transport(result: CommandResult, transport: str) -> CommandResult:
-    if result.transport == transport:
-        return result
-    return replace(result, transport=transport)
+    return result if result.transport == transport else replace(result, transport=transport)
 
 
 def transport_error_result(transport: str, message: str, request: CommandRequest | None = None) -> CommandResult:
-    lowered = message.lower()
-    error_code = "transport_timeout" if "timed out" in lowered or "timeout" in lowered else "transport_unavailable"
+    error_code = "transport_timeout" if "timeout" in message.lower() or "timed out" in message.lower() else "transport_unavailable"
     utterance = request.utterance if request is not None else ""
-    run_id = _make_transport_run_id(utterance, transport)
-    attempt_id = _make_transport_attempt_id(run_id, transport)
+    run_id = f"run_{sha256(f'{utc_now_iso()}:{transport}:{utterance}'.encode('utf-8')).hexdigest()[:12]}"
+    attempt_id = f"attempt_{sha256(f'{run_id}:{transport}'.encode('utf-8')).hexdigest()[:10]}"
     failure = FailureClassification(
         failure_class="transport_timeout" if error_code == "transport_timeout" else "environment_unreachable",
         message=message,
@@ -540,24 +545,14 @@ def transport_error_result(transport: str, message: str, request: CommandRequest
         "error": error_code,
         "transport": transport,
         "message": message,
-        "run": asdict(
-            AgentRun(
-                run_id=run_id,
-                goal_id="transport_goal_unresolved",
-                utterance=utterance,
-                status="failed",
-                selected_transport=transport,
-                attempt_ids=(attempt_id,),
-                final_outcome="failed",
-            )
-        ),
+        "run": asdict(AgentRun(run_id, "transport_goal_unresolved", utterance, "failed", transport, (attempt_id,), "failed")),
         "attempts": [
             asdict(
                 PlanAttempt(
-                    attempt_id=attempt_id,
-                    run_id=run_id,
-                    attempt_index=1,
-                    trigger="transport_request",
+                    attempt_id,
+                    run_id,
+                    1,
+                    "transport_request",
                     selected_route_id="daemon_transport",
                     failure=failure,
                     replan_decision=ReplanDecision(action="stop", reason=message),
@@ -577,11 +572,30 @@ def transport_error_result(transport: str, message: str, request: CommandRequest
     )
 
 
-def _make_transport_run_id(utterance: str, transport: str) -> str:
-    digest = sha256(f"transport:{utc_now_iso()}:{transport}:{utterance}:{len(utterance)}".encode("utf-8")).hexdigest()[:12]
-    return f"run_{digest}"
+def _selection_error(message: str, mode: str, transport: str, required: bool) -> RuntimeSelectionError:
+    return RuntimeSelectionError(message, mode=mode, configured_transport=transport, require_daemon=required)
 
 
-def _make_transport_attempt_id(run_id: str, transport: str) -> str:
-    digest = sha256(f"{run_id}:{transport}:1".encode("utf-8")).hexdigest()[:10]
-    return f"attempt_1_{digest}"
+def _http_client(mode: str, required: bool) -> HTTPDaemonClient:
+    try:
+        return HTTPDaemonClient()
+    except ValueError as exc:
+        raise _selection_error(str(exc), mode, "http", required) from exc
+
+
+def _require_loopback_http_url(base_url: str) -> None:
+    parsed = urllib.parse.urlparse(base_url)
+    if parsed.scheme != "http" or parsed.username is not None or parsed.password is not None or parsed.hostname is None:
+        raise ValueError("HTTP compatibility URL must be an unauthenticated loopback http:// URL")
+    if parsed.hostname.lower() == "localhost":
+        return
+    try:
+        address = ip_address(parsed.hostname)
+    except ValueError as exc:
+        raise ValueError("HTTP compatibility URL host must be loopback") from exc
+    if not address.is_loopback:
+        raise ValueError("HTTP compatibility transport is loopback-only")
+
+
+def _optional_text(value: object) -> str | None:
+    return str(value) if value is not None else None

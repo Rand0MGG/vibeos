@@ -380,12 +380,28 @@ def default_domain_registry(known_verifier_ids: tuple[str, ...]) -> DomainRegist
     )
     browser_routes = (
         RouteDefinition(
+            route_id="portal_open_uri_route",
+            domain_id="browser",
+            builder_name="build_browser_open_url_plan",
+            required_capability_ids=("portal.open_uri",),
+            required_context_package_ids=("session_context", "browser_context"),
+            default_verifier_ids=("browser_url_opened",),
+        ),
+        RouteDefinition(
             route_id="browser_open_url_route",
             domain_id="browser",
             builder_name="build_browser_open_url_plan",
             required_capability_ids=("browser.open_url",),
             required_context_package_ids=("session_context", "browser_context"),
             default_verifier_ids=("browser_url_opened",),
+        ),
+        RouteDefinition(
+            route_id="browser_named_target_route",
+            domain_id="browser",
+            builder_name="build_browser_open_url_plan",
+            required_capability_ids=("browser.open_named_target",),
+            required_context_package_ids=("session_context", "browser_context"),
+            default_verifier_ids=("browser_goal_page_identity",),
         ),
         RouteDefinition(
             route_id="browser_search_web_route",
