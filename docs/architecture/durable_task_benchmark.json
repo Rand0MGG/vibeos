@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-07-17",
+  "environment": "FedoraLinux-44 WSL, reconciliation worktree on /mnt/c",
+  "command": "python scripts/benchmark_durable_tasks.py",
+  "target": {
+    "tasks": 64,
+    "workers": 8
+  },
+  "metrics": {
+    "wall_seconds": 0.198,
+    "throughput_tasks_per_second": 323.59,
+    "mean_task_commit_ms": 19.63,
+    "p95_task_commit_ms": 56.46,
+    "max_task_commit_ms": 195.02,
+    "lock_or_commit_errors": 0
+  },
+  "thresholds": {
+    "max_p95_task_commit_ms": 2500.0,
+    "max_wall_seconds": 20.0,
+    "max_errors": 0
+  },
+  "row_counts": {
+    "task_runs": 64,
+    "domain_events": 64,
+    "outbox": 64
+  },
+  "errors": [],
+  "thresholds_met": true
+}

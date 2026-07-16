@@ -48,3 +48,9 @@ clarification restart, all controls, privacy, old-data migration, 19 capability
 contracts, and eight subprocess crash boundaries. See the
 [compatibility matrix](goal03_replacement_compatibility_matrix.md) for deletion
 evidence and environment-specific outcomes.
+
+The 2026-07-17 Fedora WSL benchmark completed 64 tasks with 8 workers in
+`0.198 s`, with `56.46 ms` p95 commit latency and zero lock/commit errors. This
+is below the stored `2,500 ms` p95 and `20 s` wall thresholds; the complete
+machine-readable result is in
+[`durable_task_benchmark.json`](durable_task_benchmark.json).
