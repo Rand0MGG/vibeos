@@ -24,11 +24,13 @@ VibeOS has a capability permission layer:
 
 See [docs/architecture/capability_registry.md](docs/architecture/capability_registry.md).
 
-L2 approvals are bound to a stored `review_id`, so approving an action does not re-run model parsing.
-Claimed approvals are consumed after successful completion and explicitly
-released after a failed real execution; `--dry-run` previews without consuming.
-Pending L2 reviews expire after `VIBEOS_REVIEW_TTL_SECONDS`, defaulting to 600 seconds.
-Permission review also checks action targets, such as URI scheme, clipboard content, and app/window target shape.
+L2 approvals are bound to the durable task, step, and current safety-review
+digest, so approval does not re-run model parsing or authorize a changed action.
+Approval uses the task revision plus a fenced lease, and the same interaction
+cannot dispatch twice. `--dry-run` previews without consuming the pending
+interaction; execution failures enter durable recovery or reconciliation.
+Permission review also checks action targets, such as URI scheme, clipboard
+content, and app/window target shape.
 
 ## Quick Start
 

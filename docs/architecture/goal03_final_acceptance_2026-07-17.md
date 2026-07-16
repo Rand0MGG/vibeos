@@ -32,11 +32,12 @@ final command
 | `d1c0b1c` | current architecture and rollback documentation |
 | `3f61530` | restored durable concurrency benchmark gate and report |
 | `fbfd2ab` | truthful explicit-offline provider diagnostic |
-| `self` | this final evidence and status documentation only |
+| `fa83360` | final evidence, status, WSL, and root README documentation |
+| `self` | completion-audit corrections to active product documentation only |
 
 The branch is a descendant of Goal 01; it was not produced by merging the
-unreconciled checkpoint. The final Git diff after staging this evidence is 117
-files changed, 10,174 insertions, and 10,641 deletions.
+unreconciled checkpoint. The final Git diff after staging this evidence is 120
+files changed, 10,224 insertions, and 10,665 deletions.
 
 ## Independent baseline and normalized compatibility
 
@@ -139,6 +140,24 @@ offline status task. It was never pointed at the upgraded database. The
 preserved Goal 03 database retained the same SHA-256 and remained readable.
 After rehearsal, `main`, `origin/main`, the Goal 02 checkpoint, and the Goal 03
 branch still resolved to their expected refs.
+
+## Requirement-by-requirement completion audit
+
+| Goal 03 acceptance condition | Authoritative current evidence | Status |
+| --- | --- | --- |
+| Preserve every confirmed Goal 02/PM path | checkpoint diff has 116 paths: 115 inventoried candidate paths plus the manifest itself; commit `7c77044` has parent `a6d809f` | passed |
+| Keep `main` at Goal 01 and retain a repeatable detached baseline | `main`/`origin/main` resolve to `a6d809f`; independent Goal 01 environment passed 302 tests | passed |
+| Reconcile from the clean ancestor in logical groups | first Goal 03 commit has ancestor `a6d809f`; the commit table above separates kernel, adapters, behavior, deletion, fixes, and docs | passed |
+| Cover every public entry, deletion, and capability | compatibility matrix has all public surfaces, 12 legacy-module rows, and exactly 19 capability rows | passed |
+| Use one Durable Task Store with no dual task kernel | architecture guard is clean; legacy source paths are absent; CLI/D-Bus/HTTP/Python one-repository contract passes | passed |
+| Freeze `0001`; make `0002`–`0004` self-contained | ADR 0003, exact hashes, source scan, and migration contract pass | passed |
+| Prove empty, Goal 01, and interrupted upgrade equivalence | structural/data/revision comparison and restored-retry migration tests pass | passed |
+| Preserve CLI, D-Bus, thin HTTP, and explicit HTTP mode | public compatibility and transport tests pass; HTTP remains loopback-only and deprecated | passed |
+| Prove 19 abilities, review, clarification, controls, and recovery | 19-row table suite, 687 durable tests, behavior tests, and eight subprocess crash boundaries pass | passed |
+| Delete only after equivalent replacement evidence | matrix commit precedes deletion commit; all listed old production paths are absent after the post-deletion full suite | passed |
+| Pass full quality gates without overstating WSL/mock/dry-run | 953 tests, Ruff, strict mypy, architecture guard, truthful dry-run evidence, D-Bus and WSLg observations are recorded above | passed |
+| Keep a clean reviewable branch and rehearse rollback | clean status, ordered commits, read-only export, independent Goal 01 artifact/database pair, and stable hash are proven above | passed |
+| Fast-forward only after explicit user approval | `main` is unchanged and no merge has run | pending user approval |
 
 ## Remaining bounded debt and merge gate
 
