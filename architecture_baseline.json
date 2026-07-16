@@ -3,9 +3,23 @@
   "new_code": {
     "paths": [
       "src/vibeos/core",
+      "src/vibeos/durable_action_executor.py",
+      "src/vibeos/durable_task_driver.py",
+      "src/vibeos/durable_task_engine.py",
+      "src/vibeos/durable_task_lease.py",
+      "src/vibeos/durable_task_models.py",
+      "src/vibeos/durable_task_planning.py",
+      "src/vibeos/durable_task_recovery.py",
+      "src/vibeos/durable_task_results.py",
+      "src/vibeos/durable_task_resumer.py",
+      "src/vibeos/durable_task_support.py",
       "src/vibeos/daemon.py",
       "src/vibeos/dbus_service.py",
-      "migrations"
+      "src/vibeos/task_application.py",
+      "migrations/env.py",
+      "migrations/versions/0001_core_foundation.py",
+      "migrations/versions/0003_repair_durable_task_semantics.py",
+      "migrations/versions/0004_goal_contract_version_index.py"
     ],
     "max_module_lines": 400,
     "max_function_complexity": 18,
@@ -25,35 +39,23 @@
       "owner": "Goal 02-04 vertical migration",
       "deletion_gate": "planning and model calls are owned by the durable kernel and model gateway"
     },
-    "src/vibeos/goal_loop.py": {
-      "max_lines": 1173,
-      "max_function_complexity": 42,
-      "owner": "Goal 02",
-      "deletion_gate": "all 19 capabilities and review resumes use the durable task engine"
-    },
-    "src/vibeos/reviews.py": {
-      "max_lines": 810,
-      "max_function_complexity": 19,
-      "owner": "Goal 02",
-      "deletion_gate": "review state is served directly by typed unified repositories"
-    },
     "src/vibeos/understanding.py": {
       "max_lines": 754,
       "max_function_complexity": 35,
       "owner": "Goal 03",
       "deletion_gate": "provider calls use the model gateway and strict contracts"
     },
-    "src/vibeos/agent_runtime.py": {
-      "max_lines": 749,
-      "max_function_complexity": 19,
-      "owner": "Goal 02",
-      "deletion_gate": "historical compatibility callers are removed or migrated"
+    "migrations/versions/0002_durable_task_engine.py": {
+      "max_lines": 531,
+      "max_function_complexity": 18,
+      "owner": "Goal 03 migration freeze",
+      "deletion_gate": "the frozen historical migration is retired under a future release migration policy; it is immutable after Goal 03"
     },
     "src/vibeos/runtime.py": {
-      "max_lines": 587,
-      "max_function_complexity": 12,
-      "owner": "Goal 02",
-      "deletion_gate": "D-Bus is the sole supported local daemon transport"
+      "max_lines": 601,
+      "max_function_complexity": 17,
+      "owner": "Goal 09 HTTP compatibility retirement",
+      "deletion_gate": "repository callers have migrated to D-Bus and the Goal 09 delivery decision retires the deprecated HTTP runtime"
     }
   }
 }

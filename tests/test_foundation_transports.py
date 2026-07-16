@@ -8,12 +8,12 @@ from typing import Any
 from vibeos.audit import AuditLog
 from vibeos.broker import CapabilityBroker
 from vibeos.cli import main
+from vibeos.core.adapters.database import CoreDatabase
 from vibeos.core.adapters.http import HttpRequest
 from vibeos.core.adapters.lifecycle import DatabaseLifecycleComponent
 from vibeos.core.application import AsyncSupervisor
 from vibeos.daemon import DaemonHttpRouter, build_status_payload
 from vibeos.models import CommandRequest
-from vibeos.reviews import ReviewStore
 from vibeos.runtime import LocalRuntime
 
 from tests.support_intent_broker import FixtureIntentBroker
@@ -120,7 +120,7 @@ def make_broker(tmp_path: Path, *, notifications: FixtureNotifications | None = 
         portal=FixturePortal(),
         notifications=notifications or FixtureNotifications(),
         audit=AuditLog(tmp_path / "audit.jsonl"),
-        reviews=ReviewStore(tmp_path / "reviews.jsonl"),
+        database=CoreDatabase(tmp_path / "tasks.sqlite3"),
     )
 
 
