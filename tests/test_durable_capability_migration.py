@@ -68,6 +68,14 @@ CONTRACTS: dict[str, CapabilityContract] = {
 }
 
 
+def test_capability_contract_fixture_exactly_covers_the_registry() -> None:
+    registry = set(CAPABILITIES)
+
+    assert len(registry) == 19
+    assert set(TARGETS) == registry
+    assert set(CONTRACTS) == registry
+
+
 class OneIntentBroker:
     def __init__(self, action: str) -> None:
         self.action = action
