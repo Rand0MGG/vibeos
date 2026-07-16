@@ -40,9 +40,9 @@ python scripts/architecture_guard.py
 要求：无 lint、格式、类型、测试或架构违规。`docs/goals/agent_native/`
 中的 Goal 合同不可由执行任务修改。
 
-2026-07-16 Goal 02 修复后完整结果：`901 passed in 30.40s`；Ruff lint/format、
-44 个声明源码文件的 strict mypy 和 architecture guard 全部通过。持久化任务
-专项为 `687 passed in 13.27s`。
+2026-07-17 Goal 03 整合后完整结果：`953 passed in 41.21s`；Ruff lint/format、
+48 个声明源码文件的 strict mypy 和 architecture guard 全部通过。持久化任务
+专项为 `687 passed in 12.60s`。
 
 ## 3. Goal 02 持久化任务专项
 
@@ -69,8 +69,8 @@ python scripts/benchmark_durable_tasks.py
 
 实测报告见 `docs/architecture/durable_task_benchmark.json`。
 
-2026-07-16 最新基准：p95 `59.78 ms`、wall `0.245 s`、吞吐
-`261.66 tasks/s`、lock/commit error 为 0。
+2026-07-17 最新基准：p95 `56.46 ms`、wall `0.198 s`、吞吐
+`323.59 tasks/s`、lock/commit error 为 0。
 
 ## 4. CLI 与本地路径
 

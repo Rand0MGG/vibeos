@@ -36,8 +36,8 @@ Core logic can be exercised anywhere with Python 3.11+:
 
 ```powershell
 python -m pytest
-python -m vibeos.cli ask "打开浏览器" --dry-run
-python -m vibeos.cli ask "关闭浏览器" --dry-run --json
+python -m vibeos.cli ask "打开浏览器" --offline --dry-run
+python -m vibeos.cli ask "关闭浏览器" --offline --dry-run --json
 python -m vibeos.cli doctor --json
 python scripts/verify_local.py
 ```
@@ -77,7 +77,9 @@ export OPENAI_BASE_URL="https://api.openai.com/v1"
 export OPENAI_MODEL="..."
 ```
 
-Without an API key, VibeOS uses deterministic local rule-based synthesis and planning for the supported task surface.
+Provider-backed planning fails closed when no API key is configured. Use the
+explicit `--offline` flag for deterministic local rule-based synthesis and
+planning.
 
 ## Current Architecture
 
@@ -111,22 +113,26 @@ Task-plan command results also expose:
 - `run`
 - `attempts`
 
-Supported tasks run through `GoalLoop` as the single default orchestration
+Supported tasks run through the durable task engine as the single production
 state machine. `CommandService` owns transport-neutral dispatch, and the typed
-`TaskApplicationService` owns task start/review resume. The explicit
-composition root assembles dependencies; `CapabilityBroker` is only a
-compatibility facade, not a parallel retry/replan loop. Registered
-implementations live in domain modules under `src/vibeos/tools/`, while
-GoalLoop coordinates typed planning, observation, review, execution,
-acceptance, and recovery services. See
+`TaskApplicationService` owns task start, review/clarification resume, and CAS
+controls. State, events, outbox messages, leases, proposals, receipts, and
+evidence commit to one SQLite database. Registered implementations live in
+domain modules under `src/vibeos/tools/`. See
 [docs/architecture/runtime_convergence.md](docs/architecture/runtime_convergence.md) for the ownership
-map, transactional review semantics, trace policy, and the WSL/VM boundary.
+map and [docs/architecture/durable_task_engine.md](docs/architecture/durable_task_engine.md)
+for recovery and control semantics.
 
 `--debug` on `vibe plan`, `vibe ask`, and `vibe approve` includes raw provider payloads in `debug_trace` with redaction and truncation safeguards.
 
-Normal `vibe ask` and `vibe plan` requests use the configured intent broker on the main path. The deterministic `RuleIntentBroker` is reserved for `--offline` and fallback behavior, and web-like targets such as `open baidu.com` or `打开百度官网` prefer browser semantics over eager `app.open` coercion.
+Normal `vibe ask` and `vibe plan` requests use the configured intent broker on
+the main path. The deterministic `RuleIntentBroker` is reserved for explicit
+`--offline` operation. Web-like targets such as `open baidu.com` or
+`打开百度官网` prefer browser semantics over eager `app.open` coercion.
 
-Configured model calls no longer silently collapse into rule parsing when the provider times out or returns an invalid payload. `RuleIntentBroker` remains available for `--offline` and missing-model setups, but provider-side failures now surface as explicit planning errors.
+Missing provider configuration, timeouts, and invalid provider payloads surface
+as explicit planning errors instead of silently changing semantics. Use
+`--offline` when deterministic local parsing is intended.
 
 Browser postcondition evidence is attempt-scoped:
 
@@ -163,6 +169,13 @@ vibe ask "关闭浏览器" --json
 vibe reviews pending --json
 vibe reviews reject rev_... --json
 vibe approve rev_... --json
+vibe tasks list --json
+vibe tasks show task_... --json
+vibe tasks pause task_... --expected-revision 4 --reason "operator hold" --json
+vibe tasks resume task_... --expected-revision 5 --json
+vibe tasks takeover task_... --expected-revision 6 --owner alice --json
+vibe tasks release task_... --expected-revision 7 --json
+vibe tasks cancel task_... --expected-revision 8 --json
 vibe ask "打开 https://deepseek.com" --json
 vibe approve rev_... --json
 vibe ask "删除下载目录" --json

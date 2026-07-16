@@ -51,8 +51,8 @@ modules are physically removed after their public contracts passed.
 The FedoraLinux-44 WSL integration worktree currently reports:
 
 ```text
-python -m pytest -q                   -> 952 passed in 42.42s
-ruff format --check                  -> 170 files already formatted
+python -m pytest -q                   -> 953 passed in 41.21s
+ruff format --check                  -> 171 files already formatted
 ruff check                           -> passed
 mypy                                 -> 0 issues in 48 source files
 python scripts/architecture_guard.py -> ok; 0 violations
@@ -60,9 +60,10 @@ python scripts/architecture_guard.py -> ok; 0 violations
 
 The 19-capability matrix, old-data upgrade, CLI/D-Bus/HTTP/Python convergence,
 review/clarification restart, user controls, worker recovery, and eight real
-subprocess crash boundaries are included in that suite. Final Goal 03 WSL
-smoke, independent Goal 01 comparison, and rollback rehearsal are recorded
-separately before merge approval.
+subprocess crash boundaries are included in that suite. The independent Goal
+01 comparison, session D-Bus/WSLg real-action checks, and rollback rehearsal
+are recorded in the
+[`Goal 03 final acceptance`](goal03_final_acceptance_2026-07-17.md).
 
 WSL does not prove GNOME Shell, Wayland portal UI, displayed notifications,
 clipboard contents, browser content, or real window side effects. Browser,

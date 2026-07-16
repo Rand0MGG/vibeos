@@ -34,7 +34,9 @@ instruction.
 12. [Goal 03 compatibility matrix](architecture/goal03_replacement_compatibility_matrix.md)
    — public-entry, migration, deletion, and 19-capability evidence.
 13. [WSL test standard](zh_cn/07_wsl_test_standard.md) — the required Fedora
-   WSL workflow. This is the primary local verification guide.
+    WSL workflow. This is the primary local verification guide.
+14. [Goal 03 final acceptance](architecture/goal03_final_acceptance_2026-07-17.md)
+    — independent comparison, quality gates, WSL evidence, and rollback rehearsal.
 
 ## Current documentation
 
@@ -55,6 +57,7 @@ instruction.
 | Runtime foundation | [Core foundation replacement](architecture/core_foundation.md) | Goal 01 layers, schema, lifecycle, slices, compatibility callers, and migration gates |
 | Runtime | [Capability registry](architecture/capability_registry.md) | action ownership, risk, and review policy |
 | Runtime | [Goal 03 compatibility matrix](architecture/goal03_replacement_compatibility_matrix.md) | replacement status, public contracts, and deletion evidence |
+| Runtime | [Goal 03 final acceptance](architecture/goal03_final_acceptance_2026-07-17.md) | final refs, independent environments, WSL gates, and rollback evidence |
 | Operations | [WSL test standard](zh_cn/07_wsl_test_standard.md) | repeatable Fedora WSL test environment |
 | Operations | [Goal 03 rollback](operations/goal03_reconciliation_and_rollback.md) | immutable refs, database boundary, revert order, and rehearsal |
 | Operations | [Linux session doctor](operations/linux_session_doctor.md) | diagnose GNOME/daemon integration readiness |
