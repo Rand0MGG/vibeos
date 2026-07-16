@@ -44,6 +44,7 @@ def overall_status(state: TaskRun, execution: PlanExecutionResult | None) -> str
         TaskStatus.TAKEN_OVER: "blocked",
         TaskStatus.WAITING: "blocked",
         TaskStatus.RETRY_WAIT: "blocked",
+        TaskStatus.CANCELLED: "rejected",
     }.get(state.status, "failed")
 
 

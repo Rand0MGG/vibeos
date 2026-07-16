@@ -8,7 +8,13 @@ from typing import Any
 import pytest
 from alembic import command
 
+from vibeos.apps import AppRegistry
+from vibeos.audit import AuditLog
+from vibeos.broker import CapabilityBroker
 from vibeos.core.adapters.database import CoreDatabase, DatabaseMigrationError
+from vibeos.models import AppEntry, Intent, WindowEntry
+
+from tests.support_intent_broker import FixtureIntentBroker
 
 
 HEAD_REVISION = "0004_goal_contract_version_index"
@@ -69,6 +75,106 @@ def test_empty_goal01_and_interrupted_upgrade_paths_converge(tmp_path: Path, mon
     assert step == ("step_goal01", "window.close", "pending")
 
 
+def test_goal01_pending_review_upgrade_is_publicly_resumable(tmp_path: Path) -> None:
+    database = _goal01_database(tmp_path / "review.sqlite3")
+    database.upgrade()
+    windows = _MigratedWindows()
+    broker = CapabilityBroker(
+        intent_broker=FixtureIntentBroker(),
+        windows=windows,
+        audit=AuditLog(tmp_path / "review-audit.jsonl"),
+        database=database,
+    )
+
+    pending = broker.pending_reviews()
+    rebound = broker.approve_review("review_goal01")
+    assert rebound.review_id is not None
+    approved = broker.approve_review(rebound.review_id)
+
+    assert len(pending) == 1
+    assert pending[0]["review_id"] == "review_goal01"
+    assert pending[0]["review_kind"] == "action"
+    assert rebound.status == "review_required"
+    assert rebound.message == "safety binding changed; a fresh approval is required"
+    assert rebound.review_id != "review_goal01"
+    assert approved.status == "executed"
+    assert windows.close_calls == 1
+    assert broker.pending_reviews() == []
+
+
+def test_goal01_pending_clarification_upgrade_accepts_supplemental_input(tmp_path: Path) -> None:
+    database = _goal01_database(tmp_path / "clarification.sqlite3")
+    with sqlite3.connect(database.path) as connection:
+        connection.execute(
+            "UPDATE reviews SET review_kind = 'user_input', plan_id = NULL, step_id = NULL, "
+            "utterance = 'open an application', plan_payload = NULL, snapshot_payload = NULL "
+            "WHERE review_id = 'review_goal01'"
+        )
+    database.upgrade()
+    apps = _MigratedApps()
+    broker = CapabilityBroker(
+        intent_broker=_MigratedClarifyingIntentBroker(),
+        apps=apps,
+        audit=AuditLog(tmp_path / "clarification-audit.jsonl"),
+        database=database,
+    )
+
+    pending = broker.pending_reviews()
+    resumed = broker.provide_review_input("review_goal01", "Firefox")
+
+    assert len(pending) == 1
+    assert pending[0]["review_id"] == "review_goal01"
+    assert pending[0]["review_kind"] == "user_input"
+    assert resumed.status == "executed"
+    assert apps.open_calls == 1
+    assert broker.pending_reviews() == []
+
+
+class _MigratedWindows:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    def list_windows(self):
+        return [WindowEntry(window_id="1", app_id="firefox.desktop", title="Firefox", focused=True)]
+
+    def resolve(self, query):
+        return self.list_windows() if query.lower() in {"firefox", "current"} else []
+
+    def focus(self, window):
+        return {"status": "focused", "window_id": window.window_id}
+
+    def minimize(self, window):
+        return {"status": "minimized", "window_id": window.window_id}
+
+    def maximize(self, window):
+        return {"status": "maximized", "window_id": window.window_id}
+
+    def close(self, window):
+        self.close_calls += 1
+        return {"status": "closed", "window_id": window.window_id}
+
+
+class _MigratedApps(AppRegistry):
+    def __init__(self) -> None:
+        self.open_calls = 0
+
+    def list_apps(self):
+        return [AppEntry(desktop_id="firefox.desktop", name="Firefox", keywords=("browser",))]
+
+    def open_app(self, app):
+        self.open_calls += 1
+        return {"status": "opened", "desktop_id": app.desktop_id}
+
+
+class _MigratedClarifyingIntentBroker:
+    def parse(self, utterance: str) -> Intent:
+        marker = "Additional user detail:"
+        if marker not in utterance:
+            return Intent.unknown("the application name is required")
+        name = utterance.rsplit(marker, 1)[-1].strip()
+        return Intent(action="app.open", target={"name": name}, reason="user supplied the missing application name")
+
+
 def _goal01_database(path: Path) -> CoreDatabase:
     database = CoreDatabase(path)
     command.upgrade(database._alembic_config(), "0001_core_foundation")
@@ -77,7 +183,7 @@ def _goal01_database(path: Path) -> CoreDatabase:
         "plan_id": "plan_goal01",
         "utterance": "close Firefox",
         "selected_route_id": "window_close_route",
-        "routes": [{"id": "window_close_route", "score": 1.0, "domain_id": "windows"}],
+        "routes": [{"id": "window_close_route", "score": 1.0, "domain_id": "window_management"}],
         "steps": [
             {
                 "id": "step_goal01",

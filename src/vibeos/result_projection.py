@@ -163,6 +163,7 @@ def _public_status(overall: str) -> str:
         "needs_user_input": "ambiguous",
         "dry_run": "dry_run",
         "completed": "executed",
+        "rejected": "rejected",
     }.get(overall, "failed")
 
 
@@ -174,6 +175,7 @@ def _run_status(overall: str) -> str:
         "needs_user_input": "needs_user_input",
         "blocked": "blocked",
         "incomplete": "incomplete",
+        "rejected": "rejected",
     }.get(overall, "failed")
 
 
