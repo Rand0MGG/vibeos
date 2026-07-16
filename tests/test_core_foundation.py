@@ -30,7 +30,6 @@ from vibeos.core.domain import (
     OutboxMessage,
 )
 from vibeos.notifications import NotificationAdapter
-from vibeos.reviews import ReviewStore
 from vibeos.tool_protocol import ToolExecutionContext
 
 
@@ -89,19 +88,41 @@ def test_empty_database_is_created_by_alembic_with_required_pragmas(tmp_path: Pa
     with sqlite3.connect(database.path) as connection:
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-    assert {"reviews", "review_events", "current_state", "domain_events", "outbox"} <= tables
-    assert revision == "0001_core_foundation"
+    assert {"goal_contracts", "task_runs", "task_leases", "current_state", "domain_events", "outbox"} <= tables
+    assert {"reviews", "review_events"}.isdisjoint(tables)
+    assert revision == "0004_goal_contract_version_index"
     assert database.health() == {
         "ready": True,
         "journal_mode": "wal",
         "foreign_keys": 1,
         "busy_timeout_ms": 5000,
         "schema_ready": True,
-        "alembic_revision": "0001_core_foundation",
-        "expected_alembic_revision": "0001_core_foundation",
+        "alembic_revision": "0004_goal_contract_version_index",
+        "expected_alembic_revision": "0004_goal_contract_version_index",
         "missing_tables": "",
         "path": str(database.path),
     }
+
+
+def test_legacy_goal_contract_task_uniqueness_is_repaired_for_versioning(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy-contract-uniqueness.sqlite3"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)")
+        connection.execute("INSERT INTO alembic_version VALUES ('0003_repair_durable_task_semantics')")
+        connection.execute(
+            "CREATE TABLE goal_contracts (contract_id VARCHAR(240) PRIMARY KEY, task_id VARCHAR(240) NOT NULL UNIQUE, "
+            "version INTEGER NOT NULL, schema_version VARCHAR(20) NOT NULL, payload_json TEXT NOT NULL, created_at VARCHAR(40) NOT NULL)"
+        )
+        connection.execute("INSERT INTO goal_contracts VALUES ('contract_v1','task_1',1,'v1','{}','2099-01-01T00:00:00.000Z')")
+
+    CoreDatabase(db_path).upgrade()
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("INSERT INTO goal_contracts VALUES ('contract_v2','task_1',2,'v1','{}','2099-01-01T00:00:01.000Z')")
+        versions = connection.execute("SELECT version FROM goal_contracts WHERE task_id = 'task_1' ORDER BY version").fetchall()
+        revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+    assert versions == [(1,), (2,)]
+    assert revision == "0004_goal_contract_version_index"
 
 
 def test_database_health_rejects_pragmas_without_authoritative_schema(tmp_path: Path) -> None:
@@ -115,43 +136,105 @@ def test_database_health_rejects_pragmas_without_authoritative_schema(tmp_path: 
     assert {"alembic_version", "current_state", "domain_events", "outbox"} <= set(str(health["missing_tables"]).split(","))
 
 
-def test_real_legacy_event_only_fixture_upgrades_idempotently(tmp_path: Path) -> None:
-    review_path = tmp_path / "reviews.jsonl"
-    db_path = review_path.with_suffix(".sqlite3")
-    created = {
-        "event": "created",
-        "review_id": "rev_legacy_fixture",
-        "utterance": "close Firefox",
-        "intent": {"action": "window.close", "target": {"name": "Firefox"}, "reason": "fixture", "requires_confirmation": False},
-        "review": {
-            "risk_level": "L2",
-            "review_required": True,
-            "allowed": True,
-            "reason": "fixture",
-            "effects": ["close window"],
-            "reversible": False,
-        },
-        "created_at": "2099-01-01T00:00:00.000Z",
-        "expires_at": "2099-01-01T00:10:00.000Z",
-    }
+def test_real_legacy_pending_review_fixture_upgrades_idempotently(tmp_path: Path) -> None:
+    db_path = tmp_path / "reviews.sqlite3"
     with sqlite3.connect(db_path) as connection:
-        connection.execute("CREATE TABLE review_events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, payload TEXT NOT NULL)")
-        connection.execute("INSERT INTO review_events (payload) VALUES (?)", (json.dumps(created),))
         connection.execute(
-            "INSERT INTO review_events (payload) VALUES (?)",
-            (json.dumps({"event": "approved", "review_id": "rev_legacy_fixture"}),),
+            "CREATE TABLE reviews (review_id TEXT PRIMARY KEY, status TEXT NOT NULL, review_kind TEXT NOT NULL, "
+            "plan_id TEXT, step_id TEXT, utterance TEXT NOT NULL, intent_payload TEXT NOT NULL, review_payload TEXT NOT NULL, "
+            "plan_payload TEXT, snapshot_payload TEXT, supplemental_input TEXT, pending_reason TEXT, created_at TEXT NOT NULL, "
+            "expires_at TEXT, version INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO reviews VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "rev_legacy_fixture",
+                "pending",
+                "intent",
+                None,
+                "close_firefox",
+                "close Firefox",
+                "{}",
+                "{}",
+                None,
+                None,
+                None,
+                "explicit approval required",
+                "2099-01-01T00:00:00.000Z",
+                "2099-01-01T00:10:00.000Z",
+                0,
+                "{}",
+            ),
         )
     database = CoreDatabase(db_path)
 
     database.upgrade()
     database.upgrade()
-    store = ReviewStore(review_path, database=database)
-
-    loaded = store.get("rev_legacy_fixture")
-    assert loaded is not None
-    assert loaded.status == "approved"
     with sqlite3.connect(db_path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM review_events").fetchone()[0] == 2
+        task = connection.execute("SELECT status, pending_interaction_id FROM task_runs").fetchone()
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert task == ("paused", None)
+    assert {"reviews", "review_events"}.isdisjoint(tables)
+
+
+def test_legacy_review_with_complete_plan_migrates_plan_and_steps(tmp_path: Path) -> None:
+    db_path = tmp_path / "restorable-reviews.sqlite3"
+    plan = {
+        "schema_version": "v0.3",
+        "plan_id": "plan_legacy_close",
+        "utterance": "close Firefox",
+        "selected_route_id": "window_close_route",
+        "routes": [{"id": "window_close_route", "score": 1.0, "domain_id": "windows"}],
+        "steps": [
+            {
+                "id": "close_firefox",
+                "action": "window.close",
+                "capability_id": "window.close",
+                "target": {"name": "Firefox"},
+                "risk_level": "L2",
+            }
+        ],
+    }
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "CREATE TABLE reviews (review_id TEXT PRIMARY KEY, status TEXT NOT NULL, review_kind TEXT NOT NULL, "
+            "plan_id TEXT, step_id TEXT, utterance TEXT NOT NULL, intent_payload TEXT NOT NULL, review_payload TEXT NOT NULL, "
+            "plan_payload TEXT, snapshot_payload TEXT, supplemental_input TEXT, pending_reason TEXT, created_at TEXT NOT NULL, "
+            "expires_at TEXT, version INTEGER NOT NULL DEFAULT 0, payload TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO reviews VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "rev_restorable",
+                "pending",
+                "intent",
+                plan["plan_id"],
+                "close_firefox",
+                plan["utterance"],
+                "{}",
+                "{}",
+                json.dumps(plan),
+                json.dumps({"snapshot_version": 0, "plan": plan}),
+                None,
+                "explicit approval required",
+                "2099-01-01T00:00:00.000Z",
+                None,
+                0,
+                "{}",
+            ),
+        )
+
+    database = CoreDatabase(db_path)
+    database.upgrade()
+    with sqlite3.connect(db_path) as connection:
+        task = connection.execute("SELECT status, pending_interaction_id, active_plan_revision_id, current_step_id, payload_json FROM task_runs").fetchone()
+        step = connection.execute("SELECT step_id, capability_id, status FROM task_steps").fetchone()
+
+    assert task is not None
+    assert task[:4] == ("awaiting_review", "rev_restorable", task[2], "close_firefox")
+    assert task[2]
+    assert json.loads(task[4])["active_plan_revision_id"] == task[2]
+    assert step == ("close_firefox", "window.close", "pending")
 
 
 def test_failed_migration_restores_exact_preupgrade_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -236,18 +319,15 @@ def test_process_crash_does_not_commit_partial_wal_transaction(tmp_path: Path) -
         assert connection.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
 
 
-def test_safe_downgrade_preserves_legacy_review_data(tmp_path: Path) -> None:
-    review_path = tmp_path / "reviews.jsonl"
-    store = ReviewStore(review_path)
-    with sqlite3.connect(store.db_path) as connection:
-        connection.execute("INSERT INTO review_events (review_id, event_type, created_at, payload) VALUES ('rev_keep', 'fixture', 'now', '{}')")
-    store.database.downgrade()
+def test_safe_downgrade_recreates_legacy_rollback_schema(tmp_path: Path) -> None:
+    database = CoreDatabase(tmp_path / "tasks.sqlite3")
+    database.upgrade()
+    database.downgrade()
 
-    with sqlite3.connect(store.db_path) as connection:
+    with sqlite3.connect(database.path) as connection:
         tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        assert connection.execute("SELECT COUNT(*) FROM review_events WHERE review_id = 'rev_keep'").fetchone()[0] == 1
     assert {"reviews", "review_events", "schema_migrations"} <= tables
-    assert {"current_state", "domain_events", "outbox"}.isdisjoint(tables)
+    assert {"current_state", "domain_events", "outbox", "task_runs"}.isdisjoint(tables)
 
 
 def test_two_slices_emit_typed_receipt_evidence_and_authoritative_state(tmp_path: Path) -> None:
