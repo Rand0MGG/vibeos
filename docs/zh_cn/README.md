@@ -23,11 +23,16 @@
 11. [WSL 测试标准](07_wsl_test_standard.md) — 当前本地验证的首选入口
 12. [历史索引](06_history_and_source_index.md)
 13. [Goal 01 核心底座实现](../architecture/core_foundation.md) — 新分层、统一
-    数据库、daemon 生命周期、两个迁移切片与旧边界删除门禁
+    数据库、daemon 生命周期与 Goal 02 交接
+14. [Goal 02 持久化任务引擎](../architecture/durable_task_engine.md) — 状态机、
+    Task Store、崩溃恢复、控制面与并发基准
+15. [Goal 03 替代矩阵](../architecture/goal03_replacement_compatibility_matrix.md) —
+    公共入口、旧模块、迁移和 19 项能力的等价证据
 
 当前代码与验收结论的英文权威入口：
 
 - [当前状态](../architecture/current_status.md)
 - [运行时架构](../architecture/runtime_convergence.md)
-- [最终验收审计](../architecture_completion_final_audit.md)
+- [持久化任务引擎](../architecture/durable_task_engine.md)
+- [Goal 01 时代验收审计（历史）](../architecture_completion_final_audit.md)
 - [完整文档导航](../README.md)

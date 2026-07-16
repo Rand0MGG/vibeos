@@ -1,31 +1,24 @@
 # 规划、执行与验收
 
-## 从输入到任务
+新命令先创建 `GoalContract` 和 `TaskRun`，再调用规划服务。规划产生版本化
+`PlanRevision` 与步骤；存在实质歧义时进入 `awaiting_clarification`，不会猜测
+目标、范围或现实后果。
 
-支持任务从理解与目标合成开始，受宿主注册的 domain、route 和 capability
-约束，形成经过验证的 `TaskPlan`。随后 GoalLoop 对每个步骤执行：
+每个步骤的固定顺序是：
 
-```text
-观察 -> 步骤安全审查 -> 注册工具执行 -> 后观察 -> 验证/验收
-```
+1. 预观察；
+2. 安全审查，必要时持久化等待用户批准；
+3. 获取带 fencing token 的短 lease；
+4. 在 I/O 前提交稳定幂等键和 `ActionProposal`；
+5. 通过注册工具执行；
+6. 提交 `ActionReceipt` 与 `EvidenceBundle`；
+7. 验证、接受或进入 retry/replan/clarification；
+8. 只有证据充分时提交明确终态。
 
-失败不是字符串分支，而是结构化分类后进入有限的重试、修复、重规划、请求
-用户补充信息或停止。当前格式的 review 恢复也回到同一个 GoalLoop；不会
-另起旧 runtime 或重放已完成步骤。
+调度是 at-least-once，不宣称 exactly-once。进程在外部动作成功、receipt 提交
+前崩溃时，恢复 worker 先对账；无法证明结果的副作用会暂停为 unknown，不会
+盲目重放。L0 只读动作可使用同一 proposal/attempt 安全重试。
 
-## 一次任务与多次尝试
-
-- `run` 表示一次用户目标的完整执行生命周期。
-- `attempt` 表示某个计划/路线的具体尝试，记录观察、执行、失败分类和恢复
-  决策。
-- 所有失败尝试都会保留用于审计；最终验收只接收每个已完成步骤的当前已接受
-  结果。因此成功重试不会被旧失败回执污染。
-
-## 何时算完成
-
-工具返回成功不等于任务完成。验收服务综合后置观察、verifier 和语义验收，
-再产生 `execution_status`、`acceptance_status` 与 `overall_status`。浏览器路
-径尤其要区分“已请求导航”与“已观察到目标页面或查询”。
-
-更多责任边界见 [运行时架构](../architecture/runtime_convergence.md)，完整
-执行审计见 [最终验收审计](../architecture_completion_final_audit.md)。
+等待时间是数据库中的到期条件，不使用进程 sleep。daemon 重启后扫描到期和
+可恢复任务继续执行。任务结果仍保留公开的 `execution_status`、
+`acceptance_status`、`overall_status`、`run` 和 `attempts` 字段。

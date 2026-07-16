@@ -1,45 +1,37 @@
-# VibeOS Capability Registry
+# VibeOS capability registry
 
-The executable capability source of truth is
-[`src/vibeos/capabilities.py`](../../src/vibeos/capabilities.py). Query the
-running surface with:
+The executable source of truth is
+[`src/vibeos/capabilities.py`](../../src/vibeos/capabilities.py). Query it with:
 
 ```bash
 vibe capabilities --json
 ```
 
-The registry defines action name, risk level, approval requirement, effects,
-reversibility, and target constraints. A validated task step reaches one
-registered execution route only:
-
 ```text
-GoalLoop -> StepExecutionService -> CapabilityRecipeRegistry
-         -> ToolRegistry -> domain tool -> existing adapter
+DurableTaskEngine -> DurableActionExecutor -> StepExecutionService
+  -> CapabilityRecipeRegistry -> ToolRegistry -> adapter
 ```
 
 `CapabilityBroker` does not implement capability execution.
 
-## Current registered actions
-
 | Risk | Actions |
 | --- | --- |
-| L0 — observe automatically | `app.list`, `system.status`, `window.list` |
-| L1 — bounded action with audit | `app.open`, `app.search_history`, `browser.open_named_target`, `browser.open_site_search`, `browser.open_url`, `browser.search_web`, `media.pause`, `media.play`, `media.search`, `notification.send`, `window.focus`, `window.maximize`, `window.minimize` |
-| L2 — stored review then approval | `clipboard.write`, `portal.open_uri`, `window.close` |
-| L3 — rejected | unsupported or malformed requests (`unknown` is not executable) |
+| L0 — observation | `app.list`, `system.status`, `window.list` |
+| L1 — bounded audited action | `app.open`, `app.search_history`, `browser.open_named_target`, `browser.open_site_search`, `browser.open_url`, `browser.search_web`, `media.pause`, `media.play`, `media.search`, `notification.send`, `window.focus`, `window.maximize`, `window.minimize` |
+| L2 — stored review | `clipboard.write`, `portal.open_uri`, `window.close` |
+| L3 — reject | unsupported or malformed requests; `unknown` is not executable |
 
-Media actions remain registered so planning and review stay typed, but return a
-bounded unavailable result on hosts that do not provide a dedicated media
-adapter. They never fall back to arbitrary shell or UI control.
+Media search and pause enter durable clarification when no dedicated adapter is
+available. Media play may use its declared browser fallback, but completion
+remains incomplete until independent browser observation exists. No media path
+falls back to arbitrary shell or unregistered UI control.
 
-## Adding or changing a capability
+Every capability has a Goal 03 table-driven contract for normalized target,
+risk, dry-run, real or unavailable outcome, error boundary, receipt/evidence,
+and public projection. See
+[`goal03_replacement_compatibility_matrix.md`](goal03_replacement_compatibility_matrix.md).
 
-1. Change the canonical registry and target validation.
-2. Add a host-owned recipe in `src/vibeos/tools/registry.py`.
-3. Implement one registered domain-tool route and its tests.
-4. Verify the permission level, review behavior, trace/audit output, and
-   postcondition acceptance where applicable.
-5. Update this page and run `vibe capabilities --json`.
-
-Do not add an adapter call to Broker or create a second execution path for an
-existing action.
+To add or change a capability, update the canonical registry and validation,
+add one host-owned recipe and registered tool route, prove review/receipt/
+evidence/acceptance behavior, and update this document. Do not add adapter calls
+to Broker or a second execution path.

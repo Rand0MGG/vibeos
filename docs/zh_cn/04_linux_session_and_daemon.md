@@ -1,39 +1,22 @@
-# Linux 会话、`vibe` 与 `vibed`
+# Linux 会话与 daemon
 
-- `vibe` 是 CLI 入口；无 daemon 时可以走 local transport。
-- `vibed` 是 `systemd --user` 管理的 daemon，可提供 D-Bus/HTTP transport。
-- GNOME Shell extension、portal、窗口桥、`.desktop` 注册表、通知和剪贴板
-  helper 都属于真实 Linux 会话集成，不应由 WSL dry-run 代替。
+`vibed` 由一个 asyncio supervisor 管理数据库生命周期、任务 scheduler、outbox
+dispatcher、D-Bus service 和 loopback HTTP 兼容监听。启动顺序固定；任一组件失败会
+回滚已启动组件。drain 后拒绝新请求，等待在途请求结束，再逆序停止。
 
-在真实 GNOME 主机上，先确认 CLI 与服务没有指向不同虚拟环境：
+D-Bus 是主要 daemon 控制面：
 
-```bash
-which vibe
-which vibed
-systemctl --user status vibed.service --no-pager -l
-systemctl --user cat vibed.service
-vibe doctor --json
-```
+- `CommandRequest`、`Capabilities`、`PendingReviews`；
+- `TasksList`、`TaskShow`、`TaskControl`；
+- `AppsList`、`WindowsList`、`AuditTail`、`Status`。
 
-`vibe doctor --json` 在 WSL 里出现 GNOME、portal、daemon 或扩展警告是预期
-现象；这说明环境没有桌面集成，不是这些能力已验证可用。WSL 用于确定性代码
-验证，请遵守 [WSL 测试标准](07_wsl_test_standard.md)。真实桌面验证的边界与
-最小 checklist 见 [GNOME VM 验收](../operations/gnome_vm_acceptance.md)。
+HTTP 仅绑定 loopback，带弃用响应头，并把 `/v1/*` 请求转发给同一 Broker/Task
+Store。`VIBEOS_RUNTIME=http` 保持兼容；auto 模式依次尝试 D-Bus、HTTP 和本地
+开发 runtime。显式 D-Bus 或要求 daemon 时不会静默绕过相应边界。
 
-## 单一 daemon 生命周期
+数据库启动检查 Alembic head、WAL、外键和 busy timeout。scheduler 扫描
+`ready/running/verifying/reconciling/cancel_requested` 及到期 wait；处理前必须
+获取 lease。outbox 至少投递一次，consumer 按消息与 consumer 组合去重。
 
-`vibed` 现在由一个 asyncio supervisor 统一管理数据库、D-Bus 和薄 HTTP
-兼容 adapter，生命周期为 `start -> ready -> drain -> stop`。ready 前和 drain
-后都拒绝新请求；SIGTERM 会先 drain，再按逆序停止组件。D-Bus 与 HTTP 不再
-各自拥有线程式服务生命周期。
-
-数据库组件会在任何 transport 启动前执行 Alembic，并同时验证当前 revision、
-全部权威表、WAL、外键和 busy timeout；随后重新绑定 ReviewStore 兼容连接。
-迁移、schema 或重绑定任一失败都会阻止 daemon 进入 `ready`。
-
-HTTP 暂时保留，是因为 CLI runtime fallback、`status_linux_session.sh` 和
-`collect_vm_evidence.py` 仍是真实调用者；它不包含独立业务逻辑，最迟在 Goal 02
-迁移这些调用者后删除。D-Bus 是首选本地 daemon transport。
-
-WSL 或诊断环境可使用 `vibed --dbus --offline`，它只把意图理解切换为确定性
-本地规则，不改变 capability、权限、数据库、核心切片或真实 adapter 装配。
+真实 GNOME/Wayland、portal、通知显示、剪贴板与窗口副作用仍必须在 Fedora
+GNOME VM 验收；WSL 只负责 Linux 用户态和 D-Bus 预验证。
