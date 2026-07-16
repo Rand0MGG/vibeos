@@ -160,7 +160,12 @@ class SessionDoctor:
         key_set = bool(os.environ.get("OPENAI_API_KEY"))
         if key_set:
             return DoctorCheck("model_config", "ok", "OpenAI-compatible API key is configured", {"provider": provider})
-        return DoctorCheck("model_config", "warn", "no model API key configured; local rule parser will be used", {"provider": provider})
+        return DoctorCheck(
+            "model_config",
+            "warn",
+            "no model API key configured; use --offline for the deterministic local rule parser",
+            {"provider": provider},
+        )
 
 
 def run_command(command: list[str]) -> subprocess.CompletedProcess[str]:
