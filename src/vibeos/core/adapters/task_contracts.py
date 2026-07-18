@@ -75,6 +75,7 @@ class GoalContractPayloadV1(StrictTaskContract):
     reality_boundaries: tuple[str, ...]
     version: int = Field(ge=1)
     created_at: str
+    dry_run: bool | None = None
 
 
 class TaskEventPayloadV1(StrictTaskContract):

@@ -38,19 +38,23 @@ Persisted action payloads redact credentials and omit content-bearing fields.
 ## Public control and proof
 
 CLI, D-Bus, loopback HTTP, and Python expose task list/show and revision-bound
-pause, resume, cancel, takeover, and release. `dry_run` is a distinct terminal
-state with evidence, never a successful real-world outcome.
+pause, resume, cancel, takeover, and release. `dry_run` is persisted in the
+immutable GoalContract and remains a distinct terminal state with evidence,
+never a successful real-world outcome. Recovery rebuilds the command from that
+value. A missing value from pre-`0005` active data pauses instead of defaulting
+to live execution.
 
 The suite covers the complete transition matrix, terminal revival rejection,
 atomic fault injection, CAS, concurrent leases, heartbeat/expiry fencing,
 timer/event waits, deadlines, restart scans, outbox deduplication, review and
 clarification restart, all controls, privacy, old-data migration, 19 capability
-contracts, and eight subprocess crash boundaries. See the
+contracts, eight general subprocess crash boundaries, and three dry-run crash
+combinations. See the
 [compatibility matrix](goal03_replacement_compatibility_matrix.md) for deletion
 evidence and environment-specific outcomes.
 
-The 2026-07-17 Fedora WSL benchmark completed 64 tasks with 8 workers in
-`0.198 s`, with `56.46 ms` p95 commit latency and zero lock/commit errors. This
+The 2026-07-19 Fedora WSL benchmark completed 64 tasks with 8 workers in
+`0.196 s`, with `66.22 ms` p95 commit latency and zero lock/commit errors. This
 is below the stored `2,500 ms` p95 and `20 s` wall thresholds; the complete
 machine-readable result is in
 [`durable_task_benchmark.json`](durable_task_benchmark.json).

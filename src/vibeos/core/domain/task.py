@@ -102,6 +102,7 @@ class GoalContract:
     reality_boundaries: tuple[str, ...]
     version: int
     created_at: str
+    dry_run: bool | None = None
     schema_version: str = TASK_SCHEMA_VERSION
 
 

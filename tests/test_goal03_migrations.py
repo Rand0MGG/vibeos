@@ -17,12 +17,13 @@ from vibeos.models import AppEntry, Intent, WindowEntry
 from tests.support_intent_broker import FixtureIntentBroker
 
 
-HEAD_REVISION = "0004_goal_contract_version_index"
+HEAD_REVISION = "0005_persist_dry_run_intent"
 MIGRATION_FILES = (
     "0001_core_foundation.py",
     "0002_durable_task_engine.py",
     "0003_repair_durable_task_semantics.py",
     "0004_goal_contract_version_index.py",
+    "0005_persist_dry_run_intent.py",
 )
 
 
@@ -128,6 +129,69 @@ def test_goal01_pending_clarification_upgrade_accepts_supplemental_input(tmp_pat
     assert resumed.status == "executed"
     assert apps.open_calls == 1
     assert broker.pending_reviews() == []
+
+
+def test_0005_pauses_active_task_when_legacy_execution_intent_is_unknown(tmp_path: Path) -> None:
+    path = tmp_path / "unknown-execution-intent.sqlite3"
+    database = CoreDatabase(path)
+    command.upgrade(database._alembic_config(), "0004_goal_contract_version_index")
+    created_at = "2099-01-01T00:00:00.000Z"
+    contract_payload = {
+        "schema_version": "v1",
+        "contract_id": "contract-unknown-intent",
+        "task_id": "task-unknown-intent",
+        "goal": "open Firefox",
+        "scope": [],
+        "completion_conditions": [],
+        "allowed_effects": [],
+        "reality_boundaries": [],
+        "version": 1,
+        "created_at": created_at,
+    }
+    task_payload = {
+        "schema_version": "v1",
+        "task_id": "task-unknown-intent",
+        "contract_id": "contract-unknown-intent",
+        "status": "created",
+        "revision": 0,
+        "created_at": created_at,
+        "updated_at": created_at,
+        "last_event": "created",
+    }
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "INSERT INTO goal_contracts VALUES (?,?,?,?,?,?)",
+            ("contract-unknown-intent", "task-unknown-intent", 1, "v1", json.dumps(contract_payload), created_at),
+        )
+        connection.execute(
+            "INSERT INTO task_runs (task_id, contract_id, status, revision, schema_version, payload_json, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+            ("task-unknown-intent", "contract-unknown-intent", "created", 0, "v1", json.dumps(task_payload), created_at, created_at),
+        )
+        connection.execute(
+            "INSERT INTO task_leases (task_id, fencing_token, updated_at) VALUES (?,?,?)",
+            ("task-unknown-intent", 0, created_at),
+        )
+
+    database.upgrade()
+    broker = CapabilityBroker(
+        intent_broker=FixtureIntentBroker(),
+        audit=AuditLog(tmp_path / "unknown-execution-intent.audit.jsonl"),
+        database=database,
+    )
+    contract = broker.task_repository.contract("task-unknown-intent")
+    assert contract is not None
+    assert contract.dry_run is None
+    with sqlite3.connect(path) as connection:
+        migrated_payload = json.loads(connection.execute("SELECT payload_json FROM goal_contracts").fetchone()[0])
+    assert "dry_run" in migrated_payload
+    assert migrated_payload["dry_run"] is None
+
+    broker.task_engine.resume_task("task-unknown-intent")
+
+    paused = broker.task_repository.get("task-unknown-intent")
+    assert paused is not None
+    assert paused.status.value == "paused"
+    assert paused.pending_reason == "persisted execution intent is unknown; explicit user confirmation is required"
 
 
 class _MigratedWindows:

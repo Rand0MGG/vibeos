@@ -6,13 +6,18 @@ import sys
 from pathlib import Path
 
 import pytest
+from sqlalchemy import text
 
+from vibeos.apps import AppRegistry
+from vibeos.audit import AuditLog
+from vibeos.broker import CapabilityBroker
 from vibeos.core.adapters.database import CoreDatabase
 from vibeos.core.adapters.task_repository import SqliteTaskRepository, TaskLeaseLost
 from vibeos.core.domain.task import ActionProposal, Attempt, GoalContract, PlanRevision, Step, TaskEvent, TaskEventType, TaskLease, TaskRun, TaskStatus
 from vibeos.core.domain.task_transitions import transition
 from vibeos.durable_action_executor import DurableActionExecutor
 from vibeos.task_reconciliation import ReconciliationResult
+from vibeos.models import AppEntry, Intent
 from vibeos.task_models import StepExecutionResult, TaskPlan, TaskRoute, TaskStep
 
 CRASH_BOUNDARIES = (
@@ -25,6 +30,8 @@ CRASH_BOUNDARIES = (
     "while_review_or_clarification_waits",
     "during_cancel_takeover_or_lease_expiry",
 )
+
+DRY_RUN_CRASH_BOUNDARIES = ("before_proposal", "before_external_io", "before_receipt")
 
 
 class RecordingExecution:
@@ -47,6 +54,69 @@ class FixedReconciler:
     def reconcile(self, _proposal: ActionProposal) -> ReconciliationResult:
         self.calls += 1
         return self.result
+
+
+class OpenAppIntentBroker:
+    def parse(self, _utterance: str) -> Intent:
+        return Intent(action="app.open", target={"name": "Firefox"}, reason="dry-run crash recovery fixture")
+
+
+class RecordingApps(AppRegistry):
+    def __init__(self) -> None:
+        self.open_calls = 0
+
+    def list_apps(self) -> list[AppEntry]:
+        return [AppEntry(desktop_id="firefox.desktop", name="Firefox", keywords=("browser",))]
+
+    def open_app(self, app: AppEntry) -> dict[str, str]:
+        self.open_calls += 1
+        return {"status": "opened", "desktop_id": app.desktop_id}
+
+
+@pytest.mark.parametrize("boundary", DRY_RUN_CRASH_BOUNDARIES)
+def test_dry_run_survives_real_process_crash_without_external_effects(tmp_path: Path, boundary: str) -> None:
+    database_path = tmp_path / f"dry-run-{boundary}.sqlite3"
+    external_marker = tmp_path / f"dry-run-{boundary}.external"
+    simulation_marker = tmp_path / f"dry-run-{boundary}.simulated"
+    worker = Path(__file__).with_name("support_dry_run_crash_worker.py")
+
+    completed = subprocess.run(
+        [sys.executable, str(worker), boundary, str(database_path), str(external_marker), str(simulation_marker)],
+        check=False,
+        timeout=30,
+    )
+
+    assert completed.returncode == 86
+    assert not external_marker.exists()
+    if boundary == "before_receipt":
+        assert simulation_marker.read_text(encoding="utf-8") == "dry_run"
+    else:
+        assert not simulation_marker.exists()
+
+    database = CoreDatabase(database_path)
+    apps = RecordingApps()
+    broker = CapabilityBroker(
+        intent_broker=OpenAppIntentBroker(),
+        apps=apps,
+        audit=AuditLog(tmp_path / f"dry-run-{boundary}.recovery-audit.jsonl"),
+        database=database,
+    )
+    task = broker.task_repository.list(limit=1)[0]
+    contract = broker.task_repository.contract(task.task_id)
+    assert contract is not None
+    assert contract.dry_run is True
+    with database.engine.begin() as connection:
+        connection.execute(text("UPDATE task_leases SET expires_at = '1970-01-01T00:00:00.000Z' WHERE task_id = :task_id"), {"task_id": task.task_id})
+
+    broker.task_engine.resume_task(task.task_id)
+
+    recovered = broker.task_repository.get(task.task_id)
+    assert recovered is not None
+    assert recovered.status is TaskStatus.DRY_RUN
+    assert recovered.terminal_outcome is not None
+    assert recovered.terminal_outcome.status == "dry_run"
+    assert apps.open_calls == 0
+    assert not external_marker.exists()
 
 
 @pytest.mark.parametrize("boundary", CRASH_BOUNDARIES)

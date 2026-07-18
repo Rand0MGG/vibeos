@@ -1,6 +1,6 @@
 # Goal 03 reconciliation and rollback runbook
 
-Last updated: 2026-07-17.
+Last updated: 2026-07-19.
 
 ## Immutable references
 
@@ -30,11 +30,17 @@ reverting the kernel commit.
 
 ## Database boundary
 
-Goal 03 upgrades to `0004_goal_contract_version_index`. Revision `0002`
+Goal 03 now upgrades to `0005_persist_dry_run_intent`. Revision `0002`
 migrates pending legacy reviews into durable task rows and drops the old
 `reviews` and `review_events` tables. An Alembic downgrade can recreate table
 shape, but it cannot reconstruct the original review semantics or safely infer
 whether an external side effect occurred.
+
+Revision `0005` is an append-only repair after the frozen `0001`-`0004`
+history. It stores `dry_run` in GoalContract payloads. Existing active tasks
+without that historical bit are intentionally marked unknown and pause during
+automatic recovery; operators must not rewrite them as live requests merely
+to make them runnable.
 
 Therefore:
 

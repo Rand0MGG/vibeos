@@ -38,6 +38,10 @@ of the unreleased migration history before the revisions become immutable.
 5. Product rollback is not an Alembic downgrade after Durable Task data has
    been written. Operators export task/audit data and deploy a known Goal 01
    artifact or use an audited code revert as documented by Goal 03.
+6. The post-acceptance dry-run recovery repair is revision
+   `0005_persist_dry_run_intent`. It appends execution-intent data without
+   changing the frozen bytes of `0001` through `0004`; missing intent on an
+   active historical task remains unknown and recovers fail-closed.
 
 ## Hash record
 
@@ -49,6 +53,7 @@ of the unreleased migration history before the revisions become immutable.
 | Goal 03 `0002_durable_task_engine.py` | `ee88a0905489f299f52bd3d5103ebe79be6e7a067cecaac9137b480a0a965a6a` |
 | Goal 03 `0003_repair_durable_task_semantics.py` | `32acb4d36c6729f3b66746ebf8f180eb6aa66ba39caccf556c58bdde8864e21e` |
 | Goal 03 `0004_goal_contract_version_index.py` | `2b5983b1f1f301c5f107df18f2b3b35346aaefc0008ef1048e5ac2abc77a83dc` |
+| Goal 03 repair `0005_persist_dry_run_intent.py` | `d55b8cdd87eb9429c432bdb4922dddd86e0ab28da82101d3c83ff3095f2a7a3c` |
 
 Hashes are calculated over the exact Git worktree bytes with SHA-256 and are
 rechecked before the migration commit is created.

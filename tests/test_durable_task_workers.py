@@ -22,7 +22,7 @@ def test_daemon_scheduler_restart_scans_and_resumes_persisted_due_timer(tmp_path
     first_database.upgrade()
     first = SqliteTaskRepository(first_database)
     timestamp = "2099-01-01T00:00:00.000Z"
-    contract = GoalContract("contract-restart", "task-restart", "wait", (), (), (), (), 1, timestamp)
+    contract = GoalContract("contract-restart", "task-restart", "wait", (), (), (), (), 1, timestamp, dry_run=False)
     state = TaskRun("task-restart", contract.contract_id, TaskStatus.CREATED, 0, timestamp, timestamp)
     first.create(contract, state)
     planning = first.commit(transition(state, _event(state, TaskEventType.PLAN_REQUESTED)))
@@ -69,7 +69,7 @@ def test_scheduler_recovers_task_interrupted_before_plan_was_persisted(tmp_path:
         database=database,
     )
     timestamp = "2099-01-01T00:00:00.000Z"
-    contract = GoalContract("contract-planning-recovery", "task-planning-recovery", "status", (), (), (), (), 1, timestamp)
+    contract = GoalContract("contract-planning-recovery", "task-planning-recovery", "status", (), (), (), (), 1, timestamp, dry_run=False)
     state = TaskRun(contract.task_id, contract.contract_id, TaskStatus.CREATED, 0, timestamp, timestamp)
     broker.task_repository.create(contract, state)
     if initial_status is TaskStatus.PLANNING:
@@ -127,7 +127,7 @@ def test_recovery_commits_explicit_timeout_for_overdue_task(tmp_path: Path) -> N
         database=CoreDatabase(tmp_path / "timeout.sqlite3"),
     )
     timestamp = "2026-01-01T00:00:00.000Z"
-    contract = GoalContract("contract-timeout", "task-timeout", "status", (), (), (), (), 1, timestamp)
+    contract = GoalContract("contract-timeout", "task-timeout", "status", (), (), (), (), 1, timestamp, dry_run=False)
     state = TaskRun(
         contract.task_id,
         contract.contract_id,

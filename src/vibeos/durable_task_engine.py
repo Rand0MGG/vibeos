@@ -95,6 +95,9 @@ class DurableTaskEngine:
         state = self.repository.get_by_interaction(interaction_id)
         if state is None:
             return self._missing_interaction(interaction_id, request)
+        contract = self.repository.contract(state.task_id)
+        if contract is not None and contract.dry_run is True and not request.dry_run:
+            request = replace(request, dry_run=True)
         planning = load_planning(state, self.repository, self.planning)
         if state.status is not TaskStatus.AWAITING_REVIEW or planning is None or planning.plan is None:
             return self.results.build(state, request, planning, message=f"interaction is not an approvable review while task is {state.status.value}")
@@ -135,11 +138,28 @@ class DurableTaskEngine:
                         review_id=current_id,
                         message="safety binding changed; a fresh approval is required",
                     )
-                state = self._commit(
-                    state,
-                    TaskEventType.REVIEW_APPROVED,
-                    step_id=step.id,
-                    reason="user approved the bound action",
+                revised = (
+                    replace(
+                        contract,
+                        contract_id=stable_id("contract", contract.task_id, contract.version + 1, "execution-intent", False),
+                        version=contract.version + 1,
+                        created_at=now_iso(),
+                        dry_run=False,
+                    )
+                    if contract is not None and contract.dry_run is None
+                    else None
+                )
+                state = self.repository.commit(
+                    transition(
+                        state,
+                        event(
+                            state,
+                            TaskEventType.REVIEW_APPROVED,
+                            step_id=step.id,
+                            reason="user approved the bound action",
+                        ),
+                    ),
+                    contract_version=revised,
                     lease=lease,
                 )
         finally:
@@ -166,7 +186,15 @@ class DurableTaskEngine:
         )
         if lease is None:
             return self.results.build(state, request, None, message="task clarification is currently owned by another worker")
-        resumed = replace(request, utterance=utterance, review_id=None, supplemental_input=None, approve=False)
+        persisted_dry_run = request.dry_run if contract is None or contract.dry_run is None else contract.dry_run or request.dry_run
+        resumed = replace(
+            request,
+            utterance=utterance,
+            dry_run=persisted_dry_run,
+            review_id=None,
+            supplemental_input=None,
+            approve=False,
+        )
         try:
             with self._heartbeat(lease) as heartbeat:
                 revised = (
@@ -176,6 +204,7 @@ class DurableTaskEngine:
                         goal=utterance,
                         version=contract.version + 1,
                         created_at=now_iso(),
+                        dry_run=persisted_dry_run,
                     )
                     if contract is not None
                     else None
@@ -286,6 +315,9 @@ class DurableTaskEngine:
         planning: PlanningArtifacts | None,
         approved_review_id: str | None = None,
     ) -> DurableTaskResult:
+        contract = self.repository.contract(state.task_id)
+        if contract is not None and contract.dry_run is True and not request.dry_run:
+            request = replace(request, dry_run=True)
         planning = self._resolve_planning(state, planning)
         if planning is None or planning.plan is None or state.status not in {TaskStatus.READY, TaskStatus.RUNNING, TaskStatus.VERIFYING}:
             return self.results.build(state, request, planning)
@@ -297,6 +329,19 @@ class DurableTaskEngine:
         review_id: str | None = None
         try:
             with self._heartbeat(lease) as heartbeat:
+                if contract is None or contract.dry_run is None:
+                    state = self._commit(
+                        state,
+                        TaskEventType.PAUSE_REQUESTED,
+                        lease=lease,
+                        reason="persisted execution intent is unknown; explicit user confirmation is required",
+                    )
+                    return self.results.build(
+                        state,
+                        request,
+                        planning,
+                        message="task paused because its persisted execution intent is unknown",
+                    )
                 for _ in range(self.policy.max_steps + self.policy.max_attempts):
                     heartbeat.assert_valid()
                     state, planning, execution, review, review_id, approved_review_id, should_break = self.driver.drive_once(

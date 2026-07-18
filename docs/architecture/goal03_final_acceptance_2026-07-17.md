@@ -1,7 +1,9 @@
 # Goal 03 final acceptance evidence
 
 Status: accepted by the user and fast-forwarded into local `main` on
-2026-07-19. The post-merge smoke gates passed.
+2026-07-19. A post-acceptance P1 dry-run recovery defect was then found,
+repaired with append-only migration `0005`, and revalidated through the full
+WSL quality gate.
 
 ## Frozen topology
 
@@ -9,7 +11,8 @@ Status: accepted by the user and fast-forwarded into local `main` on
 | --- | --- |
 | Goal 01 baseline and unchanged `origin/main` | `a6d809ffb60a61c29380c04eebbbb134c7ddef9c` |
 | Unreconciled Goal 02 preservation checkpoint | `7c77044063dfe513bb7742f600268b5913aa3c4a` (`codex/goal02-unreconciled`) |
-| Final runtime code | `fbfd2ab1d0b3c9bce74dbc49db2e38e080e50aa4` |
+| Pre-acceptance final runtime code | `fbfd2ab1d0b3c9bce74dbc49db2e38e080e50aa4` |
+| P1 repair runtime and tests | `self` (this repair evidence commit) |
 | User-approved fast-forward target | `8c3d47cf411ad57c6fda5fde4fd3b6293bc76f6d` |
 | Final local `main` and reconciliation branch | `self` (this post-merge evidence commit) |
 | Goal 01 detached worktree | `C:/Users/Rand0MG/AppData/Local/Temp/vibeos-goal01-7c77044` |
@@ -38,11 +41,12 @@ final command
 | `fbdf9b7` | completion-audit corrections to active product documentation |
 | `8081116` | exact 19-capability Registry/target/contract coverage gate |
 | `8c3d47c` | final metrics and completion-audit evidence |
-| `self` | user approval, fast-forward, and post-merge smoke record |
+| `384d192` | user approval, fast-forward, and post-merge smoke record |
+| `self` | P1 dry-run recovery repair, migration, regressions, and corrected evidence |
 
 The branch is a descendant of Goal 01; it was not produced by merging the
-unreconciled checkpoint. The final Git diff with this evidence is 120 files
-changed, 10,282 insertions, and 10,671 deletions.
+unreconciled checkpoint. The final Git diff with this evidence is 122 files
+changed, 10,677 insertions, and 10,671 deletions.
 
 ## User-approved fast-forward and post-merge smoke
 
@@ -71,6 +75,28 @@ invocation did not start a notification service; the earlier WSLg check with
 dunst independently observed two successful `Notify` calls. No remote push was
 performed: `origin/main` remains at the Goal 01 baseline `a6d809f`.
 
+## Post-acceptance P1 correction
+
+Fault injection found that `DurableTaskResumer` rebuilt a recovery request from
+only the persisted goal. Because neither GoalContract nor TaskRun stored
+`dry_run`, the default changed an interrupted preview into a live request. The
+reproduction reached `dispatch_requested`, restarted, and called the external
+app-open adapter once. This invalidated the earlier unconditional acceptance
+until repaired.
+
+The repair stores `dry_run` in every new GoalContract, restores it in daemon
+recovery, and makes the persisted value authoritative when a continuation tries
+to reduce the safety boundary. Migration `0005` leaves frozen revisions
+`0001`-`0004` byte-for-byte unchanged. It writes an explicit unknown value for
+active historical tasks whose original intent cannot be reconstructed;
+automatic recovery pauses those tasks instead of assuming live execution.
+
+Three new real subprocess cases terminate before proposal, before external
+I/O, and after dry-run simulation but before receipt. On restart, all three
+reach terminal `dry_run`; the app adapter call count and external marker remain
+zero. Existing live recovery, migrated review/clarification, and all prior
+crash boundaries remain green.
+
 ## Independent baseline and normalized compatibility
 
 The Goal 01 detached worktree passed `302` tests in `24.42 s`. The Goal 03
@@ -84,7 +110,7 @@ same black-box inputs with separate state directories:
 | offline dry-run `search web for hello` | identical action/target, execution, acceptance, overall status, and plan step |
 | offline dry-run `close firefox` | both `review_required`, `window.close`, target `{"name":"firefox"}`, `L2`, not started, `needs_review` |
 
-The current environment has no model API key. Provider-backed `plan open
+The independent comparison environment had no model API key. Provider-backed `plan open
 browser` therefore failed closed with `no candidate was generated`; explicit
 offline planning validated the deterministic `app.open` plan. Doctor now
 states this boundary accurately instead of claiming an automatic fallback.
@@ -93,21 +119,23 @@ states this boundary accurately instead of claiming an automatic fallback.
 
 | Gate | Result |
 | --- | --- |
-| full pytest | `954 passed in 40.93s` |
-| durable domain/repository/controls/eight-crash suite | `687 passed in 12.60s` |
+| full pytest after P1 repair | `958 passed in 52.72s` |
+| durable domain/repository/controls/crash/migration suite | `708 passed in 24.04s` |
+| dry-run real-process crash combinations | 3 passed; terminal dry-run and zero external calls |
 | exact 19-capability Registry/target/contract suite | `39 passed in 13.85s` |
 | public compatibility, behavior, migration, HTTP, and D-Bus subset | `13 passed in 5.81s` |
 | provider/doctor/CLI subset | `15 passed in 5.48s` |
 | Ruff lint | all checks passed across source, tests, scripts, and migrations |
-| Ruff format | `171 files already formatted` |
+| Ruff format | `173 files already formatted` |
 | strict mypy | no issues in 48 source files |
 | architecture guard | `ok: true`, zero violations |
-| 64-task / 8-worker benchmark | wall `0.198 s`, p95 `56.46 ms`, `323.59 tasks/s`, zero lock/commit errors |
+| 64-task / 8-worker benchmark | wall `0.196 s`, p95 `66.22 ms`, `327.17 tasks/s`, zero lock/commit errors |
 
 The benchmark is below the stored `20 s` wall and `2,500 ms` p95 thresholds.
 The full suite includes all 19 capability contracts, revision-CAS controls,
 review/clarification restart, old pending data, worker isolation, lease/fencing,
-timer recovery, outbox deduplication, and eight real subprocess crash boundaries.
+timer recovery, outbox deduplication, eight general subprocess crash boundaries,
+and three dry-run recovery combinations.
 
 ## Migration evidence
 
@@ -121,6 +149,7 @@ metadata. The committed hashes are:
 | `0002` | `ee88a0905489f299f52bd3d5103ebe79be6e7a067cecaac9137b480a0a965a6a` |
 | `0003` | `32acb4d36c6729f3b66746ebf8f180eb6aa66ba39caccf556c58bdde8864e21e` |
 | `0004` | `2b5983b1f1f301c5f107df18f2b3b35346aaefc0008ef1048e5ac2abc77a83dc` |
+| `0005` | `d55b8cdd87eb9429c432bdb4922dddd86e0ab28da82101d3c83ff3095f2a7a3c` |
 
 Migration contracts compared tables, columns, indexes, foreign keys, SQL
 constraints, preserved data, and Alembic revision for empty, Goal 01, direct,
@@ -132,9 +161,11 @@ instead of being replayed.
 
 ## WSL runtime evidence
 
-- `vibe doctor --json`: 3 `ok`, 9 `warn`, 0 `fail`. Warnings accurately report
-  the non-GNOME WSL session, missing portal/bridge/apps/clipboard helpers,
-  inactive installed daemon, and absent model key.
+- The pre-merge reconciliation environment reported 3 `ok`, 9 `warn`, 0
+  `fail`. The repaired local-main smoke reported 4 `ok`, 8 `warn`, 0 `fail`;
+  the difference is the model-configuration check in those two environments.
+  Warnings accurately report the non-GNOME WSL session, missing
+  portal/bridge/apps/clipboard helpers, and inactive installed daemon.
 - `vibe capabilities --json`: 19 capabilities and 19 detail records.
 - Offline dry-run produced a durable `dry_run` task and terminal outcome bound
   to two evidence IDs; it did not claim a real-world success.
@@ -156,11 +187,13 @@ full Fedora GNOME Wayland VM boundary.
 
 ## Final rollback rehearsal
 
-An isolated no-hardlink clone in the system temporary directory loaded the
+The pre-repair rollback rehearsal used an isolated no-hardlink clone in the system temporary directory and loaded the
 exact executable Goal 03 commit `fbfd2ab1...`; `PYTHONPATH` verification showed
 that commands imported code from that clone. With `VIBEOS_RUNTIME=local` and a
 new isolated state directory, `vibe ask status --offline` completed and created
-an Alembic `0004_goal_contract_version_index` database.
+an Alembic `0004_goal_contract_version_index` database. The repair subsequently
+proved empty, Goal 01, interrupted, and restored upgrades through `0005` in the
+migration suite without changing the preserved rollback database.
 
 The read-only export contained 2 goal contracts, 1 task, 1 succeeded
 `system.status` receipt, and 2 evidence bundles. The database SHA-256 before
@@ -186,9 +219,9 @@ branch still resolved to their expected refs.
 | Freeze `0001`; make `0002`–`0004` self-contained | ADR 0003, exact hashes, source scan, and migration contract pass | passed |
 | Prove empty, Goal 01, and interrupted upgrade equivalence | structural/data/revision comparison and restored-retry migration tests pass | passed |
 | Preserve CLI, D-Bus, thin HTTP, and explicit HTTP mode | public compatibility and transport tests pass; HTTP remains loopback-only and deprecated | passed |
-| Prove 19 abilities, review, clarification, controls, and recovery | 19-row table suite, 687 durable tests, behavior tests, and eight subprocess crash boundaries pass | passed |
+| Prove 19 abilities, review, clarification, controls, and recovery | 19-row table suite, 708 durable tests, eight general subprocess boundaries, and three dry-run crash combinations pass | passed |
 | Delete only after equivalent replacement evidence | matrix commit precedes deletion commit; all listed old production paths are absent after the post-deletion full suite | passed |
-| Pass full quality gates without overstating WSL/mock/dry-run | 954 tests, Ruff, strict mypy, architecture guard, truthful dry-run evidence, D-Bus and WSLg observations are recorded above | passed |
+| Pass full quality gates without overstating WSL/mock/dry-run | 958 tests, Ruff, strict mypy, architecture guard, recovered dry-run evidence, D-Bus and WSLg observations are recorded above | passed after P1 repair |
 | Keep a clean reviewable branch and rehearse rollback | clean status, ordered commits, read-only export, independent Goal 01 artifact/database pair, and stable hash are proven above | passed |
 | Fast-forward only after explicit user approval | user approved on 2026-07-19; `git merge --ff-only` moved local `main` from `a6d809f` to `8c3d47c` and the post-merge smoke passed | passed |
 
@@ -200,8 +233,8 @@ branch still resolved to their expected refs.
   explicit architecture-baseline debt rather than weakening global limits.
 - Optional audit field `loop_snapshot_id` is retained only for historical read
   compatibility; no snapshot module or second state authority exists.
-- Provider-backed smoke cannot succeed without an API key; explicit offline
-  behavior and provider fail-closed behavior are both verified.
+- The repair smoke intentionally used explicit offline planning; online
+  provider behavior remains a separate integration boundary.
 - GNOME VM acceptance remains a later environment gate.
 
 Local `main` has been fast-forwarded after explicit user approval and the

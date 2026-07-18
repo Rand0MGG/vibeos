@@ -1,6 +1,7 @@
 # VibeOS current status
 
-Last verified: 2026-07-19 after the user-approved local `main` fast-forward.
+Last verified: 2026-07-19 after the user-approved local `main` fast-forward and
+the post-acceptance dry-run recovery repair.
 
 ## Supported runtime
 
@@ -30,9 +31,13 @@ database; it has no independent task or review authority.
 
 ## Migration and compatibility
 
-Alembic head is `0004_goal_contract_version_index`. Goal 03 used the approved
+Alembic head is `0005_persist_dry_run_intent`. Goal 03 used the approved
 pre-release exception to freeze the actual Goal 01 schema in `0001`, then made
-all revisions self-contained. The reason and hashes are in
+all revisions self-contained. Revision `0005` was added without modifying the
+frozen `0001`-`0004` history. It persists the immutable dry-run flag in each
+new GoalContract; an active legacy task whose execution intent cannot be
+reconstructed pauses instead of defaulting to live execution. The reason and
+hashes are in
 [`ADR 0003`](../product/decisions/0003-freeze-goal01-migration-history.md).
 
 `0002` migrates old pending reviews and clarifications into durable task rows,
@@ -48,11 +53,11 @@ modules are physically removed after their public contracts passed.
 
 ## Verified Goal 03 main baseline
 
-Before integration, the FedoraLinux-44 WSL reconciliation worktree reported:
+The repaired local `main` reports in FedoraLinux-44 WSL:
 
 ```text
-python -m pytest -q                   -> 954 passed in 40.93s
-ruff format --check                  -> 171 files already formatted
+python -m pytest -q                   -> 958 passed in 52.72s
+ruff format --check                  -> 173 files already formatted
 ruff check                           -> passed
 mypy                                 -> 0 issues in 48 source files
 python scripts/architecture_guard.py -> ok; 0 violations
@@ -66,9 +71,13 @@ are recorded in the
 [`Goal 03 final acceptance`](goal03_final_acceptance_2026-07-17.md).
 
 After explicit user approval, local `main` was fast-forwarded with
-`git merge --ff-only codex/goal03-reconciliation`. The standard WSL environment
-then passed 57 targeted compatibility, migration, capability, and doctor tests
-in 21.99 seconds; the architecture guard again reported zero violations.
+`git merge --ff-only codex/goal03-reconciliation`. The original smoke gates
+passed, but a later fault-injection review found that recovery did not retain
+`dry_run`, allowing an interrupted preview to enter a live adapter. The repair
+persists that intent, restores it in daemon recovery, and adds three real
+subprocess crash cases: before proposal, before external I/O, and before
+receipt. All three finish as `dry_run` with zero external adapter calls. The
+expanded Durable Task subset is `708 passed in 24.04s`.
 Doctor reported 4 `ok`, 8 environment `warn`, and 0 `fail`; the CLI exposed all
 19 capabilities, produced the expected offline `app.open` plan, and persisted
 a dry-run task with two evidence bundles. The direct user-session D-Bus

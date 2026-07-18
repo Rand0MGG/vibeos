@@ -59,6 +59,7 @@ def new_contract(task_id: str, request: CommandRequest, created_at: str) -> Goal
         reality_boundaries=("material ambiguity requires user clarification",),
         version=1,
         created_at=created_at,
+        dry_run=request.dry_run,
     )
 
 

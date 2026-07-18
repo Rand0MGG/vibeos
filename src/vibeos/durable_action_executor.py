@@ -44,7 +44,12 @@ class DurableActionExecutor:
             kind = TaskEventType.ACTION_SUCCEEDED if existing_receipt.status == "succeeded" else TaskEventType.FAIL
             return self._commit(state, kind, step_id=step.id, reason="stable receipt reconciled without replay", lease=lease)
         existing_proposal = self.repository.proposal_for(stored_step.idempotency_key)
-        if existing_proposal is not None and step.risk_level != "L0" and state.last_event != TaskEventType.RECONCILIATION_NOT_APPLIED.value:
+        if (
+            existing_proposal is not None
+            and not request.dry_run
+            and step.risk_level != "L0"
+            and state.last_event != TaskEventType.RECONCILIATION_NOT_APPLIED.value
+        ):
             state = self._reconcile(state, step, stored_step, existing_proposal, lease)
             if state.status is not TaskStatus.RUNNING:
                 return state

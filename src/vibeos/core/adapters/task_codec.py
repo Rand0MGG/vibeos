@@ -119,6 +119,7 @@ def decode_contract(raw: str) -> GoalContract:
         reality_boundaries=payload.reality_boundaries,
         version=payload.version,
         created_at=payload.created_at,
+        dry_run=payload.dry_run,
         schema_version=payload.schema_version,
     )
 

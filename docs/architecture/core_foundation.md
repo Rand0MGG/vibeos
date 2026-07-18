@@ -15,9 +15,10 @@ core/adapters     SQLite repositories, contracts/codecs, thin HTTP transport
 `SqliteTaskRepository` is the only task-state writer. `0001` is the controlled
 Goal 01 schema freeze; `0002` adds durable task artifacts and migrates pending
 legacy interactions; `0003` repairs durable semantics; `0004` allows multiple
-versioned GoalContracts per task. No revision imports mutable runtime metadata.
-After Goal 03, historical revisions are immutable and schema changes require a
-new revision.
+versioned GoalContracts per task; `0005` persists dry-run execution intent and
+marks missing active legacy intent as unknown so recovery pauses fail-closed.
+No revision imports mutable runtime metadata. After Goal 03, historical
+revisions are immutable and schema changes require a new revision.
 
 The supervisor owns database readiness, scheduler, outbox, D-Bus, and the
 loopback HTTP compatibility listener on one lifecycle. Both transports call

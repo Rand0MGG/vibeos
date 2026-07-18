@@ -65,6 +65,9 @@ def test_dry_run_creates_terminal_durable_task_without_side_effect(tmp_path: Pat
     assert result.status == "dry_run"
     assert apps.open_calls == 0
     task = broker.task_repository.list()[0]
+    contract = broker.task_repository.contract(task.task_id)
+    assert contract is not None
+    assert contract.dry_run is True
     assert task.status.value == "dry_run"
     assert task.terminal_outcome is not None
     assert task.terminal_outcome.evidence_ids

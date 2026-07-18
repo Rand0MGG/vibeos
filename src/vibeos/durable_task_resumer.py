@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .core.adapters.task_repository import SqliteTaskRepository
-from .core.domain import transition
+from .core.domain import allowed_events, transition
 from .core.domain.task import TaskEventType, TaskLease, TaskRun, TaskStatus
 from .durable_action_executor import DurableActionExecutor
 from .durable_task_lease import LeaseHeartbeat
@@ -55,7 +55,19 @@ class DurableTaskResumer:
         )
         if lease is None:
             return None
-        request = CommandRequest(contract.goal, transport="daemon-recovery")
+        if contract.dry_run is None:
+            try:
+                if TaskEventType.PAUSE_REQUESTED in allowed_events(state.status):
+                    self._commit(
+                        state,
+                        TaskEventType.PAUSE_REQUESTED,
+                        lease,
+                        reason="persisted execution intent is unknown; explicit user confirmation is required",
+                    )
+            finally:
+                self.repository.release(lease, now=now_iso())
+            return None
+        request = CommandRequest(contract.goal, dry_run=contract.dry_run, transport="daemon-recovery")
         should_drive = True
         resolved: PlanningArtifacts | None = None
         try:

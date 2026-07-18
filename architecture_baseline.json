@@ -19,7 +19,8 @@
       "migrations/env.py",
       "migrations/versions/0001_core_foundation.py",
       "migrations/versions/0003_repair_durable_task_semantics.py",
-      "migrations/versions/0004_goal_contract_version_index.py"
+      "migrations/versions/0004_goal_contract_version_index.py",
+      "migrations/versions/0005_persist_dry_run_intent.py"
     ],
     "max_module_lines": 400,
     "max_function_complexity": 18,
