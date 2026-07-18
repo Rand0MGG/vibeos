@@ -40,7 +40,7 @@ python scripts/architecture_guard.py
 要求：无 lint、格式、类型、测试或架构违规。`docs/goals/agent_native/`
 中的 Goal 合同不可由执行任务修改。
 
-2026-07-17 Goal 03 整合后完整结果：`953 passed in 41.21s`；Ruff lint/format、
+2026-07-17 Goal 03 整合后完整结果：`954 passed in 40.93s`；Ruff lint/format、
 48 个声明源码文件的 strict mypy 和 architecture guard 全部通过。持久化任务
 专项为 `687 passed in 12.60s`。
 

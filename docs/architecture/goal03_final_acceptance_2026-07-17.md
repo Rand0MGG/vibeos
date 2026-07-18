@@ -9,7 +9,8 @@ Status: all executable-code and documentation gates passed; fast-forward to
 | --- | --- |
 | Goal 01 baseline and unchanged `main`/`origin/main` | `a6d809ffb60a61c29380c04eebbbb134c7ddef9c` |
 | Unreconciled Goal 02 preservation checkpoint | `7c77044063dfe513bb7742f600268b5913aa3c4a` (`codex/goal02-unreconciled`) |
-| Final executable Goal 03 code | `fbfd2ab1d0b3c9bce74dbc49db2e38e080e50aa4` (`codex/goal03-reconciliation`) |
+| Final runtime code | `fbfd2ab1d0b3c9bce74dbc49db2e38e080e50aa4` |
+| Final verified source/test head | `80811167b7d919bfa69aa24094ca9d6b0d058340` (`codex/goal03-reconciliation`) |
 | Goal 01 detached worktree | `C:/Users/Rand0MG/AppData/Local/Temp/vibeos-goal01-7c77044` |
 | Goal 03 reconciliation worktree | `C:/Users/Rand0MG/AppData/Local/Temp/vibeos-goal03-7c77044` |
 
@@ -33,16 +34,18 @@ final command
 | `3f61530` | restored durable concurrency benchmark gate and report |
 | `fbfd2ab` | truthful explicit-offline provider diagnostic |
 | `fa83360` | final evidence, status, WSL, and root README documentation |
-| `self` | completion-audit corrections to active product documentation only |
+| `fbdf9b7` | completion-audit corrections to active product documentation |
+| `8081116` | exact 19-capability Registry/target/contract coverage gate |
+| `self` | final metrics and completion-audit evidence only |
 
 The branch is a descendant of Goal 01; it was not produced by merging the
-unreconciled checkpoint. The final Git diff after staging this evidence is 120
-files changed, 10,224 insertions, and 10,665 deletions.
+unreconciled checkpoint. The final Git diff with this evidence is 120 files
+changed, 10,236 insertions, and 10,665 deletions.
 
 ## Independent baseline and normalized compatibility
 
 The Goal 01 detached worktree passed `302` tests in `24.42 s`. The Goal 03
-worktree passed `953` tests in `41.21 s`. Both environments then received the
+worktree passed `954` tests in `40.93 s`. Both environments then received the
 same black-box inputs with separate state directories:
 
 | Input | Normalized comparison |
@@ -61,8 +64,9 @@ states this boundary accurately instead of claiming an automatic fallback.
 
 | Gate | Result |
 | --- | --- |
-| full pytest | `953 passed in 41.21s` |
+| full pytest | `954 passed in 40.93s` |
 | durable domain/repository/controls/eight-crash suite | `687 passed in 12.60s` |
+| exact 19-capability Registry/target/contract suite | `39 passed in 13.85s` |
 | public compatibility, behavior, migration, HTTP, and D-Bus subset | `13 passed in 5.81s` |
 | provider/doctor/CLI subset | `15 passed in 5.48s` |
 | Ruff lint | all checks passed across source, tests, scripts, and migrations |
@@ -155,7 +159,7 @@ branch still resolved to their expected refs.
 | Preserve CLI, D-Bus, thin HTTP, and explicit HTTP mode | public compatibility and transport tests pass; HTTP remains loopback-only and deprecated | passed |
 | Prove 19 abilities, review, clarification, controls, and recovery | 19-row table suite, 687 durable tests, behavior tests, and eight subprocess crash boundaries pass | passed |
 | Delete only after equivalent replacement evidence | matrix commit precedes deletion commit; all listed old production paths are absent after the post-deletion full suite | passed |
-| Pass full quality gates without overstating WSL/mock/dry-run | 953 tests, Ruff, strict mypy, architecture guard, truthful dry-run evidence, D-Bus and WSLg observations are recorded above | passed |
+| Pass full quality gates without overstating WSL/mock/dry-run | 954 tests, Ruff, strict mypy, architecture guard, truthful dry-run evidence, D-Bus and WSLg observations are recorded above | passed |
 | Keep a clean reviewable branch and rehearse rollback | clean status, ordered commits, read-only export, independent Goal 01 artifact/database pair, and stable hash are proven above | passed |
 | Fast-forward only after explicit user approval | `main` is unchanged and no merge has run | pending user approval |
 
