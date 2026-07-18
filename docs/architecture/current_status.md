@@ -1,6 +1,6 @@
 # VibeOS current status
 
-Last verified: 2026-07-17 during Goal 03 reconciliation.
+Last verified: 2026-07-19 after the user-approved local `main` fast-forward.
 
 ## Supported runtime
 
@@ -46,9 +46,9 @@ The replacement and deletion evidence is in the
 The old GoalLoop, ReviewStore, AgentRuntime, loop snapshot, and run ledger
 modules are physically removed after their public contracts passed.
 
-## Verified integration checkpoint
+## Verified Goal 03 main baseline
 
-The FedoraLinux-44 WSL integration worktree currently reports:
+Before integration, the FedoraLinux-44 WSL reconciliation worktree reported:
 
 ```text
 python -m pytest -q                   -> 954 passed in 40.93s
@@ -64,6 +64,17 @@ subprocess crash boundaries are included in that suite. The independent Goal
 01 comparison, session D-Bus/WSLg real-action checks, and rollback rehearsal
 are recorded in the
 [`Goal 03 final acceptance`](goal03_final_acceptance_2026-07-17.md).
+
+After explicit user approval, local `main` was fast-forwarded with
+`git merge --ff-only codex/goal03-reconciliation`. The standard WSL environment
+then passed 57 targeted compatibility, migration, capability, and doctor tests
+in 21.99 seconds; the architecture guard again reported zero violations.
+Doctor reported 4 `ok`, 8 environment `warn`, and 0 `fail`; the CLI exposed all
+19 capabilities, produced the expected offline `app.open` plan, and persisted
+a dry-run task with two evidence bundles. The direct user-session D-Bus
+verifier reached `ready`, exposed 19 capabilities, and completed E0. The
+preservation branch `codex/goal02-unreconciled` remains at `7c77044` and no
+remote push has been performed, so `origin/main` remains at `a6d809f`.
 
 WSL does not prove GNOME Shell, Wayland portal UI, displayed notifications,
 clipboard contents, browser content, or real window side effects. Browser,

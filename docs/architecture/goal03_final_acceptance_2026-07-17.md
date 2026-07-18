@@ -1,16 +1,17 @@
 # Goal 03 final acceptance evidence
 
-Status: all executable-code and documentation gates passed; fast-forward to
-`main` is waiting for explicit user approval.
+Status: accepted by the user and fast-forwarded into local `main` on
+2026-07-19. The post-merge smoke gates passed.
 
 ## Frozen topology
 
 | Purpose | Reference |
 | --- | --- |
-| Goal 01 baseline and unchanged `main`/`origin/main` | `a6d809ffb60a61c29380c04eebbbb134c7ddef9c` |
+| Goal 01 baseline and unchanged `origin/main` | `a6d809ffb60a61c29380c04eebbbb134c7ddef9c` |
 | Unreconciled Goal 02 preservation checkpoint | `7c77044063dfe513bb7742f600268b5913aa3c4a` (`codex/goal02-unreconciled`) |
 | Final runtime code | `fbfd2ab1d0b3c9bce74dbc49db2e38e080e50aa4` |
-| Final verified source/test head | `80811167b7d919bfa69aa24094ca9d6b0d058340` (`codex/goal03-reconciliation`) |
+| User-approved fast-forward target | `8c3d47cf411ad57c6fda5fde4fd3b6293bc76f6d` |
+| Final local `main` and reconciliation branch | `self` (this post-merge evidence commit) |
 | Goal 01 detached worktree | `C:/Users/Rand0MG/AppData/Local/Temp/vibeos-goal01-7c77044` |
 | Goal 03 reconciliation worktree | `C:/Users/Rand0MG/AppData/Local/Temp/vibeos-goal03-7c77044` |
 
@@ -36,11 +37,39 @@ final command
 | `fa83360` | final evidence, status, WSL, and root README documentation |
 | `fbdf9b7` | completion-audit corrections to active product documentation |
 | `8081116` | exact 19-capability Registry/target/contract coverage gate |
-| `self` | final metrics and completion-audit evidence only |
+| `8c3d47c` | final metrics and completion-audit evidence |
+| `self` | user approval, fast-forward, and post-merge smoke record |
 
 The branch is a descendant of Goal 01; it was not produced by merging the
 unreconciled checkpoint. The final Git diff with this evidence is 120 files
-changed, 10,236 insertions, and 10,665 deletions.
+changed, 10,282 insertions, and 10,671 deletions.
+
+## User-approved fast-forward and post-merge smoke
+
+The user approved integration on 2026-07-19. The main worktree ran
+`git switch main` and `git merge --ff-only codex/goal03-reconciliation`, moving
+local `main` from `a6d809f` to `8c3d47c` without a merge commit, squash, rebase,
+or force operation. This evidence commit was then added on `main`, and the
+reconciliation branch was fast-forwarded to the same commit.
+
+The standard FedoraLinux-44 WSL environment imported VibeOS from
+`/mnt/e/codex_project/vibeos/src/vibeos/__init__.py` and passed the following
+post-merge checks:
+
+| Check | Result |
+| --- | --- |
+| targeted compatibility/migration/doctor suite | `57 passed in 21.99s` |
+| architecture guard | `ok: true`, zero violations |
+| `vibe doctor --json` | 4 `ok`, 8 `warn`, 0 `fail` |
+| `vibe capabilities --json` | 19 capabilities and 19 detail rows |
+| offline `plan open browser` | validated one-step `app.open` plan |
+| offline dry-run search | terminal `dry_run` task with 2 evidence bundles |
+| direct user-session D-Bus verifier | lifecycle `ready`, 19 capabilities, E0 succeeded, strict unknown field rejected |
+
+The D-Bus verifier's E1 notification failed accurately because that particular
+invocation did not start a notification service; the earlier WSLg check with
+dunst independently observed two successful `Notify` calls. No remote push was
+performed: `origin/main` remains at the Goal 01 baseline `a6d809f`.
 
 ## Independent baseline and normalized compatibility
 
@@ -150,7 +179,7 @@ branch still resolved to their expected refs.
 | Goal 03 acceptance condition | Authoritative current evidence | Status |
 | --- | --- | --- |
 | Preserve every confirmed Goal 02/PM path | checkpoint diff has 116 paths: 115 inventoried candidate paths plus the manifest itself; commit `7c77044` has parent `a6d809f` | passed |
-| Keep `main` at Goal 01 and retain a repeatable detached baseline | `main`/`origin/main` resolve to `a6d809f`; independent Goal 01 environment passed 302 tests | passed |
+| Keep `main` at Goal 01 during reconciliation and retain a repeatable detached baseline | before approval, `main`/`origin/main` resolved to `a6d809f`; the independent Goal 01 environment passed 302 tests and `origin/main` still preserves that baseline | passed |
 | Reconcile from the clean ancestor in logical groups | first Goal 03 commit has ancestor `a6d809f`; the commit table above separates kernel, adapters, behavior, deletion, fixes, and docs | passed |
 | Cover every public entry, deletion, and capability | compatibility matrix has all public surfaces, 12 legacy-module rows, and exactly 19 capability rows | passed |
 | Use one Durable Task Store with no dual task kernel | architecture guard is clean; legacy source paths are absent; CLI/D-Bus/HTTP/Python one-repository contract passes | passed |
@@ -161,9 +190,9 @@ branch still resolved to their expected refs.
 | Delete only after equivalent replacement evidence | matrix commit precedes deletion commit; all listed old production paths are absent after the post-deletion full suite | passed |
 | Pass full quality gates without overstating WSL/mock/dry-run | 954 tests, Ruff, strict mypy, architecture guard, truthful dry-run evidence, D-Bus and WSLg observations are recorded above | passed |
 | Keep a clean reviewable branch and rehearse rollback | clean status, ordered commits, read-only export, independent Goal 01 artifact/database pair, and stable hash are proven above | passed |
-| Fast-forward only after explicit user approval | `main` is unchanged and no merge has run | pending user approval |
+| Fast-forward only after explicit user approval | user approved on 2026-07-19; `git merge --ff-only` moved local `main` from `a6d809f` to `8c3d47c` and the post-merge smoke passed | passed |
 
-## Remaining bounded debt and merge gate
+## Remaining bounded debt and publication state
 
 - Loopback HTTP remains deprecated but supported through Goal 09; it uses the
   same application service and task store as D-Bus.
@@ -175,8 +204,8 @@ branch still resolved to their expected refs.
   behavior and provider fail-closed behavior are both verified.
 - GNOME VM acceptance remains a later environment gate.
 
-No fast-forward has been performed. Before merge, recheck that both worktrees
-are clean and `main` still equals `a6d809f`. Only after explicit user approval
-may the main worktree run `git switch main` followed by
-`git merge --ff-only codex/goal03-reconciliation`; squash, rebase, force-push,
-or a normal merge are not permitted.
+Local `main` has been fast-forwarded after explicit user approval and the
+reconciliation branch is retained at the same final evidence commit. The
+Goal 02 checkpoint remains fixed at `7c77044`. Publication is deliberately
+separate: no push was requested or performed, so `origin/main` remains at
+`a6d809f`.
