@@ -5,7 +5,7 @@
   [Goal 02](02_durable_task_engine.md)均已实际执行
 - 规模：XL
 - 风险：高
-- 完成后进入：[Goal 04](04_system_service_recovery_vertical_slice.md)
+- 完成后进入：[Goal 04](04_core_execution_foundation_and_system_service_slice.md)
 
 ## 给 Codex 的命令
 

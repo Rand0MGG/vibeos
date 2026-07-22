@@ -29,6 +29,7 @@ from .dbus_service import DBusServiceComponent
 from .durable_task_support import after_seconds, now_iso
 from .intent import RuleIntentBroker
 from .models import CommandRequest, CommandResult, Intent
+from .provider_client import model_request_budget
 
 
 HTTP_DEPRECATION = {
@@ -250,6 +251,10 @@ async def run_daemon(
     def scan_tasks() -> tuple[str, ...]:
         return broker.task_repository.recoverable(now_iso())
 
+    def resume_task(task_id: str) -> None:
+        with model_request_budget():
+            broker.task_engine.resume_task(task_id)
+
     def claim_outbox() -> tuple[object, ...]:
         return outbox.claim(owner=outbox_owner, now=now_iso(), expires_at=after_seconds(30))
 
@@ -264,11 +269,11 @@ async def run_daemon(
             "task.effect.schedule_timer",
             "task.effect.cancel_action",
         }:
-            broker.task_engine.resume_task(record.aggregate_id)
+            resume_task(record.aggregate_id)
         outbox.delivered(record.message_id, "vibed-core", now_iso(), json.dumps({"topic": record.topic}, separators=(",", ":")))
 
     supervisor.add_component(DatabaseLifecycleComponent(broker.database))
-    supervisor.add_component(TaskSchedulerComponent(scan=scan_tasks, resume=broker.task_engine.resume_task))
+    supervisor.add_component(TaskSchedulerComponent(scan=scan_tasks, resume=resume_task))
     supervisor.add_component(OutboxDispatcherComponent(claim=claim_outbox, consume=consume_outbox))
     router = DaemonHttpRouter(broker=broker, supervisor=supervisor, status_payload=status_payload)
     http_server = AsyncHttpServer(host, port, router.handle)

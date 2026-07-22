@@ -223,3 +223,18 @@ def test_all_19_capabilities_fix_real_or_unavailable_receipts_evidence_and_proje
     assert result.result["task"]["status"] == task.status.value
     assert result.result["run"]["goal_id"] == task.contract_id
     assert isinstance(result.result["attempts"], list)
+
+
+def test_unverified_browser_effect_clarifies_without_replanning_or_losing_its_receipt(tmp_path: Path) -> None:
+    broker = make_broker(tmp_path, "browser.open_url", "unverified-acceptance")
+
+    result = broker.handle(CommandRequest("exercise browser.open_url"))
+    task = broker.task_repository.list()[0]
+
+    assert task.status is TaskStatus.AWAITING_CLARIFICATION
+    assert len(broker.task_repository.steps(task.task_id)) == 1
+    assert len(broker.task_repository.receipts(task.task_id, task.active_plan_revision_id)) == 1
+    assert result.selected_target == "https://example.com"
+    assert result.execution_status == "succeeded"
+    assert result.acceptance_status == "indeterminate"
+    assert result.overall_status == "needs_user_input"

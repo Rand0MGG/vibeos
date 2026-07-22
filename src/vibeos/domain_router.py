@@ -42,8 +42,6 @@ def route_domains(
         media_pack = registry.get_pack("media")
         fallback_domain_ids = media_pack.optional_fallback_domain_ids if media_pack else ()
         active_domain_ids = ("media",) + tuple(domain_id for domain_id in fallback_domain_ids if domain_id != "media")
-    elif len(active_candidates) > 1:
-        active_domain_ids = active_candidates[:1]
 
     requested_context_package_ids: list[str] = []
     for domain_id in active_domain_ids:

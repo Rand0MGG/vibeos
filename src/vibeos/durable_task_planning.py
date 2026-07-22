@@ -5,7 +5,7 @@ from dataclasses import replace
 
 from .core.adapters.task_repository import SqliteTaskRepository
 from .core.domain import transition
-from .core.domain.task import EvidenceBundle, GoalContract, TaskEventType, TaskLease, TaskRun
+from .core.domain.task import EvidenceBundle, GoalContract, TaskEventType, TaskLease, TaskRun, TaskStatus
 from .durable_task_support import after_seconds, event, execution_message, now_iso, plan_artifacts, public_attempts, stable_id
 from .models import CommandRequest
 from .planning_models import PlanningArtifacts
@@ -32,9 +32,22 @@ class DurablePlanningCoordinator:
 
     def accept(self, state: TaskRun, artifacts: PlanningArtifacts, *, lease: TaskLease | None = None) -> TaskRun:
         if artifacts.plan is None:
-            message = artifacts.analysis.chat_response or artifacts.analysis.explanation or "task requires clarification"
+            route_action = artifacts.route_decision.action if artifacts.route_decision is not None else None
+            message = (
+                artifacts.route_decision.reason
+                if artifacts.route_decision is not None and artifacts.route_decision.reason
+                else artifacts.analysis.chat_response or artifacts.analysis.explanation or "task requires clarification"
+            )
             if artifacts.analysis.type == "chat":
                 return self._commit(state, TaskEventType.COMPLETE, lease=lease, reason=message)
+            if route_action == "unsupported" and _must_reject_unsupported(artifacts.analysis.utterance):
+                return self._commit(
+                    state,
+                    TaskEventType.FAIL,
+                    lease=lease,
+                    reason=message,
+                    terminal_status=TaskStatus.BLOCKED,
+                )
             return self._commit(
                 state,
                 TaskEventType.CLARIFICATION_REQUIRED,
@@ -243,3 +256,20 @@ class DurablePlanningCoordinator:
         **fields: object,
     ) -> TaskRun:
         return self.repository.commit(transition(state, event(state, kind, reason=reason, **fields)), lease=lease)
+
+
+def _must_reject_unsupported(utterance: str) -> bool:
+    lowered = utterance.strip().lower()
+    destructive_terms = (
+        "delete",
+        "remove",
+        "erase",
+        "format",
+        "uninstall",
+        "删除",
+        "移除",
+        "清空",
+        "格式化",
+        "卸载",
+    )
+    return any(term in lowered for term in destructive_terms)

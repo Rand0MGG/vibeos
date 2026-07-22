@@ -1,9 +1,10 @@
-# Goal 06：用一个 E2 金丝雀证明受控提权与完整回滚
+# Goal 08：用一个 E2 金丝雀证明受控提权与完整回滚
 
-- 阶段：06 / 09
-- 依赖：[Goal 05](05_unprivileged_tasks_and_installable_runtime.md)全部完成
+- 阶段：08 / 11
+- 依赖：[Goal 07](07_gnome_mixed_task_mvp.md)全部完成
+- 规模：XL
 - 风险：极高
-- 完成后进入：[Goal 07](07_gnome_mixed_task_mvp.md)
+- 完成后进入：[Goal 09](09_proactive_service_advisor.md)
 
 ## 给 Codex 的命令
 
@@ -30,14 +31,19 @@ E2 的核心不是“命令可逆”，而是完整事务：执行前保存足�
 
 ## 预期进入状态与现场核对
 
-预期 Goal 05 已有可安装 Runtime、唯一 Durable Task Engine、少量 E0/E1 provider、
-typed facts、ActionProposal/Receipt/Evidence 和独立 verifier。开始前必须核对：
+预期 Goal 04 已建立规范 E0-E4 Effect Policy，Goal 05 已建立唯一 Model Gateway 和
+Secret Broker，Goal 06 已有可安装 Runtime 与少量 E0/E1 provider，Goal 07 已完成
+桌面 MVP。本 canary 不依赖桌面输入，排序只是为了先交付普通用户价值；不得通过
+AT-SPI、portal、GNOME extension 或 UI 点击完成提权。开始前必须核对：
 
 - 目标 Fedora 版本、polkit/system-bus 行为和可用 typed 系统 API；
 - 当前用户提出的提权偏好：Agent 自审 E2，但安装/启用特权机制需用户批准；
 - 候选操作的全部直接/间接副作用、持久化位置、并发参与者和恢复边界；
 - 是否存在不需要自有 helper 的成熟系统 API；
-- Goal 05 安装包如何在不默认提权的前提下可选安装机制。
+- Goal 06 安装包如何在不默认提权的前提下可选安装机制。
+- Goal 04 已删除 `PermissionPolicy`/`risk_level`/`L0-L3`，当前只有规范 E0-E4
+  EffectPolicy；
+- Goal 05 Gateway 中为 Reviewer 预留的独立 purpose、模型配置、数据最小化和失败边界；
 
 ## 核心目标
 
@@ -73,6 +79,8 @@ bootloader、磁盘分区、账户、安全策略、网络主连接、任意文�
    - 在用户确认前只允许 spike、文档和无副作用探针，不实现或安装 production helper。
 
 2. **最小 EffectAssessment**
+   - 扩展 Goal 04 的唯一规范 Effect Policy，不创建第二个 E2 policy、风险注册表或
+     capability 名单，不重新引入 `L0-L3`、`risk_level` 或兼容 alias；
    - 根据 typed verb、参数、资源、数据、权限、可逆性和 blast radius 评估，不只按
      capability 名称；
    - 未知参数、资源不匹配、回滚缺失、外流或不可逆结果一律 `needs_user` 或拒绝；
@@ -80,7 +88,10 @@ bootloader、磁盘分区、账户、安全策略、网络主连接、任意文�
      覆盖未来所有动作的通用规则语言。
 
 3. **隔离 Reviewer**
-   - 与 executing planner 使用独立调用、最小只读上下文和 strict decision schema；
+   - 通过 Goal 05 Model Gateway 的独立 `privilege_review` purpose 调用，与 executing
+     planner 使用独立 request、最小只读上下文、预算和 strict decision schema；
+   - Reviewer 不能读取 secret 明文；如 reviewer provider 需要 credential，只能使用
+     Goal 05 Secret Broker，并与执行 proposal/secret grant 完全分离；
    - 只能输出 approve/deny/needs_user、scope、检查项、有效期和理由；
    - 模型不可用、输出无效、不确定或与 policy 冲突时 fail-closed；
    - approval 绑定 proposal digest、精确资源、次数、deadline 和 policy/reviewer 版本。
@@ -122,13 +133,14 @@ bootloader、磁盘分区、账户、安全策略、网络主连接、任意文�
 - [ ] canary 选择记录列出全部声明副作用、风险、回滚和不可恢复条件，并保存用户对
   该实现范围的确认引用；
 - [ ] 只有一个 typed E2 verb 可达，参数/资源/重放/过期/跨用户攻击均 fail-closed；
-- [ ] Reviewer 与执行模型隔离，policy 可以否决其批准，模型故障不会获得权限；
+- [ ] Reviewer 通过唯一 Gateway 与执行模型隔离，policy 可以否决其批准，模型故障
+  不会获得权限；
 - [ ] 正常路径完成 prepare/execute/verify/commit 并产生完整 EvidenceBundle；
 - [ ] forward、verify、rollback 各阶段故障和 daemon/OS 进程崩溃均经过恢复矩阵；
 - [ ] rollback 后所有声明副作用与前态一致，不只比较一个状态字段；
 - [ ] rollback 失败进入显式状态并停止扩大影响，不被报告为成功；
 - [ ] 安装/启用特权机制经过用户批准，普通安装默认没有宽泛权限；
-- [ ] Goal 03–05 的兼容、用户态任务和安装路径没有回归；
+- [ ] Goal 03–07 的兼容、模型/秘密、用户态任务、桌面和安装路径没有回归；
 - [ ] 真实 Fedora VM 完成攻击、崩溃和回滚验收，WSL/mock 不替代该证据；
 - [ ] 共同质量门禁全部通过，仓库中不存在第二个 E2 实现。
 

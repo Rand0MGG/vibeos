@@ -1,0 +1,50 @@
+signal time=1784414154.917996 sender=org.freedesktop.DBus -> destination=:1.2754 serial=4294967295 path=/org/freedesktop/DBus; interface=org.freedesktop.DBus; member=NameAcquired
+   string ":1.2754"
+signal time=1784414154.918076 sender=org.freedesktop.DBus -> destination=:1.2754 serial=4294967295 path=/org/freedesktop/DBus; interface=org.freedesktop.DBus; member=NameLost
+   string ":1.2754"
+method call time=1784414172.515798 sender=:1.2757 -> destination=:1.55 serial=9 path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=Notify
+   string "notify-send"
+   uint32 0
+   string ""
+   string "VibeOS"
+   string "final-body-marker-7429"
+   array [
+   ]
+   array [
+      dict entry(
+         string "urgency"
+         variant             byte 1
+      )
+      dict entry(
+         string "sender-pid"
+         variant             int64 30571
+      )
+   ]
+   int32 -1
+method call time=1784414172.516923 sender=:1.55 -> destination=:1.17 serial=134 path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=Notify
+   string "notify-send"
+   uint32 0
+   string ""
+   string "VibeOS"
+   string "final-body-marker-7429"
+   array [
+   ]
+   array [
+      dict entry(
+         string "urgency"
+         variant             byte 1
+      )
+      dict entry(
+         string "sender-pid"
+         variant             int64 30571
+      )
+      dict entry(
+         string "x-shell-sender-pid"
+         variant             uint32 30571
+      )
+      dict entry(
+         string "x-shell-sender"
+         variant             string ":1.2757"
+      )
+   ]
+   int32 -1

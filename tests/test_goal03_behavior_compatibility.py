@@ -6,11 +6,13 @@ from vibeos.apps import AppRegistry
 from vibeos.audit import AuditLog
 from vibeos.broker import CapabilityBroker
 from vibeos.core.adapters.database import CoreDatabase
+from vibeos.core.adapters.metadata import plan_revisions
 from vibeos.core.domain.task import TaskStatus
 from vibeos.intent import IntentBroker
 from vibeos.models import AppEntry, CommandRequest, Intent, WindowEntry
 
 from tests.support_intent_broker import FixtureIntentBroker
+from sqlalchemy import update
 
 
 class FakeApps(AppRegistry):
@@ -107,6 +109,25 @@ def test_denied_review_is_terminal_and_cannot_later_execute(tmp_path: Path) -> N
     assert restarted.task_repository.receipts(task.task_id) == ()
 
 
+def test_pending_reviews_fail_closed_when_legacy_planning_snapshot_is_malformed(tmp_path: Path) -> None:
+    database_path = tmp_path / "tasks.sqlite3"
+    first = make_broker(tmp_path, database_path=database_path)
+    pending = first.handle(CommandRequest("close firefox"))
+    state = first.task_repository.list()[0]
+    assert pending.review_id is not None
+    assert state.active_plan_revision_id is not None
+    with first.database.engine.begin() as connection:
+        connection.execute(update(plan_revisions).where(plan_revisions.c.plan_revision_id == state.active_plan_revision_id).values(payload_json="{malformed"))
+
+    restarted = make_broker(tmp_path, database_path=database_path)
+    interactions = restarted.pending_reviews()
+
+    assert len(interactions) == 1
+    assert interactions[0]["review_id"] == pending.review_id
+    assert interactions[0]["plan_id"] is None
+    assert interactions[0]["intent"]["action"] == "unknown"
+
+
 def test_clarification_and_supplemental_input_resume_after_restart(tmp_path: Path) -> None:
     database_path = tmp_path / "tasks.sqlite3"
     apps = FakeApps()
@@ -171,6 +192,17 @@ def test_rejecting_clarification_after_restart_cancels_without_dispatch(tmp_path
     assert rejected.status == "rejected"
     assert apps.open_calls == 0
     assert restarted.task_repository.list()[0].status is TaskStatus.CANCELLED
+
+
+def test_unsupported_destructive_request_is_rejected_instead_of_suspended(tmp_path: Path) -> None:
+    broker = make_broker(tmp_path, database_path=tmp_path / "tasks.sqlite3")
+
+    result = broker.handle(CommandRequest("delete downloads"))
+
+    assert result.status == "rejected"
+    assert result.overall_status == "blocked"
+    assert result.review_id is None
+    assert broker.task_repository.list()[0].status is TaskStatus.BLOCKED
 
 
 def make_broker(

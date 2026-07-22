@@ -1,9 +1,10 @@
 # Goal 07：交付真实 GNOME 混合任务与桌面 fallback MVP
 
-- 阶段：07 / 09
-- 依赖：[Goal 06](06_privileged_canary_and_rollback.md)全部完成
+- 阶段：07 / 11
+- 依赖：[Goal 06](06_unprivileged_tasks_and_installable_runtime.md)全部完成
+- 规模：XL
 - 风险：高
-- 完成后进入：[Goal 08](08_proactive_service_advisor.md)
+- 完成后进入：[Goal 08](08_privileged_canary_and_rollback.md)
 
 ## 给 Codex 的命令
 
@@ -30,12 +31,17 @@ VibeOS 是“像真实用户一样完成任务”的 Agent，但比人类多出 
 
 ## 预期进入状态与现场核对
 
-预期 Goal 05 已提供可安装 Runtime 和少量 API/CLI 任务，Goal 06 已证明一个 E2
-canary，但桌面 MVP 不应依赖新增更多 E2。开始前现场核对：
+预期 Goal 05 已提供唯一 Model Gateway/Secret Broker，Goal 06 已提供可安装 Runtime
+和少量 API/CLI 用户态任务。本 Goal 不依赖 E2，也不得为桌面自动化引入提权。
+Goal 03 的补充 Fedora GNOME 验收已经证明基础 portal 状态、GNOME extension bridge、
+应用注册和部分真实窗口/浏览器观察；这些是起点，不是 AT-SPI 或 RemoteDesktop 已经
+完成的证据。开始前现场核对：
 
 - 目标 Fedora GNOME、Wayland、AT-SPI、RemoteDesktop/ScreenCast portal 版本；
 - portal 授权是否可持久、daemon 重启/用户登出/锁屏后的行为；
 - 现有 GNOME extension、window/app/browser adapter 的真实可用能力和调用者；
+- Goal 03/06 已有的 app.open、window observation、notification 和安装证据，避免
+  重复实现同一 bridge；
 - AT-SPI 对选定真实应用的 role/name/state/action 覆盖与稳定性；
 - 当前安装 artifact 能否在干净 GNOME VM 启动 daemon、D-Bus 和用户交互面；
 - 截图、可访问文本和模型上下文的数据边界。
@@ -104,7 +110,7 @@ fallback 安全性，不能冒充真实应用产品价值。
    - 目标、应用、外部后果或 UI 对象有实质歧义时在动作前询问；
    - 进度、等待登录/portal/用户输入、取消和失败原因在 CLI/D-Bus/可用 UI 可理解；
    - 用户接管立即停止输入并持久化安全状态；归还后重新观察和重新验证计划；
-   - 本阶段不真实执行付款、发布消息、账户变更或私人数据外传。
+   - 本阶段不实现 E2，不真实执行付款、发布消息、账户变更或私人数据外传。
 
 6. **主黄金场景与恢复**
    - 按上述固定场景记录 VM snapshot、系统/桌面路径、允许效果、故障点和完成证据；
@@ -119,7 +125,7 @@ fallback 安全性，不能冒充真实应用产品价值。
 - 不追求任意网页/游戏/画布自动化或纯视觉通用 benchmark；
 - 不读取浏览器密码/cookie，不绕过 CAPTCHA、MFA、portal 或应用安全提示；
 - 不把鼠标键盘作为默认路径，不启用 `/dev/uinput`；
-- 不开放更多 E2，不构建主动建议、插件市场或完整桌面 SDK；
+- 不实现 E2，不构建主动建议、插件市场或完整桌面 SDK；
 - 不删除现有 desktop bridge，不把 fake/dry-run 写成真实 GNOME 证据。
 
 ## 验收条件
@@ -131,7 +137,7 @@ fallback 安全性，不能冒充真实应用产品价值。
 - [ ] 用户接管立即停止输入，归还后丢弃旧状态并安全继续；
 - [ ] 主黄金场景跨 daemon 重启完成系统和真实桌面步骤，独立证据支持 TerminalOutcome；
 - [ ] 主场景和受控 portal 场景分别连续通过至少三轮，无错误外部副作用；
-- [ ] 干净 Fedora GNOME VM 从 Goal 05 artifact 安装后可复现；
+- [ ] 干净 Fedora GNOME VM 从 Goal 06 artifact 安装后可复现；
 - [ ] Goal 03–06 兼容、秘密、用户态任务和 E2 边界没有回归；
 - [ ] 共同质量门禁通过，文档准确区分真实 GNOME、WSL、fixture 和 mock。
 

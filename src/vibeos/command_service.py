@@ -6,6 +6,7 @@ from typing import Protocol
 
 from .models import CommandRequest, CommandResult, Intent
 from .core.adapters.task_repository import TaskRepositoryError
+from .provider_client import model_request_budget
 from .run_context import RunContext
 from .task_trace import TaskTraceStore, bind_trace_session, current_trace_session, record_trace_event
 
@@ -79,7 +80,8 @@ class CommandService:
             )
             try:
                 context = RunContext.from_request(request, run_id=trace_session.run_id, goal_id="goal_pending")
-                result = self._dispatch(request, context)
+                with model_request_budget():
+                    result = self._dispatch(request, context)
             except TaskRepositoryError:
                 result = _with_transport(
                     CommandResult(
@@ -138,7 +140,8 @@ class CommandService:
         )
         with bind_trace_session(trace_session):
             context = RunContext.from_request(request, run_id=trace_session.run_id, goal_id="goal_pending")
-            result = self.task_handler.reject(review_id, request, context)
+            with model_request_budget():
+                result = self.task_handler.reject(review_id, request, context)
             final_result = self.result_recorder.record(request, result, trace_session.run_id)
             metadata = self.result_recorder.metadata(final_result)
             trace_session.finalize(

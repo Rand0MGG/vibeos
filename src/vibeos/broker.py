@@ -211,14 +211,15 @@ class CapabilityBroker:
 
     def _pending_payload(self, state: TaskRun) -> dict[str, object]:
         contract = self.task_repository.contract(state.task_id)
-        planning = (
-            self.task_engine.planning.from_snapshot(
-                utterance=contract.goal if contract else "",
-                payload=_plan_payload(self.task_repository.plan_payload(state.active_plan_revision_id)) if state.active_plan_revision_id else {},
-            )
-            if state.active_plan_revision_id
-            else None
-        )
+        planning = None
+        if state.active_plan_revision_id:
+            try:
+                planning = self.task_engine.planning.from_snapshot(
+                    utterance=contract.goal if contract else "",
+                    payload=_plan_payload(self.task_repository.plan_payload(state.active_plan_revision_id)),
+                )
+            except (KeyError, TypeError, ValueError):
+                planning = None
         plan = planning.plan if planning is not None else None
         step = next((item for item in plan.steps if item.id == state.current_step_id), None) if plan is not None else None
         review = self.review_service.review_step(plan, step, None)[0] if step is not None and plan is not None else None
@@ -240,7 +241,10 @@ class CapabilityBroker:
 def _plan_payload(raw: str | None) -> dict[str, object]:
     import json
 
-    payload = json.loads(raw) if raw else {}
+    try:
+        payload = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        return {}
     return payload if isinstance(payload, dict) else {}
 
 

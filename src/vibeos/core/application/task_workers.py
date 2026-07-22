@@ -26,11 +26,8 @@ class TaskSchedulerComponent:
 
     async def start(self) -> None:
         self._stop.clear()
-        await self.tick()
+        self._ready()
         self._task = asyncio.create_task(self._run())
-        if self._status != "degraded":
-            self._status = "ready"
-            self._message = "task scheduler scans persisted runnable and due tasks"
 
     async def stop(self) -> None:
         self._stop.set()
@@ -59,6 +56,8 @@ class TaskSchedulerComponent:
         failures = tuple(item for item in await asyncio.gather(*(resume_one(task_id) for task_id in task_ids)) if item is not None)
         if failures:
             self._degrade("resume", failures[0])
+        else:
+            self._ready()
         return len(task_ids)
 
     def health_status(self) -> tuple[str, str]:
@@ -74,6 +73,10 @@ class TaskSchedulerComponent:
     def _degrade(self, operation: str, error: BaseException) -> None:
         self._status = "degraded"
         self._message = f"task scheduler {operation} failed: {type(error).__name__}: {error}"
+
+    def _ready(self) -> None:
+        self._status = "ready"
+        self._message = "task scheduler scans persisted runnable and due tasks"
 
 
 class OutboxDispatcherComponent:
@@ -98,11 +101,8 @@ class OutboxDispatcherComponent:
 
     async def start(self) -> None:
         self._stop.clear()
-        await self.tick()
+        self._ready()
         self._task = asyncio.create_task(self._run())
-        if self._status != "degraded":
-            self._status = "ready"
-            self._message = "outbox dispatcher provides at-least-once delivery"
 
     async def stop(self) -> None:
         self._stop.set()
@@ -131,6 +131,8 @@ class OutboxDispatcherComponent:
         failures = tuple(item for item in await asyncio.gather(*(consume_one(message) for message in messages)) if item is not None)
         if failures:
             self._degrade("consume", failures[0])
+        else:
+            self._ready()
         return len(messages)
 
     def health_status(self) -> tuple[str, str]:
@@ -146,3 +148,7 @@ class OutboxDispatcherComponent:
     def _degrade(self, operation: str, error: BaseException) -> None:
         self._status = "degraded"
         self._message = f"outbox dispatcher {operation} failed: {type(error).__name__}: {error}"
+
+    def _ready(self) -> None:
+        self._status = "ready"
+        self._message = "outbox dispatcher provides at-least-once delivery"

@@ -164,6 +164,7 @@ def _public_status(overall: str) -> str:
         "dry_run": "dry_run",
         "completed": "executed",
         "rejected": "rejected",
+        "blocked": "rejected",
     }.get(overall, "failed")
 
 

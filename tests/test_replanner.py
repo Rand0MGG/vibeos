@@ -147,6 +147,27 @@ def test_replanner_offers_alternative_domain_replan_after_acceptance_failure() -
     assert decision.do_not_repeat_route_ids == ("apps_open_route",)
 
 
+def test_replanner_never_replans_a_completed_effect_only_to_repair_unverified_acceptance() -> None:
+    replanner = EvidenceDrivenReplanner()
+    plan = make_plan("browser.open_url", route_id="browser_open_url_route", domain_id="browser")
+
+    decision = replanner.decide(
+        utterance="open https://example.com",
+        current_plan=plan,
+        attempts=(),
+        failure=FailureClassification(
+            failure_class="acceptance_unverified",
+            message="browser navigation was requested but the final page could not be observed",
+            replannable=True,
+        ),
+        available_domain_ids=("browser",),
+    )
+
+    assert decision.action == "ask_user"
+    assert decision.do_not_repeat_route_ids == ()
+    assert decision.do_not_repeat_capability_ids == ()
+
+
 def make_plan(capability_id: str, *, route_id: str, domain_id: str = "desktop") -> TaskPlan:
     return TaskPlan(
         schema_version="v0.5",

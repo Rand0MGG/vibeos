@@ -79,12 +79,33 @@ class DurableTaskResumer:
                     should_drive = False
                 if should_drive:
                     state, resolved = self._ensure_plan(state, request, resolved, lease, heartbeat)
+                if should_drive:
+                    state, resolved, should_drive = self._restore_active_plan(state, resolved, lease)
         finally:
             self.repository.release(lease, now=now_iso())
         if not should_drive:
             return None
         planning = resolved or load_planning(state, self.repository, self.planning)
         return ResumeOutcome(state, request, stable_id("run_recovery", task_id, state.revision), planning)
+
+    def _restore_active_plan(
+        self,
+        state: TaskRun,
+        resolved: PlanningArtifacts | None,
+        lease: TaskLease,
+    ) -> tuple[TaskRun, PlanningArtifacts | None, bool]:
+        if state.active_plan_revision_id is None or resolved is not None:
+            return state, resolved, True
+        resolved = load_planning(state, self.repository, self.planning)
+        if resolved is not None or TaskEventType.PAUSE_REQUESTED not in allowed_events(state.status):
+            return state, resolved, True
+        state = self._commit(
+            state,
+            TaskEventType.PAUSE_REQUESTED,
+            lease,
+            reason="persisted planning snapshot is malformed; explicit repair is required",
+        )
+        return state, None, False
 
     def _advance_time(self, state: TaskRun, lease: TaskLease) -> tuple[TaskRun, bool]:
         if state.deadline_at is not None and state.deadline_at <= now_iso():

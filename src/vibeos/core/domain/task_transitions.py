@@ -37,6 +37,7 @@ _STATUS_EVENTS: dict[TaskStatus, frozenset[TaskEventType]] = {
             TaskEventType.RETRY_SCHEDULED,
             TaskEventType.WAIT_REQUESTED,
             TaskEventType.REPLAN_REQUESTED,
+            TaskEventType.CLARIFICATION_REQUIRED,
             TaskEventType.TAKEOVER_REQUESTED,
             TaskEventType.COMPLETE,
             TaskEventType.DRY_RUN_COMPLETED,

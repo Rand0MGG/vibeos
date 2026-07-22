@@ -10,7 +10,7 @@ from .core.adapters.task_repository import SqliteTaskRepository
 from .core.domain.task import ActionReceipt, GoalContract, PlanRevision, Step, TaskEvent, TaskEventType, TaskRun, TaskStatus
 from .models import CommandRequest
 from .planning_models import PlanningArtifacts
-from .planning_service import PlanningService
+from .planning_service import PlanningService, PlanningSnapshotError
 from .task_models import FailureClassification, PlanAttempt, PlanExecutionResult, StepExecutionResult, TaskPlan
 
 
@@ -33,9 +33,7 @@ def execution_message(execution: PlanExecutionResult) -> str:
 
 
 def overall_status(state: TaskRun, execution: PlanExecutionResult | None) -> str:
-    if execution is not None:
-        return str(execution.overall_status)
-    return {
+    authoritative_state = {
         TaskStatus.DRY_RUN: "dry_run",
         TaskStatus.SUCCEEDED: "completed",
         TaskStatus.AWAITING_REVIEW: "needs_review",
@@ -44,8 +42,14 @@ def overall_status(state: TaskRun, execution: PlanExecutionResult | None) -> str
         TaskStatus.TAKEN_OVER: "blocked",
         TaskStatus.WAITING: "blocked",
         TaskStatus.RETRY_WAIT: "blocked",
+        TaskStatus.BLOCKED: "blocked",
         TaskStatus.CANCELLED: "rejected",
-    }.get(state.status, "failed")
+    }.get(state.status)
+    if authoritative_state is not None:
+        return authoritative_state
+    if execution is not None:
+        return str(execution.overall_status)
+    return "failed"
 
 
 def new_contract(task_id: str, request: CommandRequest, created_at: str) -> GoalContract:
@@ -139,10 +143,16 @@ def load_planning(task: TaskRun, repository: SqliteTaskRepository, service: Plan
     contract = repository.contract(task.task_id)
     if raw is None or contract is None:
         return None
-    payload = json.loads(raw)
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
     if not isinstance(payload, dict):
         return None
-    return service.from_snapshot(utterance=contract.goal, payload=payload)
+    try:
+        return service.from_snapshot(utterance=contract.goal, payload=payload)
+    except (PlanningSnapshotError, KeyError, TypeError, ValueError):
+        return None
 
 
 def restore_step_results(receipts: tuple[ActionReceipt, ...]) -> tuple[StepExecutionResult, ...]:

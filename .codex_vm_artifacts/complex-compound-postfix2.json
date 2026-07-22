@@ -1,0 +1,454 @@
+{
+  "status": "ambiguous",
+  "intent": {
+    "action": "unknown",
+    "target": {},
+    "reason": "model provider returned an invalid intent payload",
+    "requires_confirmation": false
+  },
+  "result": {
+    "task": {
+      "task_id": "task_f1375b23a008bf48941b",
+      "contract_id": "contract_3b840ebe3c0503257cdc",
+      "status": "awaiting_clarification",
+      "revision": 2,
+      "current_step_id": null,
+      "completed_step_ids": [],
+      "pending_interaction_id": "clarify_4f3f12d73f9a689922c9",
+      "next_wake_at": null,
+      "wait_event_key": null,
+      "deadline_at": "2026-07-19T04:37:42.646Z",
+      "last_event": "clarification_required",
+      "terminal_outcome": null
+    },
+    "task_id": "task_f1375b23a008bf48941b",
+    "task_revision": 2,
+    "understanding": {
+      "understanding_id": "und_8078659b6d13",
+      "utterance": "First inspect VibeOS system status, then open https://example.com, and only after the page is confirmed ready send me a notification saying the check is complete.",
+      "analysis": {
+        "utterance": "First inspect VibeOS system status, then open https://example.com, and only after the page is confirmed ready send me a notification saying the check is complete.",
+        "type": "task",
+        "confidence": 0.9,
+        "domains": [
+          "system_observation",
+          "browser",
+          "notification"
+        ],
+        "explanation": "User requests a multi-step task: inspect system status, open a URL, then send a notification upon readiness.",
+        "task_spans": [
+          {
+            "id": "span_1",
+            "text": "First inspect VibeOS system status, then open https://example.com, and only after the page is confirmed ready send me a notification saying the check is complete.",
+            "start": 0,
+            "end": 162,
+            "domain": "system_observation",
+            "confidence": 0.9
+          }
+        ],
+        "provenance": {
+          "parser": "provider_understanding_analysis",
+          "parser_version": "v0.8",
+          "source_span": {
+            "start": 0,
+            "end": 162,
+            "text": "First inspect VibeOS system status, then open https://example.com, and only after the page is confirmed ready send me a notification saying the check is complete."
+          },
+          "confidence": 0.9,
+          "model": "structured-provider",
+          "schema_version": "v0.8",
+          "repair_applied": false
+        },
+        "chat_response": null
+      },
+      "artifact_role": "primary",
+      "primary_understanding_id": "und_8078659b6d13",
+      "source_understanding_id": null,
+      "refinement_id": null,
+      "supersession_id": null,
+      "provider_intent": {
+        "action": "unknown",
+        "target": {},
+        "reason": "model provider returned an invalid intent payload",
+        "requires_confirmation": false
+      },
+      "provider_parse_count": 1,
+      "provider_cache_hit_count": 0,
+      "uncertainty_reasons": [],
+      "clarification_question_id": null,
+      "clarification_provider_name": null,
+      "clarification_model_name": null,
+      "clarification_parse_valid": true,
+      "clarification_fallback_used": false,
+      "clarification_error": null,
+      "analysis_provider_name": "deepseek",
+      "analysis_model_name": "deepseek-v4-flash",
+      "analysis_parse_valid": true,
+      "analysis_fallback_used": false,
+      "analysis_error": null
+    },
+    "analysis": {
+      "utterance": "First inspect VibeOS system status, then open https://example.com, and only after the page is confirmed ready send me a notification saying the check is complete.",
+      "type": "task",
+      "confidence": 0.9,
+      "domains": [
+        "system_observation",
+        "browser",
+        "notification"
+      ],
+      "explanation": "User requests a multi-step task: inspect system status, open a URL, then send a notification upon readiness.",
+      "task_spans": [
+        {
+          "id": "span_1",
+          "text": "First inspect VibeOS system status, then open https://example.com, and only after the page is confirmed ready send me a notification saying the check is complete.",
+          "start": 0,
+          "end": 162,
+          "domain": "system_observation",
+          "confidence": 0.9
+        }
+      ],
+      "provenance": {
+        "parser": "provider_understanding_analysis",
+        "parser_version": "v0.8",
+        "source_span": {
+          "start": 0,
+          "end": 162,
+          "text": "First inspect VibeOS system status, then open https://example.com, and only after the page is confirmed ready send me a notification saying the check is complete."
+        },
+        "confidence": 0.9,
+        "model": "structured-provider",
+        "schema_version": "v0.8",
+        "repair_applied": false
+      },
+      "chat_response": null
+    },
+    "goal_synthesis": {
+      "status": "ready",
+      "goal_spec": {
+        "goal_id": "goal_f18ddf4c52a1",
+        "goal_text": "First inspect VibeOS system status, then open https://example.com, and only after the page is confirmed ready send me a notification saying the check is complete.",
+        "goal_type": "system_status",
+        "source_understanding_id": "und_8078659b6d13",
+        "subgoals": [],
+        "candidate_domain_ids": [
+          "system_observation",
+          "browser",
+          "notification"
+        ],
+        "required_capability_ids": [
+          "system.status",
+          "browser.open_url",
+          "browser.search_web",
+          "browser.open_site_search",
+          "browser.open_named_target",
+          "notification.send"
+        ],
+        "missing_capability_ids": [],
+        "clarification_questions": [],
+        "constraints": [
+          "Planner must use registered domains, routes, and capability families only."
+        ],
+        "fallback_hints": [],
+        "assumptions": [],
+        "assistant_intent": null,
+        "synthesis_provenance": {
+          "provider_name": "deepseek",
+          "provider_version": "v0.8",
+          "model_name": "deepseek-v4-flash",
+          "fallback_used": true,
+          "parse_valid": false,
+          "error": "Expecting property name enclosed in double quotes: line 29 column 8 (char 1000)"
+        }
+      },
+      "message": "User requests a multi-step task: inspect system status, open a URL, then send a notification upon readiness.",
+      "exchange": {
+        "provider_name": "deepseek",
+        "model_name": "deepseek-v4-flash",
+        "normalized_output": {
+          "status": "ready",
+          "goal_type": "system_status",
+          "candidate_domain_ids": [
+            "system_observation",
+            "browser",
+            "notification"
+          ],
+          "required_capability_ids": [
+            "system.status",
+            "browser.open_url",
+            "browser.search_web",
+            "browser.open_site_search",
+            "browser.open_named_target",
+            "notification.send"
+          ],
+          "missing_capability_ids": [],
+          "clarification_questions": [],
+          "constraints": [
+            "Planner must use registered domains, routes, and capability families only."
+          ],
+          "fallback_hints": [],
+          "assumptions": [],
+          "assistant_intent": null,
+          "subgoals": [],
+          "message": "User requests a multi-step task: inspect system status, open a URL, then send a notification upon readiness."
+        },
+        "raw_output": "{\"status\": \"ready\", \"goal_type\": \"system_status\", \"candidate_domain_ids\": [\"system_observation\", \"browser\", \"notification\"], \"required_capability_ids\": [\"system.status\", \"browser.open_url\", \"browser.search_web\", \"browser.open_site_search\", \"browser.open_named_target\", \"notification.send\"], \"missing_capability_ids\": [], \"clarification_questions\": [], \"constraints\": [\"Planner must use registered domains, routes, and capability families only.\"], \"fallback_hints\": [], \"assumptions\": [], \"assistant_intent\": null, \"subgoals\": [], \"message\": \"User requests a multi-step task: inspect system status, open a URL, then send a notification upon readiness.\"}",
+        "parse_valid": false,
+        "fallback_used": true,
+        "error": "Expecting property name enclosed in double quotes: line 29 column 8 (char 1000)"
+      }
+    },
+    "candidate_set": {
+      "candidate_set_id": "cset_86d11a2810cd",
+      "understanding_id": "und_8078659b6d13",
+      "generated_by": "host_candidate_generation",
+      "candidates": []
+    },
+    "route_decision": {
+      "route_decision_id": "rdec_4323a8636ecb",
+      "candidate_set_id": "cset_86d11a2810cd",
+      "understanding_id": "und_8078659b6d13",
+      "action": "clarify",
+      "selected_candidate_id": null,
+      "reason": "The request spans multiple capability domains, but no single host-generated plan covers the whole goal. Please split it into ordered bounded tasks or clarify the required condition and execution order.",
+      "provider_name": "host_candidate_selector",
+      "model_name": "deterministic-local",
+      "parse_valid": true,
+      "fallback_used": false,
+      "error": null
+    },
+    "domain_routing": {
+      "schema_version": "v0.4",
+      "candidate_domain_ids": [
+        "system_observation",
+        "browser",
+        "notification"
+      ],
+      "active_domain_ids": [
+        "system_observation",
+        "browser",
+        "notification"
+      ],
+      "fallback_domain_ids": [],
+      "clarification_needed": false,
+      "reason": "User requests a multi-step task: inspect system status, open a URL, then send a notification upon readiness.",
+      "observation_request": {
+        "schema_version": "v0.4",
+        "active_domain_ids": [
+          "system_observation",
+          "browser",
+          "notification"
+        ],
+        "requested_context_package_ids": [
+          "session_context",
+          "system_context",
+          "window_context",
+          "browser_context"
+        ],
+        "postcondition_package_ids": [
+          "session_context",
+          "system_context",
+          "window_context",
+          "browser_context"
+        ]
+      }
+    },
+    "observation_request": {
+      "schema_version": "v0.4",
+      "active_domain_ids": [
+        "system_observation",
+        "browser",
+        "notification"
+      ],
+      "requested_context_package_ids": [
+        "session_context",
+        "system_context",
+        "window_context",
+        "browser_context"
+      ],
+      "postcondition_package_ids": [
+        "session_context",
+        "system_context",
+        "window_context",
+        "browser_context"
+      ]
+    },
+    "observation_receipt": {
+      "schema_version": "v0.4",
+      "requested_package_ids": [
+        "session_context",
+        "system_context",
+        "window_context",
+        "browser_context"
+      ],
+      "loaded_package_ids": [
+        "session_context",
+        "system_context"
+      ],
+      "skipped_package_ids": [
+        "window_context",
+        "browser_context"
+      ],
+      "packages": [
+        {
+          "schema_version": "v0.4",
+          "package_id": "session_context",
+          "status": "loaded",
+          "payload": {
+            "session_id": "local-session",
+            "locale": "und",
+            "transport": "local",
+            "captured_at": "2026-07-18T22:38:13.821Z",
+            "notes": []
+          },
+          "payload_bytes": 126,
+          "freshness_ts": "2026-07-18T22:38:13.821Z",
+          "truncated": false,
+          "redacted_fields": [],
+          "warnings": [],
+          "errors": []
+        },
+        {
+          "schema_version": "v0.4",
+          "package_id": "system_context",
+          "status": "loaded",
+          "payload": {
+            "status": "ok",
+            "runtime": "local",
+            "captured_at": "2026-07-18T22:38:13.821Z"
+          },
+          "payload_bytes": 79,
+          "freshness_ts": "2026-07-18T22:38:13.821Z",
+          "truncated": false,
+          "redacted_fields": [],
+          "warnings": [],
+          "errors": []
+        },
+        {
+          "schema_version": "v0.4",
+          "package_id": "window_context",
+          "status": "unavailable",
+          "payload": {
+            "status": "unavailable",
+            "windows": [],
+            "captured_at": "2026-07-18T22:38:13.821Z"
+          },
+          "payload_bytes": 83,
+          "freshness_ts": "2026-07-18T22:38:13.821Z",
+          "truncated": false,
+          "redacted_fields": [],
+          "warnings": [],
+          "errors": []
+        },
+        {
+          "schema_version": "v0.4",
+          "package_id": "browser_context",
+          "status": "unavailable",
+          "payload": {
+            "run_id": null,
+            "attempt_id": null,
+            "route_id": null,
+            "status": "unavailable",
+            "active_url": null,
+            "requested_url": null,
+            "requested_query": null,
+            "page_title": null,
+            "app_id": null,
+            "known_sites": [],
+            "query": null,
+            "error_state": null,
+            "adapter": null,
+            "captured_at": "2026-07-18T22:38:13.821Z"
+          },
+          "payload_bytes": 298,
+          "freshness_ts": "2026-07-18T22:38:13.821Z",
+          "truncated": false,
+          "redacted_fields": [],
+          "warnings": [],
+          "errors": []
+        }
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    "capability_exposure": {
+      "schema_version": "v0.4",
+      "active_domain_ids": [
+        "system_observation",
+        "browser",
+        "notification"
+      ],
+      "exposed_route_ids": [
+        "notification_send_route",
+        "system_status_route",
+        "portal_open_uri_route",
+        "browser_open_url_route",
+        "browser_named_target_route",
+        "browser_search_web_route",
+        "browser_site_search_route",
+        "browser_music_search_route"
+      ],
+      "exposed_capability_ids": [
+        "notification.send",
+        "system.status",
+        "portal.open_uri",
+        "browser.open_url",
+        "browser.open_named_target",
+        "browser.search_web",
+        "browser.open_site_search"
+      ],
+      "exposed_context_package_ids": [
+        "session_context",
+        "system_context"
+      ],
+      "hidden_domain_ids": [
+        "app_interaction",
+        "apps",
+        "clipboard",
+        "media",
+        "window_management"
+      ],
+      "hidden_route_ids": [
+        "apps_list_route",
+        "apps_open_route",
+        "app_structured_search_route",
+        "app_shortcut_search_route",
+        "window_list_route",
+        "window_focus_route",
+        "window_minimize_route",
+        "window_maximize_route",
+        "window_close_route",
+        "clipboard_write_route",
+        "media_search_route",
+        "media_play_route",
+        "media_pause_route"
+      ],
+      "hidden_counts": {
+        "domains": 5,
+        "routes": 13,
+        "context_packages": 3
+      }
+    },
+    "candidates": [],
+    "review_id": "clarify_4f3f12d73f9a689922c9",
+    "run": {
+      "run_id": "run_a832308793e4",
+      "goal_id": "contract_3b840ebe3c0503257cdc",
+      "utterance": "First inspect VibeOS system status, then open https://example.com, and only after the page is confirmed ready send me a notification saying the check is complete.",
+      "status": "needs_user_input",
+      "selected_transport": "dbus",
+      "attempt_ids": [],
+      "final_outcome": "needs_user_input"
+    },
+    "attempts": []
+  },
+  "selected_target": null,
+  "trace_run_id": "run_a832308793e4",
+  "audit_id": "2026-07-18T22:38:13.839Z-29149",
+  "review_id": "clarify_4f3f12d73f9a689922c9",
+  "transport": "dbus",
+  "message": "The request spans multiple capability domains, but no single host-generated plan covers the whole goal. Please split it into ordered bounded tasks or clarify the required condition and execution order.",
+  "review": null,
+  "execution_status": "not_started",
+  "acceptance_status": "skipped",
+  "overall_status": "needs_user_input"
+}

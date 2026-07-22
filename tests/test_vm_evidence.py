@@ -1,17 +1,21 @@
 from scripts.collect_vm_evidence import (
     audit_tail_ok,
     blocked_step,
+    browser_action_evidence_ok,
     build_summary,
     command_transport_ok,
     collect_real_action_evidence,
     collect_state_diagnostics,
     compact_command_result,
+    contract_probe_ok,
     daemon_status_ok,
     dbus_introspect_ok,
     doctor_ok,
     enrich_step_context,
+    example_domain_browser_visible,
     extract_trace_run_id,
     infer_hint,
+    main,
     parse_gdbus_json,
     systemd_active_ok,
 )
@@ -41,6 +45,27 @@ def test_doctor_ok_strict_requires_linux_session_checks() -> None:
             {"name": "action_helpers", "status": "ok"},
             {"name": "model_config", "status": "warn"},
         ],
+    }
+    assert doctor_ok(report, strict=True)
+
+
+def test_doctor_ok_strict_accepts_ssh_tty_when_desktop_integrations_are_ready() -> None:
+    required = (
+        "platform",
+        "session_type",
+        "gnome_shell",
+        "gdbus",
+        "xdg_desktop_portal",
+        "systemd_user",
+        "vibed_service",
+        "runtime_entry",
+        "gnome_extension_bridge",
+        "app_registry",
+        "action_helpers",
+    )
+    report = {
+        "summary": {"overall": "warn"},
+        "checks": [{"name": name, "status": "warn" if name == "session_type" else "ok"} for name in required],
     }
     assert doctor_ok(report, strict=True)
 
@@ -80,6 +105,27 @@ def test_doctor_ok_strict_rejects_warn_runtime_entry() -> None:
 def test_command_transport_ok_requires_transport() -> None:
     assert command_transport_ok({"status": "executed", "transport": "local"})
     assert not command_transport_ok({"status": "executed"})
+
+
+def test_contract_probe_accepts_canonical_plan_without_private_validation_projection() -> None:
+    payload = {
+        "status": "review_required",
+        "result": {"plan": {"steps": [{"action": "clipboard.write", "target": {"text": "VibeOS evidence"}}]}},
+    }
+    assert contract_probe_ok(payload, "clipboard.write", "text", "VibeOS evidence")
+
+
+def test_browser_action_evidence_accepts_only_completion_or_conservative_incomplete() -> None:
+    base = {"transport": "dbus", "selected_target": "https://example.com", "execution_status": "succeeded"}
+    assert browser_action_evidence_ok({**base, "status": "executed", "overall_status": "completed"})
+    assert browser_action_evidence_ok({**base, "status": "failed", "acceptance_status": "indeterminate", "overall_status": "incomplete"})
+    assert browser_action_evidence_ok({**base, "status": "ambiguous", "acceptance_status": "indeterminate", "overall_status": "needs_user_input"})
+    assert not browser_action_evidence_ok({**base, "status": "failed", "acceptance_status": "failed", "overall_status": "failed"})
+
+
+def test_example_domain_browser_visible_requires_matching_firefox_window() -> None:
+    assert example_domain_browser_visible([{"app_id": "org.mozilla.firefox.desktop", "title": "Example Domain — Mozilla Firefox"}])
+    assert not example_domain_browser_visible([{"app_id": "org.gnome.Terminal.desktop", "title": "Example Domain"}])
 
 
 def test_audit_tail_ok_requires_transport_for_command_entries() -> None:
@@ -187,13 +233,13 @@ def test_enrich_step_context_surfaces_trace_and_review_ids(monkeypatch) -> None:
     assert step["trace"]["run_id"] == "run_1"
 
 
-def test_collect_real_action_evidence_adds_reapprove_checks(monkeypatch) -> None:
+def test_collect_real_action_evidence_matches_browser_and_clipboard_policy(monkeypatch) -> None:
     calls: list[str] = []
 
     def fake_run_json_step(name, *args, **kwargs):
         calls.append(name)
         parsed = {}
-        if name in {"real_clipboard_review_required", "real_open_uri_review_required"}:
+        if name == "real_clipboard_review_required":
             parsed["review_id"] = f"rev_{name}"
         return {"name": name, "parsed": parsed}
 
@@ -202,7 +248,28 @@ def test_collect_real_action_evidence_adds_reapprove_checks(monkeypatch) -> None
     collect_real_action_evidence(steps, {"VIBEOS_STATE_DIR": "/tmp/test"})
 
     assert "real_clipboard_reapprove_rejected" in calls
-    assert "real_open_uri_reapprove_rejected" in calls
+    assert "real_browser_open_url" in calls
+    assert "real_browser_target_observed" in calls
+    assert "real_clipboard_adapter_direct" not in calls
+    assert "real_open_uri_reapprove_rejected" not in calls
+
+
+def test_safe_review_evidence_keeps_dry_run_review_and_reject_exit_contract(monkeypatch, tmp_path) -> None:
+    observed: dict[str, tuple[str | None, set[int] | None]] = {}
+
+    def fake_run_json_step(name, *args, **kwargs):
+        observed[name] = (kwargs.get("expected_status"), kwargs.get("expected_returncodes"))
+        parsed = {"review_id": f"review_{name}"} if "review_required" in name else {}
+        return {"name": name, "status": "ok", "ok": True, "parsed": parsed}
+
+    monkeypatch.setattr("scripts.collect_vm_evidence.run_json_step", fake_run_json_step)
+    monkeypatch.setattr("scripts.collect_vm_evidence.collect_report_diagnostics", lambda *args, **kwargs: {})
+    monkeypatch.setattr("scripts.collect_vm_evidence.timestamp_slug", lambda: "test")
+    monkeypatch.setattr("sys.argv", ["collect_vm_evidence.py", "--out-dir", str(tmp_path)])
+
+    assert main() == 0
+    assert observed["window_close_approve_dry_run"] == ("review_required", {1})
+    assert observed["window_close_reject"] == ("rejected", {1})
 
 
 def test_collect_state_diagnostics_reads_audit_reviews_and_runs() -> None:

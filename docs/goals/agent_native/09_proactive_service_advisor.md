@@ -1,9 +1,10 @@
-# Goal 08：用一个确定性 Detector 交付主动建议闭环
+# Goal 09：用一个确定性 Detector 交付主动建议闭环
 
-- 阶段：08 / 09
-- 依赖：[Goal 07](07_gnome_mixed_task_mvp.md)全部完成
+- 阶段：09 / 11
+- 依赖：[Goal 08](08_privileged_canary_and_rollback.md)全部完成
+- 规模：M
 - 风险：中
-- 完成后进入：[Goal 09](09_runtime_delivery_extension_and_distro_gate.md)
+- 完成后进入：[Goal 10](10_runtime_release_lifecycle.md)
 
 ## 给 Codex 的命令
 
@@ -27,8 +28,9 @@ Agent 可以比用户更早发现问题，但“发现”不等于“获得解�
 
 ## 预期进入状态与现场核对
 
-预期 Goal 07 已有真实 GNOME 通知/用户交互、Durable Task wait/timer、service facts、
-user service 修复路径和用户接管。开始前现场确认：
+预期 Goal 04 已有 service facts 和修复路径，Goal 07 已有真实 GNOME 通知/用户交互、
+Durable Task wait/timer 和用户接管，Goal 08 已证明 E2 边界但本 detector 不需要提权。
+开始前现场确认：
 
 - 受管 unit 的范围和用户可见身份；
 - service fact 的 TTL、失败事件、journal evidence 和数据等级；
@@ -60,7 +62,11 @@ service facts/events
    - Finding 包含 type、resource、severity、evidence IDs、first/last seen、confidence、
      sensitivity、detector version 和 stable dedupe key；
    - Suggestion 包含用户收益、候选方案、预计效果/成本、需要的 effect 等级、有效期；
-   - 状态转换持久化在现有 Task Store/领域事件路径，不新增 notification 状态权威。
+   - Finding/Suggestion 是同一 CoreDatabase、领域事件和 outbox 下的独立有界聚合，
+     可以有自己的规范表/repository，但不能伪装成 TaskRun，也不能建立第二个数据库、
+     daemon、notification 状态权威或私有执行循环；
+   - 只有 accept 才创建普通 GoalContract/Task。dismiss/snooze/suppress 不得创建动作
+     task 或改变机器状态。
 
 2. **一个确定性 detector**
    - 只读取允许的 user service facts/events，按变化事件或低频 timer 触发；
@@ -117,7 +123,7 @@ service facts/events
 - [ ] 受控精度/噪声门槛有数据，未达标时 detector 默认关闭；
 - [ ] 文档明确哪些指标来自合成、开发试用和真实用户，不虚构接受率；
 - [ ] 没有新的动作、模型、通知状态或 Task Store 旁路；
-- [ ] Goal 03–07 和共同质量门禁全部通过。
+- [ ] Goal 03–08 和共同质量门禁全部通过。
 
 ## 必交付物
 

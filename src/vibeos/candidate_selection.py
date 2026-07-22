@@ -134,6 +134,21 @@ class DeterministicCandidateSelectionProvider(CandidateSelectionProvider):
                 provider_name=self.provider_name,
                 model_name=self.model_name,
             )
+        requested_domains = tuple(dict.fromkeys(understanding.analysis.domains))
+        if len(requested_domains) > 1:
+            return CandidateSelectionDecision(
+                route_decision_id=make_route_decision_id(candidate_set, "clarify"),
+                candidate_set_id=candidate_set.candidate_set_id,
+                understanding_id=candidate_set.understanding_id,
+                action="clarify",
+                selected_candidate_id=None,
+                reason=(
+                    "The request spans multiple capability domains, but no single host-generated plan covers the whole goal. "
+                    "Please split it into ordered bounded tasks or clarify the required condition and execution order."
+                ),
+                provider_name=self.provider_name,
+                model_name=self.model_name,
+            )
         if not satisfiable:
             action: CandidateSelectionAction = "unsupported" if not candidate_set.candidates else "blocked"
             reason = "no candidate satisfies the current capability boundary" if candidate_set.candidates else "no candidate was generated"
@@ -169,6 +184,9 @@ class OpenAICompatibleCandidateSelectionProvider(CandidateSelectionProvider):
 
     def decide(self, *, understanding: UnderstandingArtifact, candidate_set: CandidateSet) -> CandidateSelectionDecision:
         request_payload = build_route_selection_request_payload(understanding=understanding, candidate_set=candidate_set)
+        host_boundary = self.fallback.decide(understanding=understanding, candidate_set=candidate_set)
+        if host_boundary.action == "clarify" and len(set(understanding.analysis.domains)) > 1:
+            return host_boundary
         if not self.config.configured or not model_guidance_enabled("VIBEOS_ENABLE_MODEL_ROUTE_SELECTION"):
             return self._fallback(understanding=understanding, candidate_set=candidate_set, error="missing_api_key_or_model_or_guidance_disabled")
 

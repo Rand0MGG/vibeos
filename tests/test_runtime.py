@@ -464,24 +464,29 @@ def test_dbus_runtime_returns_structured_transport_timeout(monkeypatch) -> None:
     assert result.status == "failed"
     assert result.transport == "dbus"
     assert result.result["error"] == "transport_timeout"
+    assert result.result["delivery_outcome"] == "unknown"
+    assert result.result["safe_to_retry"] is False
     assert result.result["run"]["attempt_ids"]
     assert result.result["attempts"][0]["failure"]["failure_class"] == "transport_timeout"
+    assert result.result["attempts"][0]["failure"]["retryable"] is False
     assert runtime.audit_tail(5)[-1]["audit_id"] == result.audit_id
 
 
-def test_dbus_runtime_falls_back_to_http_in_auto_mode(monkeypatch) -> None:
+def test_dbus_runtime_never_replays_timed_out_command_over_http(monkeypatch) -> None:
     monkeypatch.delenv("VIBEOS_RUNTIME", raising=False)
+    http = FakeHttpClient()
     runtime = DBusDaemonRuntime(
         FailingDaemonClient(),
         audit=AuditLog(make_audit_path("dbus-http-fallback")),
-        http_fallback_client=FakeHttpClient(),
+        http_fallback_client=http,
     )
 
     result = runtime.handle(CommandRequest("list windows"))
 
-    assert result.status == "executed"
-    assert result.transport == "http"
-    assert result.intent.action == "window.list"
+    assert result.status == "failed"
+    assert result.transport == "dbus"
+    assert result.result["delivery_outcome"] == "unknown"
+    assert http.payloads == []
 
 
 def test_dbus_runtime_does_not_fall_back_when_dbus_explicit(monkeypatch) -> None:

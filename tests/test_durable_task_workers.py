@@ -101,6 +101,7 @@ def test_scheduler_isolates_one_task_failure_and_keeps_serving() -> None:
     assert scheduler.health_status()[0] == "degraded"
     assert asyncio.run(scheduler.tick()) == 1
     assert resumed == ["good", "later"]
+    assert scheduler.health_status() == ("ready", "task scheduler scans persisted runnable and due tasks")
 
 
 def test_outbox_dispatcher_isolates_one_message_failure_and_keeps_serving() -> None:
@@ -118,6 +119,63 @@ def test_outbox_dispatcher_isolates_one_message_failure_and_keeps_serving() -> N
     assert dispatcher.health_status()[0] == "degraded"
     assert asyncio.run(dispatcher.tick()) == 1
     assert consumed == ["good", "later"]
+    assert dispatcher.health_status() == ("ready", "outbox dispatcher provides at-least-once delivery")
+
+
+def test_outbox_dispatcher_recovers_health_after_transient_claim_failure() -> None:
+    calls = 0
+
+    def claim() -> tuple[object, ...]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("database is locked")
+        return ()
+
+    dispatcher = OutboxDispatcherComponent(claim=claim, consume=lambda _message: None)
+
+    assert asyncio.run(dispatcher.tick()) == 0
+    assert dispatcher.health_status()[0] == "degraded"
+    assert asyncio.run(dispatcher.tick()) == 0
+    assert dispatcher.health_status() == ("ready", "outbox dispatcher provides at-least-once delivery")
+
+
+def test_scheduler_start_registers_ready_without_blocking_on_first_recovery_scan() -> None:
+    scans = 0
+
+    def scan() -> tuple[str, ...]:
+        nonlocal scans
+        scans += 1
+        return ()
+
+    async def exercise() -> tuple[str, str]:
+        scheduler = TaskSchedulerComponent(scan=scan, resume=lambda _task_id: None, poll_seconds=60)
+        await scheduler.start()
+        status = scheduler.health_status()
+        assert scans == 0
+        await scheduler.stop()
+        return status
+
+    assert asyncio.run(exercise()) == ("ready", "task scheduler scans persisted runnable and due tasks")
+
+
+def test_outbox_start_registers_ready_without_blocking_on_first_claim() -> None:
+    claims = 0
+
+    def claim() -> tuple[object, ...]:
+        nonlocal claims
+        claims += 1
+        return ()
+
+    async def exercise() -> tuple[str, str]:
+        dispatcher = OutboxDispatcherComponent(claim=claim, consume=lambda _message: None, poll_seconds=60)
+        await dispatcher.start()
+        status = dispatcher.health_status()
+        assert claims == 0
+        await dispatcher.stop()
+        return status
+
+    assert asyncio.run(exercise()) == ("ready", "outbox dispatcher provides at-least-once delivery")
 
 
 def test_recovery_commits_explicit_timeout_for_overdue_task(tmp_path: Path) -> None:

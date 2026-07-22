@@ -101,9 +101,6 @@ class DBusDaemonRuntime:
         try:
             response = self.client.request_payload(command_request_payload(request))
         except RuntimeError as exc:
-            fallback = self._maybe_fallback_to_http(request)
-            if fallback is not None:
-                return fallback
             return self._record_transport_failure(request, str(exc))
         return with_transport(command_result_from_payload(response), self.transport_name)
 
@@ -124,9 +121,6 @@ class DBusDaemonRuntime:
         try:
             response = self.client.request_payload({"schema_version": "v1", "review_id": review_id, "reject": True})
         except RuntimeError as exc:
-            fallback = self._maybe_fallback_to_http(request)
-            if fallback is not None:
-                return fallback
             return self._record_transport_failure(request, str(exc))
         return with_transport(command_result_from_payload(response), self.transport_name)
 
@@ -170,18 +164,6 @@ class DBusDaemonRuntime:
             overall_status=result.overall_status,
         )
         return replace(result, audit_id=audit_id)
-
-    def _maybe_fallback_to_http(self, request: CommandRequest) -> CommandResult | None:
-        if runtime_mode() != "auto":
-            return None
-        supplied_client = self.http_fallback_client
-        try:
-            client = supplied_client or HTTPDaemonClient()
-        except ValueError:
-            return None
-        if supplied_client is None and not client.is_available():
-            return None
-        return HTTPDaemonRuntime(client, audit=self.audit).handle(replace(request, transport="http"))
 
 
 class HTTPDaemonRuntime:
@@ -538,13 +520,20 @@ def transport_error_result(transport: str, message: str, request: CommandRequest
     failure = FailureClassification(
         failure_class="transport_timeout" if error_code == "transport_timeout" else "environment_unreachable",
         message=message,
-        retryable=error_code == "transport_timeout",
-        details={"transport": transport, "error": error_code},
+        retryable=False,
+        details={
+            "transport": transport,
+            "error": error_code,
+            "delivery_outcome": "unknown" if error_code == "transport_timeout" else "not_delivered",
+            "safe_to_retry": False if error_code == "transport_timeout" else True,
+        },
     )
     payload = {
         "error": error_code,
         "transport": transport,
         "message": message,
+        "delivery_outcome": "unknown" if error_code == "transport_timeout" else "not_delivered",
+        "safe_to_retry": False if error_code == "transport_timeout" else True,
         "run": asdict(AgentRun(run_id, "transport_goal_unresolved", utterance, "failed", transport, (attempt_id,), "failed")),
         "attempts": [
             asdict(
