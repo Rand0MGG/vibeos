@@ -1,42 +1,28 @@
-# VibeOS 总览
+# 项目总览
 
-## 项目边界
-
-VibeOS 是面向 Linux 用户会话的、受限且可审计的任务运行时。它接受自然
-语言目标，但模型不能直接调用 shell、原始 D-Bus、任意键鼠控制或未注册的
-桌面 API。所有实际动作都必须经过能力注册、计划、风险审查和验收。
-
-## 当前主路径
+VibeOS 当前是一个面向 Linux 桌面能力的模块化单体 Agent 原型。19 个已注册
+能力统一经过持久化任务引擎：
 
 ```text
-CLI / HTTP / D-Bus
+CLI / D-Bus / loopback HTTP / 本地开发入口
   -> CommandService
   -> TaskApplicationService
-  -> GoalLoop
-  -> StepExecutionService
-  -> CapabilityRecipeRegistry / ToolRegistry
-  -> domain tool / existing adapter
+  -> DurableTaskEngine（纯状态转换）
+  -> SQLite Task Store
+  -> 注册工具 -> 桌面 adapter
 ```
 
-`GoalLoop` 是所有支持任务的唯一生产状态机，负责观察、审查、执行、验
-证、重试、修复、重规划、暂停和恢复。`CapabilityBroker` 只是构造与兼容门
-面，不拥有第二条任务或执行路径。
+任务从创建开始即持久化。目标合同、计划版本、步骤、尝试、等待条件、审批、
+澄清、动作 proposal、receipt、证据、终态和 lease 都属于同一个 Task Store。
+审计和 trace 只用于诊断，不承担恢复权威。
 
-## 重要状态语义
+旧同步任务循环、独立 ReviewStore、loop snapshot、legacy runtime 和 run ledger
+实现已删除。D-Bus 是主要控制面；HTTP 作为 loopback-only 薄兼容层保留到 Goal 09，
+与 D-Bus 使用同一应用服务和 Task Store，不拥有独立状态。
 
-调用方应同时查看：
+当前实现详情见：
 
-- `execution_status`：动作是否执行；
-- `acceptance_status`：证据是否证明任务达成；
-- `overall_status`：任务对外最终状态；
-- `run` 与 `attempts`：计划执行过程与历史尝试。
-
-SQLite 是 review 当前状态的唯一权威；JSONL 只可用作一次性迁移输入。旧
-`review_kind=plan` 审批只有在计划、步骤、目标、安全审查和策略绑定均可
-验证时才会迁移，否则会失败关闭并要求重新下达命令。
-
-## 当前验证边界
-
-Fedora WSL 已验证静态检查、263 项测试和离线 dry-run。真实 GNOME Wayland
-会话仍需单独验证 daemon、扩展、窗口控制、portal、剪贴板、通知和浏览器
-观测。详细结果见 [当前状态](../architecture/current_status.md)。
+- [持久化任务引擎](../architecture/durable_task_engine.md)
+- [当前状态](../architecture/current_status.md)
+- [运行时架构](../architecture/runtime_convergence.md)
+- [Goal 03 替代矩阵](../architecture/goal03_replacement_compatibility_matrix.md)

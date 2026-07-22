@@ -3,7 +3,7 @@
 - 阶段：02 / 09
 - 依赖：[Goal 01](01_core_foundation_replacement.md)全部完成
 - 风险：高
-- 完成后进入：[Goal 03](03_model_gateway_and_secret_broker.md)
+- 完成后进入：[Goal 03](03_reconcile_goal01_goal02.md)
 
 ## 给 Codex 的命令
 

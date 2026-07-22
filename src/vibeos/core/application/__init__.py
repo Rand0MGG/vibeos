@@ -10,14 +10,17 @@ from .supervisor import (
     SupervisorStartError,
     SupervisorState,
 )
+from .task_workers import OutboxDispatcherComponent, TaskSchedulerComponent
 
 __all__ = [
     "AsyncSupervisor",
     "ComponentHealth",
     "FoundationSliceService",
+    "OutboxDispatcherComponent",
     "SupervisorError",
     "SupervisorHealth",
     "SupervisorNotReady",
     "SupervisorStartError",
     "SupervisorState",
+    "TaskSchedulerComponent",
 ]

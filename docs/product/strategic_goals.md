@@ -82,8 +82,8 @@ Agent 不再每次从一句用户请求开始猜测环境，而是拥有对设�
 
 ### 当前判断
 
-GoalLoop 和审批恢复提供了基础，但持续调度、重启恢复、用户接管和长期任
-务治理仍不完整。
+Durable Task Engine 已提供持久调度、重启恢复、lease/fencing、审批/澄清和用户
+接管内核；真实小时级产品纵切、安装后 service 恢复和跨系统等待仍待后续阶段验收。
 
 ## 4. G3——建立 API、CLI 与 UI 统一动作层
 
@@ -156,8 +156,8 @@ Agent 能够触及系统底层并完成特权任务，但主 Agent 不持有无�
 
 ### 当前判断
 
-现有 L0–L3 和 ReviewStore 提供审批基础，但缺少系统级提权、独立 Reviewer、
-Rollback Manager 和 Secret Broker。
+现有 L0–L3 与 Durable Task Store 提供持久审批、一次性安全绑定和并发控制基础，
+但缺少系统级提权、独立 Reviewer、Rollback Manager 和 Secret Broker。
 
 ## 6. G5——建立云端与本地上下文和模型路由
 
@@ -187,8 +187,8 @@ VibeOS 能使用 GPT、DeepSeek 等云端模型获得高质量能力，同时让
 
 ### 当前判断
 
-当前支持模型提供商和本地规则回退，但尚未形成独立 Context Router、隐私
-分级和多模型选择策略。
+当前支持配置的模型提供商和显式 `--offline` 本地规则路径，但不会在 provider
+失败时静默改变语义；独立 Context Router、隐私分级和多模型选择策略尚未形成。
 
 ## 7. G6——交付真实 Linux Agent MVP
 

@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from .domain_models import ObservationReceipt, ObservationRequest
 from .semantic_acceptance import (
+    DeterministicSemanticAcceptanceProvider,
     OpenAICompatibleSemanticAcceptanceProvider,
     SemanticAcceptanceProvider,
     determine_allowed_semantic_decisions,
@@ -40,6 +41,7 @@ class AcceptanceResult:
 class AcceptanceEngine:
     def __init__(self, provider: SemanticAcceptanceProvider | None = None) -> None:
         self.provider = provider or OpenAICompatibleSemanticAcceptanceProvider()
+        self.host_provider = DeterministicSemanticAcceptanceProvider()
         self._summary_cache: dict[str, object] = {}
 
     def evaluate(
@@ -136,11 +138,12 @@ class AcceptanceEngine:
             "evidence_sources": [item.source for item in evidence],
         }
         summary_cache_key = json.dumps(summary_input, ensure_ascii=False, sort_keys=True)
+        provider = self._provider_for_evidence(summary_input)
         cache_hit = summary_cache_key in self._summary_cache
         if cache_hit:
             summary = self._summary_cache[summary_cache_key]
         else:
-            summary = self.provider.summarize(input_payload=summary_input)
+            summary = provider.summarize(input_payload=summary_input)
             self._summary_cache[summary_cache_key] = summary
         allowed_decisions = determine_allowed_semantic_decisions(
             hard_blockers=summary.hard_blockers,
@@ -187,7 +190,7 @@ class AcceptanceEngine:
                 "evidence_sources": list(summary.evidence_sources),
             },
         )
-        decision = self.provider.decide(summary=summary, allowed_decisions=allowed_decisions)
+        decision = provider.decide(summary=summary, allowed_decisions=allowed_decisions)
         record_model_io(
             phase="acceptance",
             provider=decision.provider_name,
@@ -250,6 +253,15 @@ class AcceptanceEngine:
             observation_request=observation_request,
             observation_receipt=observation_receipt,
         )
+
+    def _provider_for_evidence(self, summary_input: dict[str, Any]) -> SemanticAcceptanceProvider:
+        if not isinstance(self.provider, OpenAICompatibleSemanticAcceptanceProvider):
+            return self.provider
+        host_summary = self.host_provider.summarize(input_payload=summary_input)
+        findings = host_summary.structured_findings
+        if bool(findings.get("supports_completion")) or bool(findings.get("evidence_incomplete")) or bool(findings.get("contradiction_detected")):
+            return self.host_provider
+        return self.provider
 
 
 def _package_payload(receipt: ObservationReceipt | None, package_id: str) -> dict[str, Any]:

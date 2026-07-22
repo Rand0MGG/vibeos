@@ -31,6 +31,7 @@ FailureClass = Literal[
 ReplanAction = Literal["stop", "retry_same_attempt", "repair", "replan_with_constraints", "ask_user"]
 RunStatus = Literal["running", "completed", "failed", "incomplete", "blocked", "needs_review", "needs_user_input", "dry_run"]
 SemanticDecision = Literal["complete", "incomplete", "semantic_failure", "clarification_needed", "skipped"]
+ObservationLevel = Literal["L0", "L1", "L2"]
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,16 @@ class DisplayFields:
     goal: str = ""
     explanation: str = ""
     assumptions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TaskObservation:
+    observation_id: str
+    level: ObservationLevel
+    phase: Literal["pre", "post"]
+    packages: dict[str, dict[str, Any]] = field(default_factory=dict)
+    route_id: str | None = None
+    step_id: str | None = None
 
 
 @dataclass(frozen=True)

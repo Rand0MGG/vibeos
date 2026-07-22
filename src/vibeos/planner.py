@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from hashlib import sha256
 from urllib.parse import quote_plus
 
@@ -26,6 +26,7 @@ from .intent import IntentBroker, OpenAICompatibleIntentBroker
 from .models import Intent, utc_now_iso
 from .nlu import domain_for_action
 from .observation import build_capability_exposure, planner_context_payload, resolve_observation_request
+from .planning_models import PlanningArtifacts
 from .routes import available_capabilities as global_available_capabilities
 from .routes import score_candidates
 from .run_trace import build_run_trace
@@ -47,8 +48,6 @@ from .understanding import (
     CapturingIntentBroker,
     UnderstandingArtifact,
     UnderstandingAnalysisProvider,
-    UnderstandingRefinement,
-    UnderstandingSupersession,
     create_primary_understanding,
     root_understanding_id,
 )
@@ -56,25 +55,6 @@ from .verifiers import default_verifier_registry
 
 
 UNAVAILABLE_LOCAL_CAPABILITIES = {"media.search", "media.play", "media.pause"}
-
-
-@dataclass(frozen=True)
-class PlanningArtifacts:
-    understanding: UnderstandingArtifact
-    analysis: UtteranceAnalysis
-    goal_synthesis: GoalSynthesisResult | None
-    plan: TaskPlan | None
-    candidates: tuple[TaskPlan, ...]
-    understanding_refinement: UnderstandingRefinement | None = None
-    understanding_supersession: UnderstandingSupersession | None = None
-    candidate_set: CandidateSet | None = None
-    route_decision: CandidateSelectionDecision | None = None
-    domain_routing: DomainRoutingResult | None = None
-    observation_request: ObservationRequest | None = None
-    observation_receipt: ObservationReceipt | None = None
-    capability_exposure: CapabilityExposure | None = None
-    trace: object | None = None
-    debug_trace: object | None = None
 
 
 def plan_utterance(
@@ -749,28 +729,39 @@ def build_browser_open_url_plan(
     intent_broker: IntentBroker | None = None,
 ) -> TaskPlan | None:
     intent = structured_capability_intent(span.text, intent_broker)
-    if intent.action != "browser.open_url":
+    capability_id = route_definition.required_capability_ids[0]
+    target_specs = {
+        "browser.open_url": ("uri", "uri_open_requested", "open a URL"),
+        "portal.open_uri": ("uri", "uri_open_requested", "open a URL"),
+        "browser.open_named_target": ("name", "named_site_open_requested", "open a named website"),
+    }
+    target_spec = target_specs.get(capability_id)
+    if intent.action != capability_id or target_spec is None:
         return None
-    uri = str(canonicalize_target_for_action(intent.action, intent.target).get("uri") or "")
-    if not uri:
+    target_key, expected_kind, goal = target_spec
+    value = str(canonicalize_target_for_action(intent.action, intent.target).get(target_key) or "")
+    if not value:
         return None
-    route = task_route_from_definition(route_definition, "Open a URL in the browser.")
+    target = {target_key: value}
+    if capability_id == "browser.open_named_target":
+        target["resolution_mode"] = "direct"
+    route = task_route_from_definition(route_definition, "Open a browser target through its registered capability.")
     step = TaskStep(
-        id="browser_open_url",
-        action="browser.open_url",
-        capability_id="browser.open_url",
-        target={"uri": uri},
+        id=capability_id.replace(".", "_"),
+        action=capability_id,
+        capability_id=capability_id,
+        target=target,
         depends_on=(),
-        risk_level=CAPABILITIES["browser.open_url"].risk_level,
-        expected_state=ExpectedState(kind="uri_open_requested", fields={"uri": uri}),
-        preconditions=(StepPrecondition(kind="capability_available", capability_id="browser.open_url"),),
+        risk_level=CAPABILITIES[capability_id].risk_level,
+        expected_state=ExpectedState(kind=expected_kind, fields={target_key: value}),
+        preconditions=(StepPrecondition(kind="capability_available", capability_id=capability_id),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_browser_route"),
     )
     return TaskPlan(
         schema_version="v0.5",
         plan_id=make_plan_id(utterance, route.id),
         utterance=utterance,
-        display=DisplayFields(goal="open a URL", explanation="Use browser-domain URL semantics instead of the generic portal primitive."),
+        display=DisplayFields(goal=goal, explanation="Use a typed browser capability through the durable task path."),
         selected_route_id=route.id,
         routes=(route,),
         steps=(step,),

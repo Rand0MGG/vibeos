@@ -1,0 +1,907 @@
+{
+  "status": "ambiguous",
+  "intent": {
+    "action": "browser.search_web",
+    "target": {
+      "query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context"
+    },
+    "reason": "task step browser_search_web",
+    "requires_confirmation": false
+  },
+  "result": {
+    "task": {
+      "task_id": "task_5eb28781503147104b54",
+      "contract_id": "contract_0c83299d64a31d04a3cd",
+      "status": "awaiting_clarification",
+      "revision": 7,
+      "current_step_id": null,
+      "completed_step_ids": [
+        "browser_search_web"
+      ],
+      "pending_interaction_id": "clarify_b429821dfd5491d3f064",
+      "next_wake_at": null,
+      "wait_event_key": null,
+      "deadline_at": "2026-07-19T04:38:14.262Z",
+      "last_event": "clarification_required",
+      "terminal_outcome": null
+    },
+    "task_id": "task_5eb28781503147104b54",
+    "task_revision": 7,
+    "understanding": {
+      "understanding_id": "und_cf091a2fe36f",
+      "utterance": "search web for the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+      "analysis": {
+        "utterance": "search web for the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+        "type": "task",
+        "confidence": 1.0,
+        "domains": [
+          "browser"
+        ],
+        "explanation": "Structured capability analysis resolved browser.search_web.",
+        "task_spans": [
+          {
+            "id": "span_1",
+            "text": "search web for the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+            "start": 0,
+            "end": 160,
+            "domain": "browser",
+            "confidence": 1.0
+          }
+        ],
+        "provenance": {
+          "parser": "host_explicit_contract",
+          "parser_version": "v0.5",
+          "source_span": {
+            "start": 0,
+            "end": 160,
+            "text": "search web for the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context"
+          },
+          "confidence": 1.0,
+          "model": null,
+          "schema_version": "v0.5",
+          "repair_applied": false
+        },
+        "chat_response": null
+      },
+      "artifact_role": "primary",
+      "primary_understanding_id": "und_cf091a2fe36f",
+      "source_understanding_id": null,
+      "refinement_id": null,
+      "supersession_id": null,
+      "provider_intent": {
+        "action": "browser.search_web",
+        "target": {
+          "query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context"
+        },
+        "reason": "user asked to search the web",
+        "requires_confirmation": false
+      },
+      "provider_parse_count": 0,
+      "provider_cache_hit_count": 0,
+      "uncertainty_reasons": [],
+      "clarification_question_id": null,
+      "clarification_provider_name": null,
+      "clarification_model_name": null,
+      "clarification_parse_valid": true,
+      "clarification_fallback_used": false,
+      "clarification_error": null,
+      "analysis_provider_name": "host_explicit_contract",
+      "analysis_model_name": "deterministic-local",
+      "analysis_parse_valid": true,
+      "analysis_fallback_used": false,
+      "analysis_error": null
+    },
+    "analysis": {
+      "utterance": "search web for the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+      "type": "task",
+      "confidence": 1.0,
+      "domains": [
+        "browser"
+      ],
+      "explanation": "Structured capability analysis resolved browser.search_web.",
+      "task_spans": [
+        {
+          "id": "span_1",
+          "text": "search web for the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+          "start": 0,
+          "end": 160,
+          "domain": "browser",
+          "confidence": 1.0
+        }
+      ],
+      "provenance": {
+        "parser": "host_explicit_contract",
+        "parser_version": "v0.5",
+        "source_span": {
+          "start": 0,
+          "end": 160,
+          "text": "search web for the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context"
+        },
+        "confidence": 1.0,
+        "model": null,
+        "schema_version": "v0.5",
+        "repair_applied": false
+      },
+      "chat_response": null
+    },
+    "goal_synthesis": {
+      "status": "ready",
+      "goal_spec": {
+        "goal_id": "goal_ee46980a40e8",
+        "goal_text": "search web for the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+        "goal_type": "browser_search_web",
+        "source_understanding_id": "und_cf091a2fe36f",
+        "subgoals": [],
+        "candidate_domain_ids": [
+          "browser"
+        ],
+        "required_capability_ids": [
+          "browser.search_web"
+        ],
+        "missing_capability_ids": [],
+        "clarification_questions": [],
+        "constraints": [
+          "Planner must use registered domains, routes, and capability families only."
+        ],
+        "fallback_hints": [],
+        "assumptions": [],
+        "assistant_intent": null,
+        "synthesis_provenance": {
+          "provider_name": "deepseek",
+          "provider_version": "v0.8",
+          "model_name": "deepseek-v4-flash",
+          "fallback_used": true,
+          "parse_valid": false,
+          "error": "Expecting value: line 1 column 1 (char 0)"
+        }
+      },
+      "message": "Structured capability analysis resolved browser.search_web.",
+      "exchange": {
+        "provider_name": "deepseek",
+        "model_name": "deepseek-v4-flash",
+        "normalized_output": {
+          "status": "ready",
+          "goal_type": "browser_search_web",
+          "candidate_domain_ids": [
+            "browser"
+          ],
+          "required_capability_ids": [
+            "browser.search_web"
+          ],
+          "missing_capability_ids": [],
+          "clarification_questions": [],
+          "constraints": [
+            "Planner must use registered domains, routes, and capability families only."
+          ],
+          "fallback_hints": [],
+          "assumptions": [],
+          "assistant_intent": null,
+          "subgoals": [],
+          "message": "Structured capability analysis resolved browser.search_web."
+        },
+        "raw_output": "{\"status\": \"ready\", \"goal_type\": \"browser_search_web\", \"candidate_domain_ids\": [\"browser\"], \"required_capability_ids\": [\"browser.search_web\"], \"missing_capability_ids\": [], \"clarification_questions\": [], \"constraints\": [\"Planner must use registered domains, routes, and capability families only.\"], \"fallback_hints\": [], \"assumptions\": [], \"assistant_intent\": null, \"subgoals\": [], \"message\": \"Structured capability analysis resolved browser.search_web.\"}",
+        "parse_valid": false,
+        "fallback_used": true,
+        "error": "Expecting value: line 1 column 1 (char 0)"
+      }
+    },
+    "candidate_set": {
+      "candidate_set_id": "cset_4d1e2b55c825",
+      "understanding_id": "und_cf091a2fe36f",
+      "generated_by": "host_candidate_generation",
+      "candidates": [
+        {
+          "candidate_id": "cand_browser_search_web_route",
+          "plan_id": "plan_cb827f48eac5",
+          "route_id": "browser_search_web_route",
+          "domain_id": "browser",
+          "score": 0.825,
+          "satisfiable": true,
+          "required_capabilities": [
+            "browser.search_web"
+          ],
+          "default_verifier_ids": [
+            "browser_search_route_completed"
+          ],
+          "step_ids": [
+            "browser_search_web"
+          ]
+        }
+      ]
+    },
+    "route_decision": {
+      "route_decision_id": "rdec_09c9b374923a",
+      "candidate_set_id": "cset_4d1e2b55c825",
+      "understanding_id": "und_cf091a2fe36f",
+      "action": "select",
+      "selected_candidate_id": "cand_browser_search_web_route",
+      "reason": "Only candidate available with high score and satisfiable",
+      "provider_name": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "parse_valid": true,
+      "fallback_used": false,
+      "error": null
+    },
+    "domain_routing": {
+      "schema_version": "v0.4",
+      "candidate_domain_ids": [
+        "browser"
+      ],
+      "active_domain_ids": [
+        "browser"
+      ],
+      "fallback_domain_ids": [],
+      "clarification_needed": false,
+      "reason": "Structured capability analysis resolved browser.search_web.",
+      "observation_request": {
+        "schema_version": "v0.4",
+        "active_domain_ids": [
+          "browser"
+        ],
+        "requested_context_package_ids": [
+          "session_context",
+          "window_context",
+          "browser_context"
+        ],
+        "postcondition_package_ids": [
+          "session_context",
+          "window_context",
+          "browser_context"
+        ]
+      }
+    },
+    "observation_request": {
+      "schema_version": "v0.4",
+      "active_domain_ids": [
+        "browser"
+      ],
+      "requested_context_package_ids": [
+        "session_context",
+        "window_context",
+        "browser_context"
+      ],
+      "postcondition_package_ids": [
+        "session_context",
+        "window_context",
+        "browser_context"
+      ]
+    },
+    "observation_receipt": {
+      "schema_version": "v0.4",
+      "requested_package_ids": [
+        "session_context",
+        "window_context",
+        "browser_context"
+      ],
+      "loaded_package_ids": [
+        "session_context"
+      ],
+      "skipped_package_ids": [
+        "window_context",
+        "browser_context"
+      ],
+      "packages": [
+        {
+          "schema_version": "v0.4",
+          "package_id": "session_context",
+          "status": "loaded",
+          "payload": {
+            "session_id": "local-session",
+            "locale": "und",
+            "transport": "local",
+            "captured_at": "2026-07-18T22:38:25.528Z",
+            "notes": []
+          },
+          "payload_bytes": 126,
+          "freshness_ts": "2026-07-18T22:38:25.528Z",
+          "truncated": false,
+          "redacted_fields": [],
+          "warnings": [],
+          "errors": []
+        },
+        {
+          "schema_version": "v0.4",
+          "package_id": "window_context",
+          "status": "unavailable",
+          "payload": {
+            "status": "unavailable",
+            "windows": [],
+            "captured_at": "2026-07-18T22:38:25.528Z"
+          },
+          "payload_bytes": 83,
+          "freshness_ts": "2026-07-18T22:38:25.528Z",
+          "truncated": false,
+          "redacted_fields": [],
+          "warnings": [],
+          "errors": []
+        },
+        {
+          "schema_version": "v0.4",
+          "package_id": "browser_context",
+          "status": "unavailable",
+          "payload": {
+            "run_id": null,
+            "attempt_id": null,
+            "route_id": null,
+            "status": "unavailable",
+            "active_url": null,
+            "requested_url": null,
+            "requested_query": null,
+            "page_title": null,
+            "app_id": null,
+            "known_sites": [],
+            "query": null,
+            "error_state": null,
+            "adapter": null,
+            "captured_at": "2026-07-18T22:38:25.528Z"
+          },
+          "payload_bytes": 298,
+          "freshness_ts": "2026-07-18T22:38:25.528Z",
+          "truncated": false,
+          "redacted_fields": [],
+          "warnings": [],
+          "errors": []
+        }
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    "capability_exposure": {
+      "schema_version": "v0.4",
+      "active_domain_ids": [
+        "browser"
+      ],
+      "exposed_route_ids": [
+        "portal_open_uri_route",
+        "browser_open_url_route",
+        "browser_named_target_route",
+        "browser_search_web_route",
+        "browser_site_search_route",
+        "browser_music_search_route"
+      ],
+      "exposed_capability_ids": [
+        "portal.open_uri",
+        "browser.open_url",
+        "browser.open_named_target",
+        "browser.search_web",
+        "browser.open_site_search"
+      ],
+      "exposed_context_package_ids": [
+        "session_context"
+      ],
+      "hidden_domain_ids": [
+        "app_interaction",
+        "apps",
+        "clipboard",
+        "media",
+        "notification",
+        "system_observation",
+        "window_management"
+      ],
+      "hidden_route_ids": [
+        "apps_list_route",
+        "apps_open_route",
+        "app_structured_search_route",
+        "app_shortcut_search_route",
+        "window_list_route",
+        "window_focus_route",
+        "window_minimize_route",
+        "window_maximize_route",
+        "window_close_route",
+        "clipboard_write_route",
+        "notification_send_route",
+        "system_status_route",
+        "media_search_route",
+        "media_play_route",
+        "media_pause_route"
+      ],
+      "hidden_counts": {
+        "domains": 7,
+        "routes": 15,
+        "context_packages": 4
+      }
+    },
+    "candidates": [
+      {
+        "schema_version": "v0.5",
+        "plan_id": "plan_cb827f48eac5",
+        "utterance": "search web for the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+        "display": {
+          "goal": "search the web",
+          "explanation": "Use browser-domain search semantics with narrowed route exposure.",
+          "assumptions": []
+        },
+        "status": "planned",
+        "source_span_id": "span_1",
+        "selected_route_id": "browser_search_web_route",
+        "routes": [
+          {
+            "id": "browser_search_web_route",
+            "score": 0.825,
+            "domain_id": "browser",
+            "display": {
+              "goal": "",
+              "explanation": "Search the web in the browser.",
+              "assumptions": []
+            },
+            "score_inputs": {
+              "domain_match": 1.0,
+              "capability_coverage": 1.0,
+              "precondition_score": 1.0,
+              "risk_penalty": 0.25,
+              "clarification_penalty": 0.0,
+              "preference_bonus": 0.0
+            },
+            "required_capabilities": [
+              "browser.search_web"
+            ],
+            "default_verifier_ids": [
+              "browser_search_route_completed"
+            ]
+          }
+        ],
+        "steps": [
+          {
+            "id": "browser_search_web",
+            "action": "browser.search_web",
+            "capability_id": "browser.search_web",
+            "target": {
+              "query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context"
+            },
+            "depends_on": [],
+            "risk_level": "L1",
+            "parallel_group": null,
+            "expected_state": {
+              "kind": "search_results_available",
+              "fields": {
+                "query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context"
+              }
+            },
+            "preconditions": [
+              {
+                "kind": "capability_available",
+                "capability_id": "browser.search_web",
+                "fields": {}
+              }
+            ],
+            "provenance": {
+              "source_span_id": "span_1",
+              "planner": "v0.5_browser_route"
+            }
+          }
+        ],
+        "provenance": {
+          "planner": "v0.5_domain_planner",
+          "planner_version": "v0.5",
+          "source_span_id": "span_1",
+          "domain_id": "browser"
+        },
+        "needs_user_input": false
+      }
+    ],
+    "plan": {
+      "schema_version": "v0.5",
+      "plan_id": "plan_cb827f48eac5",
+      "utterance": "search web for the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+      "display": {
+        "goal": "search the web",
+        "explanation": "Use browser-domain search semantics with narrowed route exposure.",
+        "assumptions": []
+      },
+      "status": "planned",
+      "source_span_id": "span_1",
+      "selected_route_id": "browser_search_web_route",
+      "routes": [
+        {
+          "id": "browser_search_web_route",
+          "score": 0.825,
+          "domain_id": "browser",
+          "display": {
+            "goal": "",
+            "explanation": "Search the web in the browser.",
+            "assumptions": []
+          },
+          "score_inputs": {
+            "domain_match": 1.0,
+            "capability_coverage": 1.0,
+            "precondition_score": 1.0,
+            "risk_penalty": 0.25,
+            "clarification_penalty": 0.0,
+            "preference_bonus": 0.0
+          },
+          "required_capabilities": [
+            "browser.search_web"
+          ],
+          "default_verifier_ids": [
+            "browser_search_route_completed"
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "id": "browser_search_web",
+          "action": "browser.search_web",
+          "capability_id": "browser.search_web",
+          "target": {
+            "query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context"
+          },
+          "depends_on": [],
+          "risk_level": "L1",
+          "parallel_group": null,
+          "expected_state": {
+            "kind": "search_results_available",
+            "fields": {
+              "query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context"
+            }
+          },
+          "preconditions": [
+            {
+              "kind": "capability_available",
+              "capability_id": "browser.search_web",
+              "fields": {}
+            }
+          ],
+          "provenance": {
+            "source_span_id": "span_1",
+            "planner": "v0.5_browser_route"
+          }
+        }
+      ],
+      "provenance": {
+        "planner": "v0.5_domain_planner",
+        "planner_version": "v0.5",
+        "source_span_id": "span_1",
+        "domain_id": "browser"
+      },
+      "needs_user_input": false
+    },
+    "plan_id": "plan_cb827f48eac5",
+    "execution": {
+      "plan_id": "plan_cb827f48eac5",
+      "status": "succeeded",
+      "step_results": [
+        {
+          "step_id": "browser_search_web",
+          "layer": "registered_tool_execute",
+          "status": "succeeded",
+          "step_safety_review_id": null,
+          "adapter": "xdg-desktop-portal",
+          "capability_id": "browser.search_web",
+          "attempt": 1,
+          "attempt_id": "attempt_2c6a329d12b842980c07",
+          "duration_ms": 10,
+          "adapter_status": "succeeded",
+          "diagnostics": {
+            "action": "browser.search_web",
+            "transport": "dbus",
+            "dry_run": false,
+            "selected_target": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+            "attempt_id": "attempt_2c6a329d12b842980c07"
+          },
+          "error_code": null,
+          "result": {
+            "selected_target": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+            "uri": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+            "adapter": "xdg-desktop-portal",
+            "adapter_status": "succeeded",
+            "status": "opened",
+            "last_uri": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+            "search_uri": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+            "observed_query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+            "tool_invocations": [
+              {
+                "tool_id": "browser.search_web",
+                "family": "action",
+                "capability_surface": "browser",
+                "strategy_id": "browser_search_web_route",
+                "attempt_id": "attempt_2c6a329d12b842980c07",
+                "status": "succeeded",
+                "message": "",
+                "input_payload": {
+                  "query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+                  "task_step_id": "browser_search_web"
+                },
+                "output_payload": {
+                  "selected_target": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+                  "uri": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+                  "adapter": "xdg-desktop-portal",
+                  "adapter_status": "succeeded",
+                  "status": "opened"
+                },
+                "evidence": {
+                  "uri": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+                  "query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+                  "site": null
+                },
+                "failure_class": "none"
+              }
+            ]
+          },
+          "error": null,
+          "audit_id": "2026-07-18T22:38:31.271Z-29149"
+        }
+      ],
+      "verification_results": [
+        {
+          "schema_version": "v0.4",
+          "verifier_id": "browser_search_route_completed",
+          "status": "failed",
+          "message": "search verifier did not observe a browser search query",
+          "observation_package_ids": [
+            "browser_context"
+          ],
+          "details": {
+            "expected_query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+            "browser_context_status": "requested"
+          }
+        }
+      ],
+      "verification_status": "failed",
+      "execution_status": "succeeded",
+      "acceptance_status": "indeterminate",
+      "overall_status": "incomplete",
+      "acceptance_result": {
+        "status": "indeterminate",
+        "message": "browser route completed mechanically but semantic evidence is incomplete",
+        "reasons": [
+          "browser_search_route_completed"
+        ],
+        "semantic_decision": "incomplete",
+        "semantic_summary_id": "ssum_251009a2ab5e",
+        "semantic_acceptance_decision_id": "sacc_fbd5a8752688",
+        "evidence": [
+          {
+            "source": "execution",
+            "status": "succeeded",
+            "details": {
+              "step_count": 1
+            }
+          },
+          {
+            "source": "verifier:browser_search_route_completed",
+            "status": "failed",
+            "details": {
+              "expected_query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+              "browser_context_status": "requested"
+            }
+          },
+          {
+            "source": "observation:browser_context",
+            "status": "loaded",
+            "details": {
+              "run_id": "run_c98907f173db",
+              "attempt_id": "attempt_2c6a329d12b842980c07",
+              "route_id": "browser_search_web_route",
+              "status": "requested",
+              "active_url": null,
+              "requested_url": "[redacted]",
+              "requested_query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+              "page_title": null,
+              "app_id": null,
+              "known_sites": [],
+              "query": null,
+              "error_state": null,
+              "adapter": "xdg-desktop-portal",
+              "captured_at": "2026-07-18T22:38:31.271Z"
+            }
+          }
+        ],
+        "observation_request": {
+          "schema_version": "v0.4",
+          "active_domain_ids": [
+            "browser"
+          ],
+          "requested_context_package_ids": [],
+          "postcondition_package_ids": [
+            "session_context",
+            "browser_context"
+          ]
+        },
+        "observation_receipt": {
+          "schema_version": "v0.4",
+          "requested_package_ids": [
+            "session_context",
+            "browser_context"
+          ],
+          "loaded_package_ids": [
+            "session_context",
+            "browser_context"
+          ],
+          "skipped_package_ids": [],
+          "packages": [
+            {
+              "schema_version": "v0.4",
+              "package_id": "session_context",
+              "status": "loaded",
+              "payload": {
+                "session_id": "local-session",
+                "locale": "und",
+                "transport": "local",
+                "captured_at": "2026-07-18T22:38:31.284Z",
+                "notes": []
+              },
+              "payload_bytes": 126,
+              "freshness_ts": "2026-07-18T22:38:31.284Z",
+              "truncated": false,
+              "redacted_fields": [],
+              "warnings": [],
+              "errors": []
+            },
+            {
+              "schema_version": "v0.4",
+              "package_id": "browser_context",
+              "status": "loaded",
+              "payload": {
+                "run_id": "run_c98907f173db",
+                "attempt_id": "attempt_2c6a329d12b842980c07",
+                "route_id": "browser_search_web_route",
+                "status": "requested",
+                "active_url": null,
+                "requested_url": "[redacted]",
+                "requested_query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+                "page_title": null,
+                "app_id": null,
+                "known_sites": [],
+                "query": null,
+                "error_state": null,
+                "adapter": "xdg-desktop-portal",
+                "captured_at": "2026-07-18T22:38:31.271Z"
+              },
+              "payload_bytes": 525,
+              "freshness_ts": "2026-07-18T22:38:31.271Z",
+              "truncated": false,
+              "redacted_fields": [
+                "requested_url"
+              ],
+              "warnings": [],
+              "errors": []
+            }
+          ],
+          "warnings": [],
+          "errors": []
+        }
+      },
+      "error": null
+    },
+    "status": "succeeded",
+    "step_results": [
+      {
+        "step_id": "browser_search_web",
+        "layer": "registered_tool_execute",
+        "status": "succeeded",
+        "step_safety_review_id": null,
+        "adapter": "xdg-desktop-portal",
+        "capability_id": "browser.search_web",
+        "attempt": 1,
+        "attempt_id": "attempt_2c6a329d12b842980c07",
+        "duration_ms": 10,
+        "adapter_status": "succeeded",
+        "diagnostics": {
+          "action": "browser.search_web",
+          "transport": "dbus",
+          "dry_run": false,
+          "selected_target": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+          "attempt_id": "attempt_2c6a329d12b842980c07"
+        },
+        "error_code": null,
+        "result": {
+          "selected_target": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+          "uri": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+          "adapter": "xdg-desktop-portal",
+          "adapter_status": "succeeded",
+          "status": "opened",
+          "last_uri": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+          "search_uri": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+          "observed_query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+          "tool_invocations": [
+            {
+              "tool_id": "browser.search_web",
+              "family": "action",
+              "capability_surface": "browser",
+              "strategy_id": "browser_search_web_route",
+              "attempt_id": "attempt_2c6a329d12b842980c07",
+              "status": "succeeded",
+              "message": "",
+              "input_payload": {
+                "query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+                "task_step_id": "browser_search_web"
+              },
+              "output_payload": {
+                "selected_target": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+                "uri": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+                "adapter": "xdg-desktop-portal",
+                "adapter_status": "succeeded",
+                "status": "opened"
+              },
+              "evidence": {
+                "uri": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+                "query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+                "site": null
+              },
+              "failure_class": "none"
+            }
+          ]
+        },
+        "error": null,
+        "audit_id": "2026-07-18T22:38:31.271Z-29149"
+      }
+    ],
+    "verification_results": [
+      {
+        "schema_version": "v0.4",
+        "verifier_id": "browser_search_route_completed",
+        "status": "failed",
+        "message": "search verifier did not observe a browser search query",
+        "observation_package_ids": [
+          "browser_context"
+        ],
+        "details": {
+          "expected_query": "the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+          "browser_context_status": "requested"
+        }
+      }
+    ],
+    "verification_status": "failed",
+    "error": null,
+    "review_id": "clarify_b429821dfd5491d3f064",
+    "run": {
+      "run_id": "run_c98907f173db",
+      "goal_id": "contract_0c83299d64a31d04a3cd",
+      "utterance": "search web for the official Python 3.14 documentation about asyncio TaskGroup cancellation semantics, using only this exact query and adding no personal context",
+      "status": "needs_user_input",
+      "selected_transport": "dbus",
+      "attempt_ids": [
+        "attempt_2c6a329d12b842980c07"
+      ],
+      "final_outcome": "needs_user_input"
+    },
+    "attempts": [
+      {
+        "attempt_id": "attempt_2c6a329d12b842980c07",
+        "run_id": "run_c98907f173db",
+        "attempt_index": 1,
+        "trigger": "durable_dispatch",
+        "understanding_id": null,
+        "candidate_set_id": null,
+        "route_decision_id": null,
+        "replan_decision_id": null,
+        "semantic_summary_id": null,
+        "semantic_acceptance_decision_id": null,
+        "step_safety_review_ids": [],
+        "selected_route_id": "browser_search_web_route",
+        "execution_result": null,
+        "observation_receipt": null,
+        "acceptance_result": null,
+        "failure": null,
+        "replan_decision": null,
+        "plan_id": "plan_cb827f48eac5",
+        "step_ids": [
+          "browser_search_web"
+        ],
+        "capability_ids": [
+          "browser.search_web"
+        ]
+      }
+    ],
+    "selected_strategy_id": "strategy_browser_search_web_route"
+  },
+  "selected_target": "https://www.google.com/search?q=the+official+Python+3.14+documentation+about+asyncio+TaskGroup+cancellation+semantics%2C+using+only+this+exact+query+and+adding+no+personal+context",
+  "trace_run_id": "run_c98907f173db",
+  "audit_id": "2026-07-18T22:38:36.158Z-29149",
+  "review_id": "clarify_b429821dfd5491d3f064",
+  "transport": "dbus",
+  "message": "Need user confirmation if search result matches the required documentation.",
+  "review": {
+    "risk_level": "L1",
+    "review_required": false,
+    "allowed": true,
+    "reason": "Searching the web with user-provided text is a bounded low-risk browsing action.",
+    "effects": [
+      "May perform a web search in a browser."
+    ],
+    "reversible": true
+  },
+  "execution_status": "succeeded",
+  "acceptance_status": "indeterminate",
+  "overall_status": "needs_user_input"
+}

@@ -7,9 +7,8 @@ from typing import Any
 from .browser_state import browser_observation_scope
 from .domain_models import ObservationReceipt, ObservationRequest
 from .domain_registry import default_domain_registry
-from .loop_models import LoopObservation, ObservationLevel
 from .models import CommandRequest, utc_now_iso
-from .task_models import StepExecutionResult
+from .task_models import ObservationLevel, StepExecutionResult, TaskObservation
 from .observation import resolve_observation_request, resolve_post_execution_observation
 from .task_models import TaskPlan, TaskStep
 from .verifiers import VerifierHarness, VerifierRegistry
@@ -38,7 +37,7 @@ class ObservationService:
         phase: str,
         level: ObservationLevel,
         attempt_id: str | None = None,
-    ) -> LoopObservation:
+    ) -> TaskObservation:
         request = _observation_request(plan=plan, phase=phase, level=level, registry=self.registry)
         scope = browser_observation_scope(attempt_id) if phase == "post" else nullcontext()
         with scope:
@@ -50,7 +49,7 @@ class ObservationService:
             phase,
             level,
         )
-        return LoopObservation(
+        return TaskObservation(
             observation_id=observation_id,
             level=level,
             phase="pre" if phase == "pre" else "post",
@@ -64,8 +63,8 @@ class ObservationService:
         plan: TaskPlan,
         step: TaskStep,
         step_result: StepExecutionResult,
-        pre_observation: LoopObservation,
-        post_observation: LoopObservation,
+        pre_observation: TaskObservation,
+        post_observation: TaskObservation,
         request: CommandRequest,
     ) -> bool:
         """Apply the selected route's explicit evidence contract."""
@@ -80,7 +79,7 @@ class ObservationService:
         return observation_progressed(pre_observation, post_observation)
 
 
-def observation_progressed(pre: LoopObservation | None, post: LoopObservation | None) -> bool:
+def observation_progressed(pre: TaskObservation | None, post: TaskObservation | None) -> bool:
     if pre is None or post is None:
         return True
     return (

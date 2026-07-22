@@ -23,14 +23,20 @@ instruction.
    dependency-ordered, directly executable Codex goal contracts.
 7. [Current status](architecture/current_status.md) — supported scope, exact
    verification evidence, and remaining environment limits.
-8. [Runtime architecture](architecture/runtime_convergence.md) — production
-   ownership and the GoalLoop execution path.
-9. [Core foundation replacement](architecture/core_foundation.md) — Goal 01
-   module boundaries, database, lifecycle, migrated slices, and deletion gates.
-10. [Capability registry](architecture/capability_registry.md) — current
+8. [Runtime architecture](architecture/runtime_convergence.md) — durable task
+   ownership and the single production execution path.
+9. [Durable task engine](architecture/durable_task_engine.md) — Goal 02 state,
+   persistence, recovery, controls, deletion evidence, and benchmark.
+10. [Core foundation replacement](architecture/core_foundation.md) — Goal 01
+   foundation and the Goal 02 handoff.
+11. [Capability registry](architecture/capability_registry.md) — current
    capability surface and review levels.
-11. [WSL test standard](zh_cn/07_wsl_test_standard.md) — the required Fedora
-   WSL workflow. This is the primary local verification guide.
+12. [Goal 03 compatibility matrix](architecture/goal03_replacement_compatibility_matrix.md)
+   — public-entry, migration, deletion, and 19-capability evidence.
+13. [WSL test standard](zh_cn/07_wsl_test_standard.md) — the required Fedora
+    WSL workflow. This is the primary local verification guide.
+14. [Goal 03 final acceptance](architecture/goal03_final_acceptance_2026-07-17.md)
+    — independent comparison, quality gates, WSL evidence, and rollback rehearsal.
 
 ## Current documentation
 
@@ -43,13 +49,17 @@ instruction.
 | Product decision | [Agent-native direction](product/decisions/0001-agent-native-direction.md) | accepted product choices, consequences, constraints, and open questions |
 | Technical decision | [Implementation foundation](product/decisions/0002-implementation-foundation.md) | modular-monolith stack, persistence, model, sandbox, privilege, secret, desktop, and migration choices |
 | Implementation plan | [Agent-native Codex goals](goals/agent_native/README.md) | alignment audit, dependency order, stage goals, acceptance gates, and handoff requirements |
-| Architecture completion | [Final audit](architecture_completion_final_audit.md) | refactor evidence, state machine, execution audit, CI, and deferred GNOME checks |
+| Historical completion | [Goal 01-era final audit](architecture_completion_final_audit.md) | superseded evidence retained for traceability |
 | Architecture completion | [Master contract](architecture_completion_master_goal.md) | immutable historical acceptance contract; do not edit as a status document |
 | Runtime | [Current status](architecture/current_status.md) | present scope and local verification result |
 | Runtime | [Runtime convergence](architecture/runtime_convergence.md) | dependency boundaries and production paths |
+| Runtime | [Durable task engine](architecture/durable_task_engine.md) | Goal 02 state machine, persistence, crash recovery, controls, and benchmark |
 | Runtime foundation | [Core foundation replacement](architecture/core_foundation.md) | Goal 01 layers, schema, lifecycle, slices, compatibility callers, and migration gates |
 | Runtime | [Capability registry](architecture/capability_registry.md) | action ownership, risk, and review policy |
+| Runtime | [Goal 03 compatibility matrix](architecture/goal03_replacement_compatibility_matrix.md) | replacement status, public contracts, and deletion evidence |
+| Runtime | [Goal 03 final acceptance](architecture/goal03_final_acceptance_2026-07-17.md) | final refs, independent environments, WSL gates, and rollback evidence |
 | Operations | [WSL test standard](zh_cn/07_wsl_test_standard.md) | repeatable Fedora WSL test environment |
+| Operations | [Goal 03 rollback](operations/goal03_reconciliation_and_rollback.md) | immutable refs, database boundary, revert order, and rehearsal |
 | Operations | [Linux session doctor](operations/linux_session_doctor.md) | diagnose GNOME/daemon integration readiness |
 | Operations | [GNOME VM acceptance](operations/gnome_vm_acceptance.md) | checks that cannot be validated in WSL or CI |
 | Operations | [DeepSeek setup](operations/deepseek_api_setup.md) | optional model-provider configuration |

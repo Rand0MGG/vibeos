@@ -10,7 +10,8 @@ from .clarification import ClarificationProvider
 from .goal_synthesizer import GoalSynthesisProvider
 from .intent import IntentBroker
 from .models import CommandRequest, ReviewRequest
-from .planner import PlanningArtifacts, plan_turn
+from .planner import plan_turn
+from .planning_models import PlanningArtifacts
 from .task_models import FailureClassification, ReplanDecision, task_plan_from_payload
 from .task_trace import record_model_io, record_trace_event
 from .understanding import (

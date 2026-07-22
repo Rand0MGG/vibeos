@@ -57,6 +57,30 @@ def build_parser() -> argparse.ArgumentParser:
     reviews_reject.add_argument("review_id")
     reviews_reject.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
+    tasks = subparsers.add_parser("tasks", help="inspect and control durable tasks")
+    tasks_sub = tasks.add_subparsers(dest="tasks_command", required=True)
+    tasks_list = tasks_sub.add_parser("list", help="list durable tasks")
+    tasks_list.add_argument("--status")
+    tasks_list.add_argument("--limit", type=int, default=100)
+    tasks_list.add_argument("--json", action="store_true")
+    tasks_show = tasks_sub.add_parser("show", help="show one durable task")
+    tasks_show.add_argument("task_id")
+    tasks_show.add_argument("--json", action="store_true")
+    for operation in ("pause", "resume", "cancel", "takeover", "release"):
+        control = tasks_sub.add_parser(operation, help=f"{operation} a durable task using CAS")
+        control.add_argument("task_id")
+        control.add_argument("--expected-revision", type=int, required=True)
+        control.add_argument("--owner")
+        control.add_argument("--reason", default="")
+        control.add_argument("--json", action="store_true")
+    tasks_control = tasks_sub.add_parser("control", help="apply an explicit durable task control operation")
+    tasks_control.add_argument("task_id")
+    tasks_control.add_argument("operation", choices=("pause", "resume", "cancel", "takeover", "release"))
+    tasks_control.add_argument("--expected-revision", type=int, required=True)
+    tasks_control.add_argument("--owner")
+    tasks_control.add_argument("--reason", default="")
+    tasks_control.add_argument("--json", action="store_true")
+
     doctor = subparsers.add_parser("doctor", help="diagnose Linux session integration readiness")
     doctor.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
@@ -183,6 +207,26 @@ def _run(args: argparse.Namespace) -> int:
     if args.command == "audit" and args.audit_command == "tail":
         print(json.dumps(runtime.audit_tail(args.count), ensure_ascii=False, indent=2))
         return 0
+
+    if args.command == "tasks":
+        if args.tasks_command == "list":
+            payload = runtime.tasks(status=args.status, limit=args.limit)
+            print_task_payload(payload, json_output=args.json)
+            return 0
+        if args.tasks_command == "show":
+            payload = runtime.task(args.task_id)
+            print_task_payload(payload, json_output=args.json)
+            return 0 if payload is not None else 1
+        operation = args.operation if args.tasks_command == "control" else args.tasks_command
+        payload = runtime.control_task(
+            args.task_id,
+            operation,
+            expected_revision=args.expected_revision,
+            owner=args.owner,
+            reason=args.reason,
+        )
+        print_task_payload(payload, json_output=args.json)
+        return 0 if not (isinstance(payload, dict) and payload.get("error")) else 1
 
     if args.command == "ask":
         result = runtime.handle(CommandRequest(args.utterance, dry_run=args.dry_run, debug=args.debug))
@@ -370,6 +414,21 @@ def print_pending_reviews(payload: list[dict[str, object]]) -> None:
         intent = item["intent"]
         review = item["review"]
         print(f"{item['review_id']}  {review['risk_level']}  {intent['action']}  {item['utterance']}")
+
+
+def print_task_payload(payload, *, json_output: bool) -> None:
+    if json_output:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+    if payload is None:
+        print("task not found")
+        return
+    items = payload if isinstance(payload, list) else [payload]
+    for item in items:
+        if not isinstance(item, dict):
+            print(item)
+            continue
+        print(f"{item.get('task_id')}  rev={item.get('revision')}  {item.get('status')}")
 
 
 def print_traces(payload: list[dict[str, object]]) -> None:

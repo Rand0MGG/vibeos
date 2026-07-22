@@ -7,10 +7,10 @@ from vibeos.apps import AppRegistry
 from vibeos.audit import AuditLog
 from vibeos.broker import CapabilityBroker
 from vibeos.cli import main
+from vibeos.core.adapters.database import CoreDatabase
 from vibeos.models import AppEntry
 from vibeos.models import WindowEntry
 from vibeos.portal import PortalAdapter
-from vibeos.reviews import ReviewStore
 from vibeos.runtime import LocalRuntime, RuntimeSelectionError
 from tests.support_intent_broker import FixtureIntentBroker
 
@@ -75,7 +75,7 @@ def test_ask_json_executes_app_open_with_explicit_broker(monkeypatch, capsys) ->
             intent_broker=FixtureIntentBroker(),
             apps=FakeApps(),
             audit=AuditLog(make_audit_path("cli-open-browser-current")),
-            reviews=ReviewStore(make_review_path("cli-open-browser-current")),
+            database=CoreDatabase(make_database_path("cli-open-browser-current")),
         )
     )
     monkeypatch.setattr("vibeos.cli.build_runtime", lambda: runtime)
@@ -105,13 +105,12 @@ def test_offline_dry_run_uses_the_local_parser_without_building_default_runtime(
 
 
 def test_approve_json_executes_window_close(monkeypatch, capsys) -> None:
-    reviews = ReviewStore(make_review_path("cli-window-close-current"))
     runtime = LocalRuntime(
         CapabilityBroker(
             intent_broker=FixtureIntentBroker(),
             windows=FakeWindows(),
             audit=AuditLog(make_audit_path("cli-window-close-current")),
-            reviews=reviews,
+            database=CoreDatabase(make_database_path("cli-window-close-current")),
         )
     )
     monkeypatch.setattr("vibeos.cli.build_runtime", lambda: runtime)
@@ -127,8 +126,8 @@ def test_approve_json_executes_window_close(monkeypatch, capsys) -> None:
     assert approved_payload["status"] == "executed"
 
 
-def make_review_path(name: str) -> Path:
-    return Path(".vibeos") / f"test-{name}-{uuid4().hex}.jsonl"
+def make_database_path(name: str) -> Path:
+    return Path(".vibeos") / f"test-{name}-{uuid4().hex}.sqlite3"
 
 
 def make_audit_path(name: str) -> Path:

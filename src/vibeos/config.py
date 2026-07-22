@@ -65,6 +65,12 @@ def transport_timeout_seconds() -> int:
     return env_int("VIBEOS_TRANSPORT_TIMEOUT_SECONDS", 45)
 
 
+def command_model_budget_seconds() -> int:
+    load_dotenv()
+    configured = env_int("VIBEOS_COMMAND_MODEL_BUDGET_SECONDS", 30)
+    return min(configured, max(1, transport_timeout_seconds() - 5))
+
+
 def portal_timeout_seconds() -> int:
     load_dotenv()
     return env_int("VIBEOS_PORTAL_TIMEOUT_SECONDS", 15)

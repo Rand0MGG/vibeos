@@ -1,136 +1,70 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict
 from hashlib import sha256
 
-from .legacy_review_migration import legacy_plan_review_binding
-from .loop_models import LoopObservation, LoopPolicy, LoopState
-from .loop_policy import contextualize_step_review
-from .loop_snapshot import encode_loop_snapshot
-from .models import Intent, PermissionReview, ReviewRequest
+from .models import Intent, PermissionReview
 from .permissions import PermissionPolicy
-from .planner import PlanningArtifacts
-from .planning_service import PlanningService
-from .reviews import ReviewStore
-from .task_models import StepReviewRecord, TaskPlan, TaskPlanReviewResult, TaskStep, canonicalize_target_for_action
+from .task_models import StepReviewRecord, TaskObservation, TaskPlan, TaskPlanReviewResult, TaskStep, canonicalize_target_for_action
 from .task_trace import record_trace_event
 from .task_validation import validate_plan
 
 
 class ReviewService:
-    """Owns task safety decisions and durable GoalLoop review suspension."""
+    """Makes deterministic safety decisions; task persistence belongs to Task Store."""
 
-    def __init__(
-        self,
-        *,
-        policy: PermissionPolicy,
-        reviews: ReviewStore,
-        planning: PlanningService,
-        loop_policy: LoopPolicy,
-    ) -> None:
+    def __init__(self, *, policy: PermissionPolicy, review_escalation_enabled: bool = True) -> None:
         self.policy = policy
-        self.reviews = reviews
-        self.planning = planning
-        self.loop_policy = loop_policy
+        self.review_escalation_enabled = review_escalation_enabled
 
     def review_task_plan(self, plan: TaskPlan, stored_payload: dict[str, object] | None = None) -> TaskPlanReviewResult:
+        del stored_payload
         _ensure_task_plan(plan)
-        validation = validate_plan(plan)
-        if not validation.ok:
-            result = TaskPlanReviewResult(
-                plan_id=plan.plan_id,
-                status="rejected",
-                max_risk_level="L3",
-                message="task plan failed validation before permission review",
-            )
-            self._record_plan_decision(result)
-            return result
-
-        step_reviews: list[StepReviewRecord] = []
-        review_required = False
-        allowed = True
+        if not validate_plan(plan).ok:
+            return self._record(TaskPlanReviewResult(plan_id=plan.plan_id, status="rejected", max_risk_level="L3", message="task plan failed validation"))
+        records: list[StepReviewRecord] = []
         max_risk = "L0"
-        rejection_reason = ""
+        requires_review = False
         for step in plan.steps:
             review, record = self.review_step(plan, step, None)
-            step_reviews.append(record)
+            records.append(record)
             max_risk = max_risk_level(max_risk, review.risk_level)
-            review_required = review_required or review.review_required
-            if not review.allowed and allowed:
-                allowed = False
-                rejection_reason = review.reason
-
-        if not allowed:
-            result = TaskPlanReviewResult(
+            if not review.allowed:
+                return self._record(
+                    TaskPlanReviewResult(
+                        plan_id=plan.plan_id,
+                        status="rejected",
+                        max_risk_level=max_risk,
+                        step_reviews=tuple(records),
+                        message=review.reason,
+                    )
+                )
+            requires_review = requires_review or review.review_required
+        status = "review_required" if requires_review else "allowed"
+        review_id = _plan_review_id(plan, tuple(records)) if requires_review else None
+        message = "explicit approval is required" if requires_review else "task plan is allowed without additional review"
+        return self._record(
+            TaskPlanReviewResult(
                 plan_id=plan.plan_id,
-                status="rejected",
+                status=status,
                 max_risk_level=max_risk,
-                step_reviews=tuple(step_reviews),
-                message=rejection_reason or "task plan contains a rejected step",
+                review_id=review_id,
+                step_reviews=tuple(records),
+                message=message,
             )
-            self._record_plan_decision(result)
-            return result
-
-        if review_required:
-            review_payload = dict(stored_payload if stored_payload is not None else asdict(plan))
-            review_payload["legacy_review_binding"] = legacy_plan_review_binding(plan, tuple(step_reviews))
-            request = self.reviews.create_plan_review(
-                plan.utterance,
-                review_payload,
-                TaskPlanReviewResult(
-                    plan_id=plan.plan_id,
-                    status="review_required",
-                    max_risk_level=max_risk,
-                    step_reviews=tuple(step_reviews),
-                ),
-            )
-            result = TaskPlanReviewResult(
-                plan_id=plan.plan_id,
-                status="review_required",
-                max_risk_level=max_risk,
-                review_id=request.review_id,
-                step_reviews=tuple(step_reviews),
-                message=f"explicit approval is required; run `vibe approve {request.review_id}` after reviewing the request",
-            )
-            self._record_plan_decision(result)
-            return result
-
-        result = TaskPlanReviewResult(
-            plan_id=plan.plan_id,
-            status="allowed",
-            max_risk_level=max_risk,
-            step_reviews=tuple(step_reviews),
-            message="task plan is allowed without additional review",
         )
-        self._record_plan_decision(result)
-        return result
 
     def review_step(
         self,
         plan: TaskPlan,
         step: TaskStep,
-        observation: LoopObservation | None,
+        observation: TaskObservation | None,
     ) -> tuple[PermissionReview, StepReviewRecord]:
         _ensure_task_plan(plan)
         review = self.policy.review(intent_from_task_step(step))
-        review = contextualize_step_review(
-            policy=self.loop_policy,
-            step_action=step.action,
-            review=review,
-            pre_observation=observation,
-        )
+        review = self._contextualize(step.action, review, observation)
         record = StepReviewRecord(
-            step_safety_review_id=_make_step_safety_review_id(
-                plan_id=plan.plan_id,
-                step_id=step.id,
-                action=step.action,
-                risk_level=review.risk_level,
-                review_required=review.review_required,
-                allowed=review.allowed,
-                reason=review.reason,
-                observation_fingerprint=_observation_fingerprint(observation),
-            ),
+            step_safety_review_id=_step_review_id(plan, step, review, observation),
             step_id=step.id,
             action=step.action,
             risk_level=review.risk_level,
@@ -147,60 +81,26 @@ class ReviewService:
             actor="review_service",
             plan_id=plan.plan_id,
             step_id=step.id,
-            data={
-                "artifact_type": "step_safety_review",
-                "artifact_id": record.step_safety_review_id,
-                "step_id": step.id,
-                "action": step.action,
-                "risk_level": review.risk_level,
-                "review_required": review.review_required,
-                "allowed": review.allowed,
-                "reason": review.reason,
-            },
+            data=asdict(record),
         )
         return review, record
 
-    def persist_step_review(
-        self,
-        utterance: str,
-        planning: PlanningArtifacts,
-        state: LoopState,
-        step: TaskStep,
-        reason: str,
-    ) -> ReviewRequest:
-        payload = self.planning.payload(planning)
-        snapshot = encode_loop_snapshot(state)
-        payload["loop_snapshot"] = snapshot
-        return self.reviews.create_loop_review(
-            utterance,
-            plan_payload=payload,
-            snapshot_payload=snapshot,
-            pending_reason=reason,
-            step_id=step.id,
-            review_kind="loop",
-        )
-
-    def persist_user_input(
-        self,
-        utterance: str,
-        planning: PlanningArtifacts,
-        state: LoopState,
-        reason: str,
-    ) -> ReviewRequest:
-        payload = self.planning.payload(planning)
-        snapshot = encode_loop_snapshot(state)
-        payload["loop_snapshot"] = snapshot
-        return self.reviews.create_loop_review(
-            utterance,
-            plan_payload=payload,
-            snapshot_payload=snapshot,
-            pending_reason=reason,
-            step_id=None,
-            review_kind="user_input",
+    def _contextualize(self, action: str, review: PermissionReview, observation: TaskObservation | None) -> PermissionReview:
+        if not self.review_escalation_enabled or observation is None or action not in {"browser.search_web", "app.search_history"}:
+            return review
+        if not _observation_requires_review(observation):
+            return review
+        return PermissionReview(
+            risk_level="L2" if review.risk_level in {"L0", "L1"} else review.risk_level,
+            review_required=True,
+            allowed=review.allowed,
+            reason="current observed surface may expose sensitive content; explicit review is required before searching",
+            effects=review.effects,
+            reversible=review.reversible,
         )
 
     @staticmethod
-    def _record_plan_decision(result: TaskPlanReviewResult) -> None:
+    def _record(result: TaskPlanReviewResult) -> TaskPlanReviewResult:
         record_trace_event(
             phase="review",
             event_type="review_decided",
@@ -210,6 +110,7 @@ class ReviewService:
             review_id=result.review_id,
             data=asdict(result),
         )
+        return result
 
 
 def intent_from_task_step(step: TaskStep) -> Intent:
@@ -221,48 +122,51 @@ def intent_from_task_step(step: TaskStep) -> Intent:
     )
 
 
-def _ensure_task_plan(plan: TaskPlan) -> None:
-    if not isinstance(plan, TaskPlan):
-        raise TypeError("executors only accept validated TaskPlan objects, never raw utterances or arbitrary payloads")
-
-
-def _make_step_safety_review_id(
-    *,
-    plan_id: str,
-    step_id: str,
-    action: str,
-    risk_level: str,
-    review_required: bool,
-    allowed: bool,
-    reason: str,
-    observation_fingerprint: str | None,
-) -> str:
-    digest = sha256(
-        f"{plan_id}:{step_id}:{action}:{risk_level}:{review_required}:{allowed}:{reason}:{observation_fingerprint or ''}".encode("utf-8")
-    ).hexdigest()[:12]
-    return f"srev_{digest}"
-
-
-def _observation_fingerprint(observation: LoopObservation | None) -> str | None:
-    if observation is None:
-        return None
-    volatile = {"attempt_id", "captured_at", "freshness_ts", "run_id"}
-
-    def normalize(value: object) -> object:
-        if isinstance(value, dict):
-            return {str(key): normalize(item) for key, item in sorted(value.items(), key=lambda pair: str(pair[0])) if str(key) not in volatile}
-        if isinstance(value, (list, tuple)):
-            return [normalize(item) for item in value]
-        return value
-
-    payload = {
-        "route_id": observation.route_id,
-        "step_id": observation.step_id,
-        "packages": normalize(observation.packages),
-    }
-    return sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
-
-
 def max_risk_level(left: str, right: str) -> str:
     order = {"L0": 0, "L1": 1, "L2": 2, "L3": 3}
-    return left if order.get(left, 99) >= order.get(right, 99) else right
+    return left if order[left] >= order[right] else right
+
+
+def _ensure_task_plan(plan: TaskPlan) -> None:
+    if not isinstance(plan, TaskPlan):
+        raise TypeError("review accepts validated TaskPlan objects only")
+
+
+def _plan_review_id(plan: TaskPlan, records: tuple[StepReviewRecord, ...]) -> str:
+    source = ":".join((plan.plan_id, *(record.step_safety_review_id for record in records)))
+    return f"review_{sha256(source.encode('utf-8')).hexdigest()[:20]}"
+
+
+def _step_review_id(plan: TaskPlan, step: TaskStep, review: PermissionReview, observation: TaskObservation | None) -> str:
+    fingerprint = _observation_fingerprint(observation) if step.action in {"browser.search_web", "app.search_history"} else "not-safety-relevant"
+    source = f"{plan.plan_id}:{step.id}:{step.action}:{review.risk_level}:{review.review_required}:{review.allowed}:{review.reason}:{fingerprint}"
+    return f"srev_{sha256(source.encode('utf-8')).hexdigest()[:20]}"
+
+
+def _observation_fingerprint(observation: TaskObservation | None) -> str:
+    if observation is None:
+        return "none"
+    safety: list[tuple[str, bool, bool, tuple[str, ...]]] = []
+    for package, payload in sorted(observation.packages.items()):
+        tags = payload.get("sensitivity_tags")
+        normalized_tags = tuple(sorted(str(item).strip().lower() for item in tags)) if isinstance(tags, (list, tuple)) else ()
+        safety.append(
+            (
+                package,
+                bool(payload.get("contains_sensitive_content")),
+                bool(payload.get("search_mode_exposes_sensitive_content")),
+                normalized_tags,
+            )
+        )
+    return sha256(repr(safety).encode("utf-8")).hexdigest()[:12]
+
+
+def _observation_requires_review(observation: TaskObservation) -> bool:
+    sensitive = {"sensitive", "private", "financial", "health", "messages", "email"}
+    for payload in observation.packages.values():
+        if bool(payload.get("contains_sensitive_content")) or bool(payload.get("search_mode_exposes_sensitive_content")):
+            return True
+        tags = payload.get("sensitivity_tags")
+        if isinstance(tags, (list, tuple)) and sensitive.intersection(str(item).strip().lower() for item in tags):
+            return True
+    return False

@@ -295,15 +295,14 @@ def build_replan_options(
     if failure.failure_class == "acceptance_unverified":
         return (
             ReplanOption(
-                option_id="repair_acceptance_evidence",
-                action="repair",
-                reason=failure.message or "collect stronger verification evidence before replanning",
+                option_id="ask_user_acceptance_evidence",
+                action="ask_user",
+                reason=failure.message or "ask the user to resolve incomplete acceptance evidence",
             ),
-            *semantic_recovery_options(
-                current_plan=current_plan,
-                attempts=attempts,
-                failure=failure,
-                available_domain_ids=available_domain_ids,
+            ReplanOption(
+                option_id="stop_acceptance_unverified",
+                action="stop",
+                reason=failure.message or "stop because acceptance evidence is incomplete",
             ),
         )
 

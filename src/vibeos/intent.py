@@ -39,6 +39,7 @@ APP_HISTORY_SEARCH_PATTERN = re.compile(
 MEDIA_SEARCH_PREFIXES = ("search media for ", "search music for ", "find media ", "find music ")
 MEDIA_PAUSE_PREFIXES = ("pause", "pause music", "pause playback")
 MEDIA_PLAY_PREFIXES = ("play ", "listen to ", "我想听 ", "播放 ", "放一首 ")
+MULTI_ACTION_MARKERS = (";", "；", "\n", " and then ", " then ", "如果", "然后", "接着", "最后")
 SYSTEM_PROMPT = (
     """You are VibeOS's model intent broker.
 Translate the user's natural-language Linux desktop request into exactly one JSON object.
@@ -150,6 +151,30 @@ class RuleIntentBroker(IntentBroker):
             if text.startswith(prefix.lower()) or stripped.startswith(prefix):
                 return Intent(action="app.open", target={"name": stripped[len(prefix) :].strip()}, reason="user asked to open an application")
         return Intent.unknown("request did not match VibeOS capabilities")
+
+
+def explicit_contract_intent(utterance: str) -> Intent | None:
+    """Return a host-owned intent only for one unambiguous public command.
+
+    This deliberately stays narrower than ``RuleIntentBroker``.  It protects
+    stable CLI/D-Bus contracts from model drift without treating a compound
+    goal as one executable action.
+    """
+
+    stripped = utterance.strip()
+    lowered = stripped.lower()
+    if not stripped or any(marker in lowered for marker in MULTI_ACTION_MARKERS):
+        return None
+    intent = RuleIntentBroker().parse(stripped)
+    if intent.action == "unknown":
+        return None
+    if intent.action == "system.status" and lowered not in STATUS_TERMS:
+        return None
+    if intent.action == "window.list" and lowered not in WINDOW_LIST_TERMS:
+        return None
+    if intent.action == "app.list" and lowered not in APP_LIST_TERMS:
+        return None
+    return intent
 
 
 def infer_browser_intent_from_open_request(utterance: str) -> Intent | None:

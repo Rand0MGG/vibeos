@@ -50,6 +50,17 @@ def test_doctor_report_shape(monkeypatch) -> None:
     assert any(check["name"] == "runtime_entry" for check in report["checks"])
 
 
+def test_missing_model_key_reports_explicit_offline_fallback(monkeypatch) -> None:
+    monkeypatch.delenv("VIBEOS_MODEL_PROVIDER", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    doctor = SessionDoctor(runner=fake_runner, apps=FakeApps(), portal=FakePortal())
+
+    check = doctor.check_model_config()
+
+    assert check.status == "warn"
+    assert "use --offline" in check.message
+
+
 def test_missing_gdbus_is_warning_off_linux(monkeypatch) -> None:
     monkeypatch.setattr("platform.system", lambda: "Windows")
     doctor = SessionDoctor(runner=fake_runner, apps=FakeApps(), portal=FakePortal())

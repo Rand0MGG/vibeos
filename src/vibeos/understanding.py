@@ -5,12 +5,13 @@ from hashlib import sha256
 import json
 import urllib.error
 
+from .capturing_intent import CapturingIntentBroker
 from .clarification import (
     ClarificationDecision,
     ClarificationProvider,
     OpenAICompatibleClarificationProvider,
 )
-from .intent import IntentBroker, OpenAICompatibleIntentBroker
+from .intent import IntentBroker, OpenAICompatibleIntentBroker, RuleIntentBroker, explicit_contract_intent
 from .models import Intent, utc_now_iso
 from .nlu import analysis_from_intent, make_provenance
 from .provider_client import env_flag_enabled, load_openai_compatible_provider_config, request_json_object
@@ -131,31 +132,6 @@ class UnderstandingTransitionProvider:
         raise NotImplementedError
 
 
-class CapturingIntentBroker(IntentBroker):
-    def __init__(self, wrapped: IntentBroker) -> None:
-        self.wrapped = wrapped
-        self._cache: dict[str, Intent] = {}
-        self.provider_parse_count = 0
-        self.provider_cache_hit_count = 0
-
-    def parse(self, utterance: str) -> Intent:
-        key = utterance.strip()
-        cached = self._cache.get(key)
-        if cached is not None:
-            self.provider_cache_hit_count += 1
-            return cached
-        self.provider_parse_count += 1
-        parsed = self.wrapped.parse(utterance)
-        self._cache[key] = parsed
-        return parsed
-
-    def cached_intent(self, utterance: str) -> Intent | None:
-        return self._cache.get(utterance.strip())
-
-    def remember(self, utterance: str, intent: Intent) -> None:
-        self._cache[utterance.strip()] = intent
-
-
 class OpenAICompatibleUnderstandingAnalysisProvider(UnderstandingAnalysisProvider):
     def __init__(self) -> None:
         self.config = load_openai_compatible_provider_config()
@@ -163,6 +139,24 @@ class OpenAICompatibleUnderstandingAnalysisProvider(UnderstandingAnalysisProvide
         self.model_name = self.config.model_name or "unknown-model"
 
     def analyze(self, *, utterance: str, broker: CapturingIntentBroker) -> UnderstandingAnalysisDecision:
+        explicit_intent = explicit_contract_intent(utterance) if isinstance(broker.wrapped, (OpenAICompatibleIntentBroker, RuleIntentBroker)) else None
+        if explicit_intent is not None:
+            broker.remember(utterance, explicit_intent)
+            return UnderstandingAnalysisDecision(
+                analysis=analysis_from_intent(
+                    utterance.strip(),
+                    explicit_intent,
+                    confidence=1.0,
+                    provenance_parser="host_explicit_contract",
+                ),
+                provider_name="host_explicit_contract",
+                model_name="deterministic-local",
+                request_payload={"utterance": utterance},
+                response_payload={
+                    "action": explicit_intent.action,
+                    "target": explicit_intent.target,
+                },
+            )
         if not self.config.configured or not understanding_model_guidance_enabled("VIBEOS_ENABLE_MODEL_UNDERSTANDING"):
             explicit_analysis = explicit_broker_understanding(utterance, broker)
             return UnderstandingAnalysisDecision(

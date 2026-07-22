@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 import json
 import os
+from time import monotonic
 import urllib.request
+from collections.abc import Iterator
 
-from .config import load_dotenv, provider_timeout_seconds
+from .config import command_model_budget_seconds, load_dotenv, provider_timeout_seconds
+
+
+_MODEL_DEADLINE: ContextVar[float | None] = ContextVar("vibeos_model_deadline", default=None)
 
 
 @dataclass(frozen=True)
@@ -78,7 +85,8 @@ def request_json_object(
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=provider_timeout_seconds()) as response:
+    timeout = bounded_provider_timeout_seconds()
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         response_payload = json.loads(response.read().decode("utf-8"))
     content = response_payload["choices"][0]["message"]["content"]
     parsed = json.loads(content)
@@ -94,3 +102,27 @@ def request_json_object(
 def env_flag_enabled(env_name: str) -> bool:
     raw = os.environ.get(env_name, "1").strip().lower()
     return raw not in {"0", "false", "no", "off"}
+
+
+@contextmanager
+def model_request_budget() -> Iterator[None]:
+    current = _MODEL_DEADLINE.get()
+    if current is not None:
+        yield
+        return
+    token = _MODEL_DEADLINE.set(monotonic() + command_model_budget_seconds())
+    try:
+        yield
+    finally:
+        _MODEL_DEADLINE.reset(token)
+
+
+def bounded_provider_timeout_seconds() -> float:
+    configured = float(provider_timeout_seconds())
+    deadline = _MODEL_DEADLINE.get()
+    if deadline is None:
+        return configured
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise TimeoutError("command model-call budget was exhausted")
+    return min(configured, max(0.1, remaining))

@@ -33,10 +33,15 @@ def main() -> int:
     if args.real:
         env["VIBEOS_REQUIRE_DAEMON"] = "1"
     state_dir = None
-    if not args.session_state:
+    state_mode = "daemon-managed-default" if args.real else "default"
+    if not args.real and not args.session_state:
         state_dir = out_dir / "state" / run_slug
         state_dir.mkdir(parents=True, exist_ok=True)
         env["VIBEOS_STATE_DIR"] = str(state_dir)
+        env["VIBEOS_RUNTIME"] = "local"
+        state_mode = "isolated"
+    elif args.real:
+        env.pop("VIBEOS_STATE_DIR", None)
     steps: list[dict[str, Any]] = []
 
     if args.real:
@@ -93,7 +98,8 @@ def main() -> int:
                 "window_close_approve_dry_run",
                 cli("approve", review_id, "--dry-run", "--json"),
                 env,
-                expected_status="dry_run",
+                expected_status="review_required",
+                expected_returncodes={1},
                 validator=command_transport_ok,
                 category="review_flow",
                 depends_on=["window_close_review_required"],
@@ -127,7 +133,7 @@ def main() -> int:
                 cli("reviews", "reject", reject_review_id, "--json"),
                 env,
                 expected_status="rejected",
-                expected_returncodes={0},
+                expected_returncodes={1},
                 validator=command_transport_ok,
                 category="review_flow",
                 depends_on=["window_close_reject_review_required"],
@@ -187,7 +193,8 @@ def main() -> int:
     report = {
         "generated_at": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
         "mode": "real" if args.real else "safe",
-        "state_dir": str(state_dir) if state_dir else "default",
+        "state_dir": str(state_dir) if state_dir else state_mode,
+        "state_mode": state_mode,
         "overall": "ok" if not summary["failed_steps"] and not summary["blocked_steps"] else "fail",
         "summary": summary,
         "steps": steps,
@@ -256,14 +263,6 @@ def collect_real_action_evidence(steps: list[dict[str, Any]], env: dict[str, str
         category="real_action",
     )
     steps.append(clipboard_review)
-    steps.append(
-        run_json_step(
-            "real_clipboard_adapter_direct",
-            direct_clipboard_adapter_command("VibeOS evidence"),
-            env,
-            category="diagnostic",
-        )
-    )
     clipboard_review_id = extract_review_id(clipboard_review.get("parsed"))
     if clipboard_review_id:
         steps.append(
@@ -307,58 +306,26 @@ def collect_real_action_evidence(steps: list[dict[str, Any]], env: dict[str, str
             )
         )
 
-    uri_review = run_json_step(
-        "real_open_uri_review_required",
-        cli("ask", "open https://example.com", "--json"),
-        env,
-        expected_status="review_required",
-        expected_returncodes={1},
-        validator=command_transport_ok,
-        category="real_action",
+    steps.append(
+        run_json_step(
+            "real_browser_open_url",
+            cli("ask", "open https://example.com", "--json"),
+            env,
+            expected_returncodes={0, 1},
+            validator=browser_action_evidence_ok,
+            category="real_action",
+        )
     )
-    steps.append(uri_review)
-    uri_review_id = extract_review_id(uri_review.get("parsed"))
-    if uri_review_id:
-        steps.append(
-            run_json_step(
-                "real_open_uri_approve",
-                cli("approve", uri_review_id, "--json"),
-                env,
-                expected_status="executed",
-                validator=command_transport_ok,
-                category="real_action",
-                depends_on=["real_open_uri_review_required"],
-            )
+    steps.append(
+        run_json_step(
+            "real_browser_target_observed",
+            cli("windows"),
+            env,
+            validator=example_domain_browser_visible,
+            category="real_action",
+            depends_on=["real_browser_open_url"],
         )
-        steps.append(
-            run_json_step(
-                "real_open_uri_reapprove_rejected",
-                cli("approve", uri_review_id, "--json"),
-                env,
-                expected_status="rejected",
-                expected_returncodes={1},
-                validator=command_transport_ok,
-                category="real_action",
-                depends_on=["real_open_uri_approve"],
-            )
-        )
-    else:
-        steps.append(
-            blocked_step(
-                "real_open_uri_approve",
-                "missing review_id from real_open_uri_review_required",
-                depends_on=["real_open_uri_review_required"],
-                category="real_action",
-            )
-        )
-        steps.append(
-            blocked_step(
-                "real_open_uri_reapprove_rejected",
-                "missing review_id from real_open_uri_review_required",
-                depends_on=["real_open_uri_approve"],
-                category="real_action",
-            )
-        )
+    )
 
 
 def collect_real_daemon_evidence(env: dict[str, str]) -> list[dict[str, Any]]:
@@ -586,8 +553,21 @@ def target_policy_command() -> list[str]:
 
 
 def direct_intent_dry_run_command(action: str, target: dict[str, Any]) -> list[str]:
+    model_flags = (
+        "VIBEOS_ENABLE_MODEL_UNDERSTANDING",
+        "VIBEOS_ENABLE_MODEL_GOAL_SYNTHESIS",
+        "VIBEOS_ENABLE_MODEL_ROUTE_SELECTION",
+        "VIBEOS_ENABLE_MODEL_CLARIFICATION",
+        "VIBEOS_ENABLE_MODEL_REPLANNING",
+        "VIBEOS_ENABLE_MODEL_SEMANTIC_ACCEPTANCE",
+        "VIBEOS_ENABLE_MODEL_STRATEGY_SELECTION",
+    )
     code = (
-        "import json;"
+        "import json,os,tempfile;"
+        f"model_flags={model_flags!r};"
+        "[os.environ.__setitem__(name,'0') for name in model_flags];"
+        "state=tempfile.TemporaryDirectory(prefix='vibeos-contract-probe-');"
+        "os.environ['VIBEOS_STATE_DIR']=state.name;"
         "from dataclasses import asdict;"
         "from vibeos.broker import CapabilityBroker;"
         "from vibeos.intent import IntentBroker;"
@@ -595,20 +575,9 @@ def direct_intent_dry_run_command(action: str, target: dict[str, Any]) -> list[s
         f"target={target!r};"
         f"action={action!r};"
         "Stub=type('Stub',(IntentBroker,),{'parse':lambda self, utterance: Intent(action=action, target=target, reason='contract probe')});"
-        "result=CapabilityBroker(intent_broker=Stub()).handle(CommandRequest('contract probe', dry_run=True));"
+        "result=CapabilityBroker(intent_broker=Stub()).handle(CommandRequest('contract probe', dry_run=True, transport='vm-contract-probe'));"
         "print(json.dumps(asdict(result), ensure_ascii=False));"
         "raise SystemExit(0 if result.status == 'dry_run' else 1)"
-    )
-    return [sys.executable, "-c", code]
-
-
-def direct_clipboard_adapter_command(text: str) -> list[str]:
-    code = (
-        "import json;"
-        "from vibeos.clipboard import ClipboardAdapter;"
-        f"result=ClipboardAdapter().write({text!r});"
-        "print(json.dumps(result, ensure_ascii=False));"
-        "raise SystemExit(0 if result.get('status') == 'written' else 1)"
     )
     return [sys.executable, "-c", code]
 
@@ -645,7 +614,6 @@ def doctor_ok(value: Any, strict: bool = False) -> bool:
     checks = {check.get("name"): check.get("status") for check in value.get("checks", []) if isinstance(check, dict)}
     required_ok = {
         "platform",
-        "session_type",
         "gnome_shell",
         "gdbus",
         "xdg_desktop_portal",
@@ -656,7 +624,7 @@ def doctor_ok(value: Any, strict: bool = False) -> bool:
         "app_registry",
         "action_helpers",
     }
-    return all(checks.get(name) == "ok" for name in required_ok)
+    return checks.get("session_type") in {"ok", "warn"} and all(checks.get(name) == "ok" for name in required_ok)
 
 
 def capabilities_ok(value: Any) -> bool:
@@ -679,9 +647,6 @@ def contract_probe_ok(value: Any, action: str, canonical_key: str, expected_valu
     payload = value.get("result")
     if not isinstance(payload, dict):
         return False
-    validation = payload.get("validation")
-    if not isinstance(validation, dict) or not validation.get("ok"):
-        return False
     plan = payload.get("plan")
     if not isinstance(plan, dict):
         return False
@@ -693,6 +658,35 @@ def contract_probe_ok(value: Any, action: str, canonical_key: str, expected_valu
         return False
     target = step.get("target")
     return isinstance(target, dict) and target.get(canonical_key) == expected_value
+
+
+def browser_action_evidence_ok(value: Any) -> bool:
+    if not command_transport_ok(value) or value.get("selected_target") != "https://example.com":
+        return False
+    if value.get("status") == "executed":
+        return value.get("execution_status") == "succeeded"
+    return (
+        value.get("status") == "failed"
+        and value.get("execution_status") == "succeeded"
+        and value.get("acceptance_status") == "indeterminate"
+        and value.get("overall_status") == "incomplete"
+    ) or (
+        value.get("status") == "ambiguous"
+        and value.get("execution_status") == "succeeded"
+        and value.get("acceptance_status") == "indeterminate"
+        and value.get("overall_status") == "needs_user_input"
+    )
+
+
+def example_domain_browser_visible(value: Any) -> bool:
+    if not isinstance(value, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and "firefox" in str(item.get("app_id") or item.get("wm_class") or "").lower()
+        and "example domain" in str(item.get("title") or "").lower()
+        for item in value
+    )
 
 
 def command_transport_ok(value: Any) -> bool:

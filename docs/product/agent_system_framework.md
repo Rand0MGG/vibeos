@@ -113,9 +113,9 @@ Decision
 TerminalOutcome
 ```
 
-Task Kernel 应保留当前 GoalLoop 已验证的状态语义和测试，但实现为新的纯
-transition Task Engine，并在能力迁移后删除旧同步循环；它必须支持小时级
-任务、事件唤醒、系统重启恢复和用户接管。
+Goal 03 已把历史 GoalLoop 验证过的状态语义迁入纯 transition Durable Task
+Engine，并在公共契约等价后删除旧同步循环。当前内核支持小时级 fake-clock
+等待、事件唤醒、系统重启扫描和用户接管；真实产品纵切仍按后续阶段验收。
 
 ## 5. Machine Model
 
@@ -448,20 +448,23 @@ D-Bus、Portal、Keyring、包管理器和文件系统能力。
 
 ## 18. 与当前代码的演进关系
 
-当前实现可以复用的是已经验证的行为和测试：
+当前实现已经吸收并继续复用以下经过验证的行为和测试：
 
-- GoalLoop 的 observe/review/execute/verify/retry/replan 语义；
-- ReviewStore 的 SQLite、原子 claim 和并发处理经验；
+- 历史 GoalLoop 的 observe/review/execute/verify/retry/replan 语义，现由
+  Durable Task Engine 和纯 transition 承载；
+- 历史 ReviewStore 的 SQLite、原子 claim 和并发处理经验，现由唯一
+  SqliteTaskRepository、revision CAS 与 lease/fencing 承载；
 - Capability Registry 和 domain tools 的注册模式；
 - 执行、观察、验收、追踪和审计分层；
 - GNOME、D-Bus、Portal 和桌面适配器。
 
 这些类的现有形状不是未来公共 API。实施采用垂直切片替换：
 
-1. 先建立本地模块化单体、SQLAlchemy/Alembic 数据层和单 asyncio supervisor；
-2. 用新的纯 transition Task Engine 接管全部能力，再删除旧 GoalLoop、独立
-   ReviewStore 和 legacy runtime；
-3. 同阶段把分散的 provider 调用收敛为 Model Gateway，并建立 Secret Broker
+1. Goal 01 已建立本地模块化单体、SQLAlchemy/Alembic 数据层和单 asyncio
+   supervisor；
+2. Goal 03 已由纯 transition Durable Task Engine 接管全部能力，并删除旧
+   GoalLoop、独立 ReviewStore 和 legacy runtime；
+3. 后续纵切把参与场景的 provider 调用收敛为 Model Gateway，并建立 Secret Broker
    和 planner/provider transport 的进程边界；
 4. 把产品概念 Machine Model 首先实现为最小关系型 Machine State Index，并
    建立按 purpose 和数据等级裁剪的 Context Router；

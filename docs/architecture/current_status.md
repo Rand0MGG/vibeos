@@ -1,122 +1,116 @@
-# VibeOS Current Status
+# VibeOS current status
 
-Last verified: 2026-07-15
+Last verified: 2026-07-19 after the user-approved local `main` fast-forward,
+dry-run recovery repair, and Fedora GNOME VM remediation. The final remediation
+is still an uncommitted worktree and has not been pushed.
 
 ## Supported runtime
 
-VibeOS has one supported-task path:
+VibeOS has one supported task path and one authoritative task store:
 
 ```text
-CLI / HTTP / D-Bus -> CommandService -> TaskApplicationService
-                    -> GoalLoop -> registered domain tools -> adapters
+CLI / D-Bus / loopback HTTP / Python
+  -> CommandService
+  -> TaskApplicationService
+  -> DurableTaskEngine + pure TaskRun transitions
+  -> SqliteTaskRepository
+  -> registered tools -> adapters
+  -> ActionReceipt + EvidenceBundle -> acceptance or recovery
 ```
 
-For the migrated `system.status` and `notification.send` capabilities, the
-registered tool is now a strict adapter into `FoundationSliceService`, typed
-ports, and the unified SQLAlchemy/Alembic repository. The remaining 17
-capabilities retain the compatibility path until Goal 02. See
-[`core_foundation.md`](core_foundation.md) for the new/legacy boundary and
-migration inventory.
+`CapabilityBroker` is the composition and compatibility facade. It does not
+own a private task loop, review store, HTTP state, or capability mutation
+path. Review, clarification, timer, retry, cancellation, takeover, lease,
+receipt, evidence, and reconciliation state are all persisted by the durable
+repository.
 
-`CapabilityBroker` is a construction and compatibility facade only. It does
-not own planning, GoalLoop transitions, execution, adapter calls, acceptance,
-review resume, or result projection. `runtime_composition.py` is the explicit
-composition root.
+D-Bus is the primary Linux local control plane. HTTP is a deprecated,
+loopback-only compatibility adapter retained through the Goal 09 delivery
+decision because repository VM/operations callers existed in Goal 01. It
+serializes requests and responses around the same application service and
+database; it has no independent task or review authority.
 
-Fresh tasks and current-format stored-review resumes use GoalLoop. Historical
-`review_kind=plan` records are migrated only when their immutable plan, step,
-target, safety-review, capability, policy, and expiry binding is verifiable;
-otherwise they fail closed with `legacy_review_unverifiable` and require a
-fresh command.
+## Migration and compatibility
 
-## Safety and persistence
+Alembic head is `0005_persist_dry_run_intent`. Goal 03 used the approved
+pre-release exception to freeze the actual Goal 01 schema in `0001`, then made
+all revisions self-contained. Revision `0005` was added without modifying the
+frozen `0001`-`0004` history. It persists the immutable dry-run flag in each
+new GoalContract; an active legacy task whose execution intent cannot be
+reconstructed pauses instead of defaulting to live execution. The reason and
+hashes are in
+[`ADR 0003`](../product/decisions/0003-freeze-goal01-migration-history.md).
 
-- Capability definitions live in `src/vibeos/capabilities.py`; execution is
-  bounded by `StepExecutionService`, a host recipe registry, and registered
-  domain tools.
-- One SQLite database is authoritative for review compatibility state and the
-  new `current_state`, `domain_events`, and `outbox` tables. Claim, release, execution
-  completion, input provision, and input consumption are explicit atomic state
-  transitions. JSONL is migration input only, never a mutation fallback.
-- A persistence failure returns `review_persistence_unavailable` before a
-  review-backed side effect is dispatched.
-- Attempt history is retained separately from accepted step receipts, so failed
-  attempts remain auditable without invalidating a successful retry.
+`0002` migrates old pending reviews and clarifications into durable task rows,
+then removes the old review tables. Pending approvals are not trusted blindly:
+the first post-upgrade approval recomputes the current safety binding and asks
+for a fresh approval if it changed. Approved/executing legacy rows with an
+unknown external outcome are paused for manual disposition rather than replayed.
 
-## Verified local baseline
+The replacement and deletion evidence is in the
+[`Goal 03 compatibility matrix`](goal03_replacement_compatibility_matrix.md).
+The old GoalLoop, ReviewStore, AgentRuntime, loop snapshot, and run ledger
+modules are physically removed after their public contracts passed.
 
-The documented Fedora 44 WSL environment (`rand0mg` and the VibeOS virtual
-environment) produced:
+## Verified Goal 03 remediation worktree
+
+The final worktree reports in FedoraLinux-44 WSL:
 
 ```text
-python -m ruff check src tests          -> passed
-python -m ruff format --check src tests scripts/verify_foundation_dbus.py scripts/verify_wsl_real_actions.py
-                                         -> 146 files already formatted
-python -m mypy --strict                 -> 0 issues in 35 source files
-python scripts/architecture_guard.py    -> ok; 0 violations
-python -m pytest -q                     -> 302 passed in 25.54s
-vibe capabilities --json                -> exit 0; 19 capabilities
-vibe ask "search web for hello" --json --offline --dry-run
-                                         -> exit 0; status=dry_run
-vibe ask "status" --json --offline       -> exit 0; E0 receipt succeeded
-python scripts/verify_foundation_dbus.py -> exit 0; ready; 19 capabilities
-python scripts/verify_wsl_real_actions.py
-                                         -> exit 0; real CLI/D-Bus E1 succeeded
+python -m pytest -q                   -> 974 passed in 52.07s
+ruff format --check                  -> 164 files already formatted
+ruff check                           -> passed
+mypy                                 -> 0 issues in 48 source files
+python scripts/architecture_guard.py -> ok; 0 violations
 ```
 
-The database lifecycle now applies Alembic and verifies its head plus every
-authoritative table before reporting ready; a missing schema cannot pass solely
-because WAL and foreign keys are configured. It then rebinds the ReviewStore
-compatibility connection, and any failure keeps the supervisor non-ready.
+The fixed Goal 02 subset is `690 passed in 20.23s`. Its 64-task/8-worker
+benchmark completed with p95 `56.25 ms`, wall `0.198 s`, throughput `323.26
+tasks/s`, and zero lock/commit errors. The 19-capability matrix, old-data
+upgrade, CLI/D-Bus/HTTP/Python convergence, review/clarification restart, user
+controls, worker recovery, and real subprocess crash boundaries are included
+in the full suite.
 
-The base WSL D-Bus check still accepts an accurate `unavailable` result when no
-notification service is configured. In the configured WSLg environment,
-`libnotify` and a temporary real dunst service allowed the Agent and daemon/D-Bus
-paths to return E1 succeeded receipts. `dbus-monitor` independently observed two
-`Notify` calls and dunst reported two displayed notifications. This is real WSLg
-evidence, not a claim about the supported GNOME VM.
+The dry-run migration persists execution intent and recovery restores it. Three
+real subprocess crash cases—before proposal, before external I/O, and before
+receipt—finish as `dry_run` with zero external adapter calls. A later GNOME VM
+run found additional production-only defects. The remediation now:
 
-The live-provider `open browser` plan smoke validated. One live-provider
-`open https://example.com` attempt returned an invalid intent and failed
-closed. The deterministic offline URL plan exposed and led to correction of an
-older `portal.open_uri`/`browser.open_url` domain mismatch, then validated.
+- never replays a timed-out D-Bus command over HTTP when delivery is unknown;
+- allows persisted `ready` work to enter clarification without an illegal
+  transition;
+- bounds all model calls for one command below the transport timeout;
+- keeps deterministic public contracts stable while refusing to collapse a
+  compound multi-domain goal into one partial action;
+- pauses malformed persisted planning snapshots and safely projects unsupported
+  destructive requests;
+- returns scheduler/outbox health to ready after transient failures and starts
+  transports without synchronously waiting for persisted recovery;
+- sends mechanically completed but semantically unverified effects directly to
+  clarification, retaining the original plan and receipt instead of creating
+  an unbounded replan chain.
 
-The first 2026-07-16 GNOME VM browser smoke exposed a transport timeout
-mismatch: the subprocess allowed the configured 45 seconds while `gdbus`
-retained its own shorter default. The CLI failed after about 25 seconds while
-the daemon still had one active request and later opened Firefox. The D-Bus
-client now passes `VIBEOS_TRANSPORT_TIMEOUT_SECONDS` through `gdbus --timeout`,
-with a regression test. After the fix, the same production-daemon request ran
-for 67 seconds, returned through D-Bus, and left `active_requests=0`. Firefox was
-focused with the requested query, but the page showed a TLS connection failure;
-the runtime accurately reported mechanical execution succeeded while semantic
-acceptance was indeterminate and `overall_status=incomplete`. This is valid
-browser side-effect and failure-reporting evidence, not an end-to-end web-search
-pass.
+WSL doctor reports `4 ok / 8 warn / 0 fail` because it has no full GNOME
+desktop. The direct session D-Bus verifier reaches ready, exposes exactly 19
+capabilities, completes E0, and accurately reports notification E1 unavailable
+in WSL. The preservation branch `codex/goal02-unreconciled` remains at
+`7c77044`; no remote push has been performed.
 
-The same VM run exposed and fixed a second production-boundary mismatch: the
-live provider represented a notification as `name`/`kind`, while the strict
-Goal 01 slice accepts `title`/`body`/`message`. Notification target
-canonicalization now maps the generic provider `name` into `body` and removes
-the non-contract metadata. The post-fix live-provider request completed in 42
-seconds with D-Bus transport, E1 `action_receipt.status=succeeded`,
-`acceptance_status=passed`, `overall_status=completed`, and the production
-`/usr/bin/notify-send` adapter. `dbus-monitor` independently observed the
-`Notify` call, a VMware screenshot showed the notification on the GNOME
-desktop, and daemon health reported `active_requests=0`. See the
-[Goal 01 GNOME VM evidence report](../archive/vm-evidence/goal01_gnome_vm_acceptance_2026-07-16.md).
+WSL does not prove GNOME Shell, Wayland portal UI, displayed notifications,
+clipboard contents, browser content, or real window side effects. Browser,
+Portal, and media tests report incomplete or clarification-required when
+independent desktop observation is unavailable; they do not fabricate success.
 
-The complete earlier evidence, including capability ownership, review transitions,
-strict-typing scope, and CI configuration, is in
-[`../architecture_completion_final_audit.md`](../architecture_completion_final_audit.md).
+The final Fedora 44 GNOME Wayland VM worktree passes the same static gates and
+`974 passed in 16.15s`. The final systemd user-session collector's VM doctor
+reports `12 ok / 0 warn / 0 fail`; a direct SSH shell reports
+`11 ok / 1 warn / 0 fail` only because that caller is a tty. GNOME, Wayland
+portal, extension bridge, application registry, and action helpers are ready.
+A fresh real browser regression reached `awaiting_clarification` with exactly one plan and
+one successful receipt, while an independent window observation saw
+`Example Domain — Mozilla Firefox`. This is intentionally not projected as
+semantic completion because VibeOS cannot yet inspect Firefox's active URL.
 
-## Deliberately separate environment work
-
-WSL is a deterministic development and pre-verification environment. It does
-not prove GNOME desktop integration. The 2026-07-16 GNOME VM run now verifies
-the user daemon, a real notification, D-Bus notification dispatch, real browser
-opening, and honest incomplete reporting when browser content cannot load.
-Later desktop goals must still complete the broader GNOME extension, window
-control, clipboard, portal, and browser-content checklist. Use
-[GNOME VM acceptance](../operations/gnome_vm_acceptance.md) for that boundary
-and [the WSL standard](../zh_cn/07_wsl_test_standard.md) for local work.
+The initial failures, remediation evidence, visible notification/clipboard/
+Firefox checks, and final clean-state collector result are recorded in the
+[`Goal 03 GNOME VM acceptance report`](goal03_gnome_vm_acceptance_2026-07-19.md).
