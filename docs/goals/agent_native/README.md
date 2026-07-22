@@ -2,7 +2,7 @@
 
 - 状态：Goal 01–03 已执行；Goal 04–11 已按“唯一地基、纵向证明、证据驱动扩展”重排
 - 制定日期：2026-07-15
-- 最近修订：2026-07-19
+- 最近修订：2026-07-22
 
 ## 1. 计划目的与当前边界
 
@@ -17,10 +17,11 @@ Goal 01、02、03 已经执行，是历史合同和决策来源。它们保留�
 - Goal 02 产生 Durable Task Engine 候选；
 - Goal 03 从 Goal 01 干净基线审计、整合并删除经证明可替代的旧任务内核。
 
-制定本轮计划时，本地 `main` 已到 `d792b06`，但 Goal 03 的 Fedora GNOME remediation
-仍有未提交生产代码、测试和证据，`origin/main` 也没有发布这些本地提交。因此 Goal 04
-的第一门禁不是继续写功能，而是确认 Goal 03 补充工作已被明确归属并形成干净、可回退
-基线。现场代码和 Git 状态会变化，执行者必须重新核对，不能把本段快照当永久事实。
+开始 2026-07-22 规划修订前，本地 `main` 与 `origin/main` 都位于 Goal 03 remediation
+合并提交 `c9b7ca6`，跟踪工作树干净；本次 Goal/状态文档修改需要先形成新的规划提交，
+所以 Goal 04 的实际 HEAD 应晚于该实现基线。`.codex_vm_artifacts` 中的 13 项 VM 证据
+已被 `c9b7ca6` 跟踪并归属 Goal 03。Goal 04 必须从现场重新核对后的干净、可回退基线
+开始，不得改写 Goal 03 证据资产。Git 状态会变化，执行者不能把本段快照当永久事实。
 
 执行任何阶段前必须阅读：
 
@@ -60,11 +61,13 @@ UI 是能力补全层，不是默认执行层。实质歧义必须先问用户�
 | E3 | 外部承诺、私人数据外传、不可逆破坏或重大安全变化 | 每个动作由用户批准 |
 | E4 | 禁止或没有安全实现 | 拒绝 |
 
-现有 `L0-L3` 是 Goal 01–03 留下的未发布技术债，不是长期公共兼容承诺。Goal 04 必须
-通过新增 migration、公共 contract 版本变更和逐 capability 重分类一次性迁移旧数据，
-随后从 production 源码、数据库当前 schema、CLI/D-Bus/HTTP/Python payload 和测试删除
-`L0-L3`/`risk_level`。历史 migration、归档证据和旧数据 fixture 可以保留旧字样，但
-运行时不得提供双字段、别名或兼容 policy。
+effect `L0-L3` 是 Goal 01–03 留下的未发布技术债，不是长期公共兼容承诺。Goal 04 必须
+通过新增 JSON-aware migration、v2 live contract 和逐 capability 重分类一次性迁移
+非终态数据，随后从 production 源码、数据库当前 schema、CLI/D-Bus/HTTP/Python live
+payload 和普通测试删除 effect `L0-L3`/`risk_level`。独立的 observation depth 当前也
+使用 `L0-L2`；为避免与 effect 混淆，Goal 04 将其按原语义改名为 `O0-O2`。历史
+migration、v1 只读 decoder、归档证据和旧数据 fixture 可以保留旧字样，但运行时不得
+提供双字段、别名或兼容 policy，也不得执行未处置的 v1 step。
 
 Secret Broker 只允许秘密用于绑定的 transport/action，不向 Agent Core、模型、CLI、
 D-Bus、HTTP、扩展、任务数据库或日志返回明文。首期同 UID 威胁边界必须诚实记录，
@@ -77,8 +80,9 @@ D-Bus、HTTP、扩展、任务数据库或日志返回明文。首期同 UID 威
 
 后续 Goal 无论如何实现，都必须遵守：
 
-1. **一个耐久任务权威**：一个 Durable Task Engine、一个规范 Task Store、一个领域
-   状态机；兼容入口无独立任务、审批、澄清或恢复状态。
+1. **一个耐久任务与动作结果权威**：一个 Durable Task Engine、一个规范 Task Store、
+   一个领域状态机；只有 Durable Task 执行边界生成 canonical ActionReceipt/Evidence。
+   兼容入口和 provider 无独立任务、审批、澄清、恢复或任务结果状态。
 2. **每类边界一个 production owner**：一个只接受 E0-E4 的 Effect Policy、一个 ToolRegistry、一个
    Observation/Context 路径、一个 Model Gateway、一个 Secret Broker、一个 daemon
    lifecycle；compatibility facade 只能转发和投影。
@@ -164,9 +168,11 @@ outbox 和恢复。调度是 at-least-once，通过 lease、幂等、receipt 和
 E0/E1、API/D-Bus、receipt、崩溃恢复和独立完成判断，又能限制在专用 user fixture，
 不需要 root、portal 或桌面视觉。
 
-Goal 04 必须按 04A 地基收敛 -> 04B 场景实现 -> 04C 崩溃/真实环境验收执行。04A
-未形成唯一权威时不得开始场景专用代码。完整多 provider 路由、通用 Secret Broker、
-E2 和桌面能力分别由后续 Goal 承担。
+Goal 04 必须按 04A effect/动作结果/v2 数据收敛 -> 04B 可继承 Gateway/SecretRef 与
+进程隔离 -> 04C systemd 场景/崩溃/真实环境验收执行。每段形成独立审查、提交和回退
+点；上一段未形成唯一权威时不得进入下一段。Goal 05 必须原位扩展 Goal 04 的 production
+v1 合同，不得重建 Gateway 或 Secret Broker。完整多 provider 路由、通用 grant、E2
+和桌面能力分别由后续 Goal 承担。
 
 ## 7. 共同执行命令
 

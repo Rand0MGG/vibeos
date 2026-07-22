@@ -8,17 +8,24 @@
 
 ## 给 Codex 的命令
 
-你要把 Goal 04 为单一 systemd 场景建立的最小 Model Gateway 和 provider SecretRef
-收敛为所有生产模型调用的唯一入口，并用两个固定证明完成模型路由和秘密使用边界：
+你要在 Goal 04 已交付的 Model Gateway v1、SecretRef v1 和独立 provider transport
+进程边界上继续扩展，把它们收敛为所有生产模型调用和 secret 使用的唯一入口，并用
+两个固定证明完成模型路由和秘密使用边界：
 
 1. 同一 Gateway 能按确定性策略调用 OpenAI 与 DeepSeek 的云端 adapter，完成固定的
    goal-understanding 和 service-diagnosis purpose；
 2. 一个受控 authenticated loopback fixture 只能通过 Secret Broker 执行窄请求，
-   Core、planner、模型、Task Store 和日志始终只看到 `SecretRef`，没有读取明文的 API。
+   Core、planner、模型、Task Store 和日志始终只看到 `SecretRef`，没有读取 secret
+   明文的 API。
 
 本 Goal 不是建设任意密码管理器、模型市场或复杂调度平台。模型迁移必须通过兼容
 facade 收敛，不得重写 Durable Task Engine、planning pipeline 或所有语义模块。秘密
 使用必须绑定固定操作，而不是提供 `get_secret()` 给 Agent。
+
+Goal 04 的 Gateway request/response、预算与失败分类、SecretRef、transport redacted
+receipt 和进程/D-Bus 隔离是本 Goal 的生产进入合同，不是临时 scaffold。不得复制、
+平行实现或先删除后重建。若现场证明其中任一合同没有真正交付，应停止 Goal 05 的
+扩展并把缺口作为 Goal 04 remediation 处理，而不是在 Goal 05 造第二套基础设施。
 
 ## 项目总体思想
 
@@ -36,9 +43,13 @@ sandbox 设计和用户批准，不能在文档中虚构已经解决。
 
 预期 Goal 04 已交付：
 
-- 唯一 Durable Task Engine、E0-E4 Effect Policy、ToolRegistry 和 Observation 路径；
-- 一个 provider-neutral Gateway request/response 和一个真实云 adapter；
-- provider key 的 `SecretRef`、TTY import/status/delete 和 locked-keyring 恢复；
+- 唯一 Durable Task Engine、E0-E4 Effect Policy、O0-O2 Observation 路径、ToolRegistry
+  和 canonical action receipt/evidence 权威；
+- 一个版本化、provider-neutral 的 Gateway v1 request/response、预算/失败分类和一个
+  真实云 adapter；
+- provider key 的 SecretRef v1、TTY import/status/delete、locked-keyring 恢复和窄
+  provider transport/Broker 进程；
+- semantic/planner worker 与 secret-capable transport 的进程/D-Bus 隔离证明；
 - systemd user-service 场景、机器事实、E0/E1 action、receipt 和独立 verifier；
 - 现有直接 `provider_client` 调用点、兼容 owner 和删除门禁清单。
 
@@ -73,15 +84,18 @@ SecretRef + one-shot SecretGrantRequest + exact operation
 
 所有生产模型请求最终都必须经过 Gateway。所有 production secret 使用只能通过没有
 “返回明文”方法的 Broker/transport contract。兼容 facade 可以暂时保留旧函数签名，
-但不得保留旧网络、预算或 secret 权威。
+但不得保留旧网络、预算或 secret 权威。Goal 05 可以版本化扩展 v1，却不能更换 owner、
+建立不兼容平行类型或让 Goal 04 的 systemd 场景继续依赖旧路径。
 
 ## 必须实施
 
-### 1. 统一 Model Gateway 合同
+### 1. 扩展并统一 Model Gateway 合同
 
-- 定义版本化 `ModelRequest`：purpose、task/attempt、schema、最小 context manifest、
+- 复用 Goal 04 的 `ModelRequest`/`ModelResponse` v1 和 `service_diagnosis` purpose；通过
+  additive/versioned evolution 增加调用者所需字段，不得另建第二组 Gateway domain types。
+- 扩展版本化 `ModelRequest`：purpose、task/attempt、schema、最小 context manifest、
   data classification、deadline、token/cost budget、cancellation 和 idempotency metadata。
-- 定义严格 `ModelResponse` 与 failure taxonomy：unconfigured、locked_secret、timeout、
+- 扩展严格 `ModelResponse` 与既有 failure taxonomy：unconfigured、locked_secret、timeout、
   cancelled、rate_limited、provider_unavailable、budget_exhausted、invalid_json、
   schema_rejected、policy_denied 和 unknown_delivery。
 - Gateway 负责总预算、timeout、有限重试、响应大小、JSON/schema 校验、审计摘要和
@@ -125,7 +139,9 @@ SecretRef + one-shot SecretGrantRequest + exact operation
 
 ### 5. Secret Broker 核心合同
 
-- 定义 opaque `SecretRef`、非敏感 metadata、secret kind、owner、用途和 lifecycle；
+- 复用 Goal 04 的 `SecretRef`、窄 provider transport、redacted receipt 和进程/D-Bus
+  隔离；增加通用 grant 前先证明不会改变既有 provider smoke 和 systemd 场景合同。
+- 扩展 opaque `SecretRef` 的非敏感 metadata、secret kind、owner、用途和 lifecycle；
   Task DB 只能保存引用和策略版本。
 - Broker API 只允许 `import/status/delete` 和“为精确操作申请使用”；禁止向 Core、CLI、
   D-Bus、HTTP、模型或扩展返回 secret value。
@@ -133,6 +149,8 @@ SecretRef + one-shot SecretGrantRequest + exact operation
   deadline、policy version 和 nonce；参数替换、endpoint 替换、重放、过期和跨用户拒绝。
 - transport 在最后责任点解析引用并执行请求；明文不得通过 argv、普通 env、临时文件、
   exception、trace、receipt 或 crash dump 传播。内存生命周期尽量短并记录现实限制。
+- semantic/planner worker 继续与 Secret Broker/transport 分进程，并保持无 Secret Service
+  session-bus 权限或等价的显式拒绝代理；不得因收敛调用者而退化为同进程模块约定。
 - keyring locked、item missing、permission denied、broker restart 和 transport crash 都有
   可恢复或明确失败状态；不得回退到 `.env`、命令行 key 或模型询问用户明文。
 
@@ -171,6 +189,8 @@ SecretRef + one-shot SecretGrantRequest + exact operation
 ## 验收条件
 
 - [ ] 所有生产模型网络请求经过唯一 Gateway 或无独立权威的兼容 facade；
+- [ ] Goal 04 Gateway/SecretRef/transport v1 被原位复用和版本化扩展，没有第二套
+  request/response、secret owner、网络预算或进程边界；
 - [ ] 生产源码不存在新的直接 API key 读取、provider HTTP、私有重试/预算或宽松 parse；
 - [ ] OpenAI/DeepSeek adapter、两个固定 purpose 和确定性 route/fallback 规则有严格合同；
 - [ ] provider 选择、拒绝和 fallback 可解释，数据不会静默发送给另一个 provider；
@@ -180,15 +200,18 @@ SecretRef + one-shot SecretGrantRequest + exact operation
 - [ ] provider 和 loopback fixture 的高熵 canary 泄漏扫描通过；
 - [ ] locked/missing secret、Broker/transport crash、timeout 和 unknown delivery 有安全终态；
 - [ ] 有 credential 的 provider 完成真实 smoke；缺失 credential 被准确标为外部阻塞；
-- [ ] Goal 03/04 行为、systemd 场景、19 capability、迁移和共同质量门禁无回归；
+- [ ] Goal 03/04 systemd 场景、19 capability 的发现/参数/基础功能、迁移和共同质量门禁
+  无非预期回归；effect/批准行为只允许按已批准矩阵变化；
 - [ ] architecture baseline、当前状态、模型路由、秘密威胁模型和运维文档与代码一致。
 
 ## 必交付物
 
 - 模型调用者/purpose/数据/预算迁移清单和兼容矩阵；
-- 唯一 Model Gateway、OpenAI/DeepSeek adapters、RoutePolicy 和 failure taxonomy；
+- 从 Goal 04 v1 原位扩展的唯一 Model Gateway、OpenAI/DeepSeek adapters、RoutePolicy
+  和 failure taxonomy，以及无平行实现的架构证明；
 - 本地模型准入基准、门槛和 admission 结论；
-- SecretRef、一次性 grant、Broker/transport contract 和真实威胁边界说明；
+- 从 Goal 04 v1 原位扩展的 SecretRef、一次性 grant、Broker/transport contract、
+  进程/D-Bus 隔离和真实威胁边界说明；
 - authenticated loopback fixture、攻击/崩溃矩阵和泄漏报告；
 - provider status/route/secret 管理 CLI/D-Bus 合同与真实 smoke 证据；
 - 更新后的 architecture baseline、状态、配置、隐私和故障处理文档。

@@ -1,8 +1,11 @@
 # VibeOS current status
 
-Last verified: 2026-07-19 after the user-approved local `main` fast-forward,
-dry-run recovery repair, and Fedora GNOME VM remediation. The final remediation
-is still an uncommitted worktree and has not been pushed.
+Last verified: 2026-07-22. Goal 03 remediation is merged and pushed: before
+this planning-only documentation revision, local `main` and `origin/main` both
+pointed to merge commit `c9b7ca6` and the tracked worktree was clean. This
+revision must be committed before Goal 04 starts, so its actual starting HEAD
+will be later. The 13 files under `.codex_vm_artifacts` are committed Goal 03
+evidence assets, not untracked Goal 04 input.
 
 ## Supported runtime
 
@@ -52,9 +55,36 @@ The replacement and deletion evidence is in the
 The old GoalLoop, ReviewStore, AgentRuntime, loop snapshot, and run ledger
 modules are physically removed after their public contracts passed.
 
-## Verified Goal 03 remediation worktree
+## Remaining convergence debt before Goal 04
 
-The final worktree reports in FedoraLinux-44 WSL:
+The Goal 03 merge established one authoritative durable task path, but it did
+not yet establish one effect vocabulary or one canonical action-result owner:
+
+- capability, task, plan, review, CLI, D-Bus, HTTP, and Python live contracts
+  still use effect `L0-L3`/`risk_level`, while the Goal 01 core slice uses
+  partial `E0/E1` values;
+- the unrelated observation-depth contract also uses `L0/L1/L2`; Goal 04 will
+  rename that namespace to `O0/O1/O2` rather than preserve an ambiguous
+  architecture-guard exception;
+- `FoundationSliceService` persists an inner receipt/evidence pair and the
+  durable executor persists an outer pair. Providers must be reduced to strict
+  adapter results and provider-local reconciliation references; only the
+  durable execution boundary may mint canonical task receipts and evidence;
+- semantic modules still call `provider_client` directly, provider keys can
+  still come from `.env` or ordinary environment variables, and the session
+  install script injects that environment into the user service;
+- no production Model Gateway, SecretRef/Broker process boundary, or governed
+  systemd user-service fact/action provider exists yet.
+
+Goal 04 owns these changes through a v2 live contract, a JSON-aware additive
+migration after revision `0005`, explicit disposition for nonterminal v1 work,
+read-only immutable v1 history, and three gated commits. Goal 05 must extend the
+Gateway/SecretRef/transport v1 contract delivered by Goal 04 rather than replace
+it.
+
+## Committed Goal 03 remediation baseline
+
+The committed remediation baseline reported the following in FedoraLinux-44 WSL:
 
 ```text
 python -m pytest -q                   -> 974 passed in 52.07s
@@ -94,14 +124,15 @@ WSL doctor reports `4 ok / 8 warn / 0 fail` because it has no full GNOME
 desktop. The direct session D-Bus verifier reaches ready, exposes exactly 19
 capabilities, completes E0, and accurately reports notification E1 unavailable
 in WSL. The preservation branch `codex/goal02-unreconciled` remains at
-`7c77044`; no remote push has been performed.
+`7c77044` without an upstream. The remediation branch and `main` have been
+pushed; the preservation branch is retained only as local rollback evidence.
 
 WSL does not prove GNOME Shell, Wayland portal UI, displayed notifications,
 clipboard contents, browser content, or real window side effects. Browser,
 Portal, and media tests report incomplete or clarification-required when
 independent desktop observation is unavailable; they do not fabricate success.
 
-The final Fedora 44 GNOME Wayland VM worktree passes the same static gates and
+The final Fedora 44 GNOME Wayland VM evidence records the same static gates and
 `974 passed in 16.15s`. The final systemd user-session collector's VM doctor
 reports `12 ok / 0 warn / 0 fail`; a direct SSH shell reports
 `11 ok / 1 warn / 0 fail` only because that caller is a tty. GNOME, Wayland
