@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from collections.abc import Callable
 from typing import Any
 
 from .core.adapters.task_repository import SqliteTaskRepository
@@ -26,10 +27,12 @@ class DurableActionExecutor:
         repository: SqliteTaskRepository,
         execution: StepExecutionService,
         reconciler: ActionReconciler | None = None,
+        checkpoint: Callable[[str], None] | None = None,
     ) -> None:
         self.repository = repository
         self.execution = execution
         self.reconciler = reconciler or ConservativeActionReconciler()
+        self.checkpoint = checkpoint or (lambda _stage: None)
 
     def execute(self, state: TaskRun, plan: TaskPlan, request: CommandRequest, *, run_id: str, lease: TaskLease) -> TaskRun:
         step = _step_by_id(plan, state.current_step_id)
@@ -78,8 +81,10 @@ class DurableActionExecutor:
                 proposal=proposal,
                 lease=lease,
             )
+            self.checkpoint("after_dispatch_proposal_commit")
         context = RunContext.from_request(request, run_id=run_id, goal_id=state.contract_id)
         result = self.execution.execute_step(context=context, plan=plan, step=step, request=request, attempt_id=attempt_id)
+        self.checkpoint("after_external_action_before_receipt")
         return self._record_result(state, stored_step.idempotency_key, proposal_id, result, lease)
 
     def resume_reconciliation(

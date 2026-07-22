@@ -3,7 +3,9 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from .capabilities import CAPABILITIES, UNKNOWN_CAPABILITY
+from .core.domain import EffectLevel
 from .models import EffectAssessment, Intent
+from .system_service_contracts import FIXTURE_UNIT, SYSTEM_SERVICE_RECOVERY_ACTION
 
 
 MAX_NAME_LENGTH = 160
@@ -21,6 +23,16 @@ class EffectPolicy:
     """
 
     def assess(self, intent: Intent) -> EffectAssessment:
+        if intent.action == SYSTEM_SERVICE_RECOVERY_ACTION:
+            target_error = validate_target(intent)
+            return EffectAssessment(
+                effect_level=EffectLevel.E1 if target_error is None else UNKNOWN_CAPABILITY.effect_level,
+                review_required=False,
+                allowed=target_error is None,
+                reason=target_error or "Fixed, reversible Goal04 user-service recovery action.",
+                effects=("May start or restart only the VibeOS Goal04 user-service fixture.",),
+                reversible=True,
+            )
         if intent.action == "unknown":
             return EffectAssessment(
                 effect_level=UNKNOWN_CAPABILITY.effect_level,
@@ -66,6 +78,18 @@ def validate_target(intent: Intent) -> str | None:
 
     target = intent.target
     action = intent.action
+
+    if action == SYSTEM_SERVICE_RECOVERY_ACTION:
+        if set(target) - {"unit", "operation", "idempotency_key", "diagnosis", "fact_digest"}:
+            return "system-service recovery contains unsupported target fields."
+        if target.get("unit") != FIXTURE_UNIT:
+            return "system-service recovery is limited to the fixed Goal04 fixture."
+        if target.get("operation") not in {"start", "restart"}:
+            return "system-service recovery only allows start or restart."
+        key = target.get("idempotency_key")
+        if not isinstance(key, str) or len(key) < 16:
+            return "system-service recovery requires a bound idempotency key."
+        return None
 
     if action in {"app.list", "window.list", "system.status"}:
         return None

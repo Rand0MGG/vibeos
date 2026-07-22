@@ -13,18 +13,19 @@ The first target is intentionally small:
 
 VibeOS v0 does not modify the Linux kernel and does not allow arbitrary shell execution.
 
-## Permission Model
+## Effect model
 
-VibeOS has a capability permission layer:
+VibeOS has one deterministic effect policy:
 
-- L0 observe-only actions execute automatically.
-- L1 low-risk session actions execute automatically and are audited.
-- L2 medium-risk actions create a `review_id` and require `vibe approve <review_id>`.
-- L3 high-risk actions are rejected.
+- E0 observe-only actions execute automatically.
+- E1 bounded reversible session actions execute automatically and are audited.
+- E2 is reserved for rollback-capable privileged local work and is not implemented.
+- E3 external commitments or destructive/high-impact actions require a stored per-action review.
+- E4 actions are rejected.
 
 See [docs/architecture/capability_registry.md](docs/architecture/capability_registry.md).
 
-L2 approvals are bound to the durable task, step, and current safety-review
+E3 approvals are bound to the durable task, step, and current safety-review
 digest, so approval does not re-run model parsing or authorize a changed action.
 Approval uses the task revision plus a fenced lease, and the same interaction
 cannot dispatch twice. `--dry-run` previews without consuming the pending
@@ -78,6 +79,10 @@ Goal04's `service_diagnosis` model call uses Model Gateway v1. Older semantic
 purposes remain inventoried for Goal05 migration and their direct provider
 transport is disabled; use `--offline` for the deterministic local path until
 each purpose is migrated.
+
+The Goal04 system-service acceptance fixture is installed disabled and can
+only operate on `vibeos-goal04-fixture.service`. See the
+[fixed service runbook](docs/operations/goal04_system_service_runbook.md).
 
 ## Current Architecture
 

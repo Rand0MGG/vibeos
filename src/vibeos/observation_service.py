@@ -8,6 +8,8 @@ from .browser_state import browser_observation_scope
 from .domain_models import ObservationReceipt, ObservationRequest
 from .domain_registry import default_domain_registry
 from .models import CommandRequest, utc_now_iso
+from .system_service_contracts import ServiceFactsV2
+from .system_service_provider import SystemdUserServiceProvider
 from .task_models import ObservationLevel, StepExecutionResult, TaskObservation
 from .observation import resolve_observation_request, resolve_post_execution_observation
 from .task_models import TaskPlan, TaskStep
@@ -24,10 +26,21 @@ OBSERVATION_PACKAGE_LEVELS: dict[str, ObservationLevel] = {
 
 
 class ObservationService:
-    def __init__(self, verifier_registry: VerifierRegistry, harness: VerifierHarness | None = None) -> None:
+    def __init__(
+        self,
+        verifier_registry: VerifierRegistry,
+        harness: VerifierHarness | None = None,
+        system_service_provider: SystemdUserServiceProvider | None = None,
+    ) -> None:
         self.verifier_registry = verifier_registry
         self.harness = harness or VerifierHarness()
         self.registry = default_domain_registry(self.verifier_registry.ids())
+        self.system_service_provider = system_service_provider
+
+    def observe_service_fixture(self, *, include_journal: bool = True) -> ServiceFactsV2:
+        if self.system_service_provider is None:
+            raise RuntimeError("system-service observation provider is not composed")
+        return self.system_service_provider.observe(include_journal=include_journal)
 
     def observe(
         self,

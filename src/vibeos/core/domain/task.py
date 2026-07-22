@@ -44,6 +44,8 @@ class TaskEventType(StrEnum):
     PLAN_REQUESTED = "plan_requested"
     PLAN_READY = "plan_ready"
     PLAN_FAILED = "plan_failed"
+    FACTS_CAPTURED = "facts_captured"
+    MODEL_RESULT_RECORDED = "model_result_recorded"
     CLARIFICATION_REQUIRED = "clarification_required"
     CLARIFICATION_PROVIDED = "clarification_provided"
     REVIEW_REQUIRED = "review_required"
@@ -213,6 +215,11 @@ class TerminalOutcome:
     evidence_ids: tuple[str, ...]
     finished_at: str
     schema_version: str = TASK_SCHEMA_VERSION
+    diagnosis: str | None = None
+    action: str | None = None
+    current_state: str | None = None
+    completion_judgment: str | None = None
+    unresolved_risks: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -253,6 +260,11 @@ class TaskEvent:
     owner: str | None = None
     terminal_status: TaskStatus | None = None
     evidence_ids: tuple[str, ...] = ()
+    diagnosis: str | None = None
+    action: str | None = None
+    current_state: str | None = None
+    completion_judgment: str | None = None
+    unresolved_risks: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,9 @@ Last verified: 2026-07-22. Goal 04 starts from frozen planning commit
 `.codex_vm_artifacts` remain committed Goal 03 evidence assets. Goal 04A has
 replaced the unreleased effect/observation contracts and converged canonical
 action-result ownership. Goal 04B's offline Gateway/SecretRef/process contract
-is implemented; its controlled real-provider gate and 04C remain pending.
+is implemented. Goal 04C's fixed systemd user-service slice, real worker-crash
+matrix and WSL systemd D-Bus evidence are implemented. The controlled real
+provider and Fedora GNOME VM gates remain explicitly not run.
 
 ## Supported runtime
 
@@ -103,12 +105,41 @@ route persistence and the real subprocess isolation probe. The controlled
 real-provider smoke remains `not run` until a user-owned credential is present;
 it is not claimed as passed.
 
-## Remaining Goal 04 work
+## Goal 04C fixed system-service slice
+
+`vibeos-goal04-fixture.service` is a disabled, `Type=notify` user fixture. The
+pre-task controller proves one token-bound synthetic startup failure; after
+task start it does not participate. Only the internal fixed-unit E1 tool may
+start or restart it. That tool uses the existing ToolRegistry and
+DurableActionExecutor, so the provider returns only an adapter result and the
+task boundary remains the sole receipt/evidence owner. The public capability
+count remains 19.
+
+Bounded D-Bus facts and fixed-unit journal lines are persisted before a D0
+context manifest. Model Gateway v1 returns a strict diagnosis/proposal, which
+is persisted before dispatch. A post-action crash enters real-state
+reconciliation. The independent verifier polls bounded fresh observations
+until systemd leaves `activating`, with no action redispatch. TerminalOutcome
+now carries diagnosis, action, current state, evidence IDs, completion judgment
+and unresolved risks.
+
+The 04C suite has 32 tests, including eleven real `os._exit(97)` worker-process
+crash points and the required fault/concurrency matrix. A FedoraLinux-44 WSL
+run used the real systemd user D-Bus provider: the controller proved one failed
+start and one synthetic line, the Agent produced one canonical receipt, and
+independent observation found `active/running`, a live PID and the healthy log.
+The model side of that WSL run was the strict offline fixture because WSL has
+no `secret-tool` or user-owned provider route. See the
+[`Goal 04C acceptance report`](goal04_system_service_acceptance_2026-07-22.md).
+The final local regression is `1063 passed in 103.79s`; Ruff formatting/lint,
+strict mypy over 67 source files and the architecture guard are green.
+
+## Remaining external Goal 04 evidence
 
 - run and record one controlled real-provider smoke with a user-owned SecretRef;
-- implement and validate the deterministic systemd user fixture, independent
-  fact collection/action/verification path, crash matrix and Fedora GNOME
-  evidence.
+- run and record Secret Service locked/unlocked plus the complete fixture path
+  in the Fedora GNOME VM. VMware execution was skipped at the user's request
+  for this pass and is not represented by WSL evidence.
 
 Existing compatibility debt owned by Goal 05:
 

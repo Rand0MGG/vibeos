@@ -39,6 +39,11 @@ class TerminalOutcomePayloadV2(StrictTaskContract):
     reason: str = Field(max_length=20_000)
     evidence_ids: tuple[str, ...]
     finished_at: str
+    diagnosis: str | None = Field(default=None, max_length=2_000)
+    action: str | None = Field(default=None, max_length=160)
+    current_state: str | None = Field(default=None, max_length=500)
+    completion_judgment: str | None = Field(default=None, max_length=2_000)
+    unresolved_risks: tuple[str, ...] = ()
 
 
 class TaskStatePayloadV2(StrictTaskContract):
@@ -92,6 +97,11 @@ class TaskEventPayloadV2(StrictTaskContract):
     owner: str | None = None
     terminal_status: TaskStatusValue | None = None
     evidence_ids: tuple[str, ...] = ()
+    diagnosis: str | None = Field(default=None, max_length=2_000)
+    action: str | None = Field(default=None, max_length=160)
+    current_state: str | None = Field(default=None, max_length=500)
+    completion_judgment: str | None = Field(default=None, max_length=2_000)
+    unresolved_risks: tuple[str, ...] = ()
     state_revision: int = Field(ge=1)
 
 

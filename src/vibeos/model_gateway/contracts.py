@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..system_service_contracts import FIXTURE_UNIT, ServiceFactsV2
+from ..system_service_contracts import ServiceFactsV2
 
 
 MODEL_GATEWAY_SCHEMA_VERSION = "v1"
@@ -129,7 +129,7 @@ class ModelRequest(StrictGatewayContract):
 
 class ServiceActionProposal(StrictGatewayContract):
     action: Literal["start", "restart", "none"]
-    unit: Literal["vibeos-goal04-fixture.service"] = FIXTURE_UNIT
+    unit: Literal["vibeos-goal04-fixture.service"] = "vibeos-goal04-fixture.service"
     arguments: tuple[str, ...] = Field(default=(), max_length=0)
     effect_level: Literal["E0", "E1"]
     fact_digest: str = Field(pattern=r"^[0-9a-f]{64}$")

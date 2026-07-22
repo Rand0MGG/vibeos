@@ -3,6 +3,7 @@ from __future__ import annotations
 from .capabilities import CAPABILITIES
 from .expected_states import validate_expected_state
 from .models import Intent
+from .system_service_contracts import SYSTEM_SERVICE_RECOVERY_ACTION
 from .permissions import (
     MAX_NAME_LENGTH,
     validate_target,
@@ -64,7 +65,7 @@ def _validate_display_fields(plan: TaskPlan, errors: list[str]) -> None:
 def _validate_steps(plan: TaskPlan, errors: list[str]) -> None:
     step_ids = {step.id for step in plan.steps}
     for step in plan.steps:
-        if step.action not in CAPABILITIES:
+        if step.action not in CAPABILITIES and step.action != SYSTEM_SERVICE_RECOVERY_ACTION:
             errors.append(f"step {step.id} uses unknown capability {step.action!r}")
         if step.capability_id != step.action:
             errors.append(f"step {step.id} capability_id must match action")

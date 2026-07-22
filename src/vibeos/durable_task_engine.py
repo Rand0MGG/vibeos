@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 
 from .acceptance_service import AcceptanceService
@@ -13,15 +14,7 @@ from .durable_task_driver import DurableTaskDriver
 from .durable_task_planning import DurablePlanningCoordinator
 from .durable_task_resumer import DurableTaskResumer
 from .durable_task_results import DurableTaskResultFactory
-from .durable_task_support import (
-    after_seconds,
-    event,
-    load_planning,
-    new_contract,
-    new_task,
-    now_iso,
-    stable_id,
-)
+from .durable_task_support import after_seconds, event, load_planning, new_contract, new_task, now_iso, stable_id
 from .execution_service import StepExecutionService
 from .models import CommandRequest, EffectAssessment
 from .observation_service import ObservationService
@@ -66,6 +59,12 @@ class DurableTaskEngine:
         )
         self.driver = DurableTaskDriver(repository, acceptance, self.action_executor, observation, reviews, self.plans)
         self.resumer = DurableTaskResumer(repository, planning, self.plans, self.action_executor, self.policy)
+        self._specialized_resumer: tuple[Callable[[str], bool], Callable[[str], None]] | None = None
+
+    def register_specialized_resumer(self, predicate: Callable[[str], bool], resume: Callable[[str], None]) -> None:
+        if self._specialized_resumer is not None:
+            raise RuntimeError("a specialized durable-task resumer is already registered")
+        self._specialized_resumer = (predicate, resume)
 
     def start(self, request: CommandRequest, *, run_id: str) -> DurableTaskResult:
         created_at = now_iso()
@@ -302,6 +301,9 @@ class DurableTaskEngine:
         return self._drive(state, request, run_id=run_id, planning=load_planning(state, self.repository, self.planning))
 
     def resume_task(self, task_id: str) -> None:
+        if self._specialized_resumer is not None and self._specialized_resumer[0](task_id):
+            self._specialized_resumer[1](task_id)
+            return
         outcome = self.resumer.prepare(task_id)
         if outcome is not None:
             self._drive(outcome.state, outcome.request, run_id=outcome.run_id, planning=outcome.planning)

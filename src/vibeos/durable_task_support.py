@@ -84,6 +84,8 @@ def event(state: TaskRun, kind: TaskEventType, *, reason: str = "", **fields: ob
     terminal_status = fields.get("terminal_status")
     raw_evidence_ids = fields.get("evidence_ids", ())
     evidence_ids = tuple(str(item) for item in raw_evidence_ids if item) if isinstance(raw_evidence_ids, (list, tuple, set)) else ()
+    raw_risks = fields.get("unresolved_risks", ())
+    unresolved_risks = tuple(str(item) for item in raw_risks if item) if isinstance(raw_risks, (list, tuple, set)) else ()
     return TaskEvent(
         event_id=stable_id("tevt", state.task_id, state.revision + 1, kind.value, occurred_at),
         task_id=state.task_id,
@@ -97,6 +99,11 @@ def event(state: TaskRun, kind: TaskEventType, *, reason: str = "", **fields: ob
         owner=_optional_text(fields.get("owner")),
         terminal_status=terminal_status if isinstance(terminal_status, TaskStatus) else None,
         evidence_ids=evidence_ids,
+        diagnosis=_optional_text(fields.get("diagnosis")),
+        action=_optional_text(fields.get("action")),
+        current_state=_optional_text(fields.get("current_state")),
+        completion_judgment=_optional_text(fields.get("completion_judgment")),
+        unresolved_risks=unresolved_risks,
     )
 
 

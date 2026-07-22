@@ -22,6 +22,8 @@ from .execution_service import StepExecutionService
 from .failure_classifier import FailureClassifier
 from .goal_synthesizer import GoalSynthesisProvider
 from .intent import IntentBroker, OpenAICompatibleIntentBroker
+from .model_gateway.gateway import ModelGateway
+from .model_gateway.secrets import ProviderRouteRepository
 from .notifications import NotificationAdapter
 from .observation_service import ObservationService
 from .permissions import EffectPolicy
@@ -33,6 +35,8 @@ from .replanner import EvidenceDrivenReplanner, Replanner
 from .result_projection import AuditResultRecorder, CommandResultProjector
 from .review_service import ReviewService
 from .semantic_acceptance import SemanticAcceptanceProvider
+from .system_service_provider import SystemdUserServiceProvider
+from .system_service_task import ServiceDiagnosisGateway, SystemServiceTaskService
 from .task_application import TaskApplicationService
 from .task_trace import TaskTraceStore
 from .tool_protocol import ToolRegistry
@@ -70,6 +74,8 @@ class RuntimeComponents:
     verifier_harness: VerifierHarness
     database: CoreDatabase
     foundation_slices: FoundationSliceService
+    system_service_provider: SystemdUserServiceProvider
+    system_service_tasks: SystemServiceTaskService
 
 
 def compose_runtime(
@@ -98,6 +104,9 @@ def compose_runtime(
     browser_search_catalog: dict[str, dict[str, object]] | None = None,
     app_fixture_catalog: dict[str, AppSearchFixture] | None = None,
     database: CoreDatabase | None = None,
+    system_service_provider: SystemdUserServiceProvider | None = None,
+    model_gateway: ServiceDiagnosisGateway | None = None,
+    provider_route_repository: ProviderRouteRepository | None = None,
 ) -> RuntimeComponents:
     resolved_intent_broker = intent_broker or OpenAICompatibleIntentBroker()
     resolved_apps = apps or AppRegistry()
@@ -109,6 +118,7 @@ def compose_runtime(
     resolved_audit = audit or AuditLog()
     resolved_database = database or CoreDatabase(_default_database_path())
     resolved_database.upgrade()
+    resolved_system_service_provider = system_service_provider or SystemdUserServiceProvider()
     task_repository = SqliteTaskRepository(resolved_database)
     resolved_trace_store = trace_store or TaskTraceStore()
     resolved_verifier_registry = verifier_registry or default_verifier_registry()
@@ -136,6 +146,7 @@ def compose_runtime(
         clipboard=resolved_clipboard,
         verifiers=resolved_verifier_harness,
         foundation_specs=foundation.tool_specs,
+        system_service_provider=resolved_system_service_provider,
     )
     execution = StepExecutionService(
         tools=tool_registry,
@@ -144,7 +155,7 @@ def compose_runtime(
         browser_search_catalog=browser_search_catalog or {},
         app_fixture_catalog=app_fixture_catalog or {},
     )
-    observation = ObservationService(resolved_verifier_registry, resolved_verifier_harness)
+    observation = ObservationService(resolved_verifier_registry, resolved_verifier_harness, resolved_system_service_provider)
     acceptance = AcceptanceService(
         acceptance_engine=AcceptanceEngine(provider=semantic_acceptance_provider),
         verifier_registry=resolved_verifier_registry,
@@ -163,6 +174,15 @@ def compose_runtime(
         policy=task_policy,
     )
     task_handler = TaskApplicationService(engine=task_engine, projector=projector)
+    system_service_tasks = SystemServiceTaskService(
+        engine=task_engine,
+        repository=task_repository,
+        planning=planning,
+        observation=observation,
+        gateway=model_gateway or ModelGateway(),
+        route_repository=provider_route_repository,
+    )
+    task_engine.register_specialized_resumer(system_service_tasks.is_system_service_task, system_service_tasks.resume_scheduled)
     result_recorder = AuditResultRecorder(resolved_audit)
     command_service = CommandService(trace_store=resolved_trace_store, task_handler=task_handler, result_recorder=result_recorder)
     return RuntimeComponents(
@@ -192,6 +212,8 @@ def compose_runtime(
         verifier_harness=resolved_verifier_harness,
         database=resolved_database,
         foundation_slices=foundation.slices,
+        system_service_provider=resolved_system_service_provider,
+        system_service_tasks=system_service_tasks,
     )
 
 

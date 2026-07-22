@@ -29,6 +29,7 @@ Action = Literal[
     "window.maximize",
     "window.close",
     "system.status",
+    "system.service.recover_fixture",
     "unknown",
 ]
 

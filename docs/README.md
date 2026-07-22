@@ -37,6 +37,8 @@ instruction.
     WSL workflow. This is the primary local verification guide.
 14. [Goal 03 final acceptance](architecture/goal03_final_acceptance_2026-07-17.md)
     — independent comparison, quality gates, WSL evidence, and rollback rehearsal.
+15. [Goal 04 system-service acceptance](architecture/goal04_system_service_acceptance_2026-07-22.md)
+    — fixed systemd fixture, crash/fault matrix, WSL evidence, and explicit external gaps.
 
 ## Current documentation
 
@@ -60,6 +62,7 @@ instruction.
 | Runtime | [Goal 03 final acceptance](architecture/goal03_final_acceptance_2026-07-17.md) | final refs, independent environments, WSL gates, and rollback evidence |
 | Operations | [WSL test standard](zh_cn/07_wsl_test_standard.md) | repeatable Fedora WSL test environment |
 | Operations | [Goal 03 rollback](operations/goal03_reconciliation_and_rollback.md) | immutable refs, database boundary, revert order, and rehearsal |
+| Operations | [Goal 04 fixed service](operations/goal04_system_service_runbook.md) | install, prepare, run, resume, and stop the fixed systemd fixture |
 | Operations | [Linux session doctor](operations/linux_session_doctor.md) | diagnose GNOME/daemon integration readiness |
 | Operations | [GNOME VM acceptance](operations/gnome_vm_acceptance.md) | checks that cannot be validated in WSL or CI |
 | Operations | [DeepSeek setup](operations/deepseek_api_setup.md) | optional model-provider configuration |

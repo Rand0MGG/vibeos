@@ -58,6 +58,11 @@ def encode_task(state: TaskRun) -> str:
                 "reason": terminal.reason,
                 "evidence_ids": terminal.evidence_ids,
                 "finished_at": terminal.finished_at,
+                "diagnosis": terminal.diagnosis,
+                "action": terminal.action,
+                "current_state": terminal.current_state,
+                "completion_judgment": terminal.completion_judgment,
+                "unresolved_risks": terminal.unresolved_risks,
             }
             if terminal is not None
             else None,
@@ -96,6 +101,11 @@ def decode_task(raw: str) -> TaskRun:
             evidence_ids=terminal.evidence_ids,
             finished_at=terminal.finished_at,
             schema_version=terminal.schema_version,
+            diagnosis=terminal.diagnosis,
+            action=terminal.action,
+            current_state=terminal.current_state,
+            completion_judgment=terminal.completion_judgment,
+            unresolved_risks=terminal.unresolved_risks,
         )
         if terminal is not None
         else None,
@@ -139,6 +149,11 @@ def encode_event(event: TaskEvent, state_revision: int) -> str:
             "owner": event.owner,
             "terminal_status": event.terminal_status.value if event.terminal_status is not None else None,
             "evidence_ids": event.evidence_ids,
+            "diagnosis": event.diagnosis,
+            "action": event.action,
+            "current_state": event.current_state,
+            "completion_judgment": event.completion_judgment,
+            "unresolved_risks": event.unresolved_risks,
             "state_revision": state_revision,
         },
         strict=True,

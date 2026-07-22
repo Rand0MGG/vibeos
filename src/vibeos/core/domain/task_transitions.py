@@ -28,7 +28,17 @@ _STATUS_EVENTS: dict[TaskStatus, frozenset[TaskEventType]] = {
     TaskStatus.CREATED: frozenset(
         {TaskEventType.PLAN_REQUESTED, TaskEventType.PAUSE_REQUESTED, TaskEventType.CANCEL_REQUESTED, TaskEventType.TIMEOUT, TaskEventType.FAIL}
     ),
-    TaskStatus.PLANNING: frozenset({TaskEventType.PLAN_READY, TaskEventType.PLAN_FAILED, TaskEventType.CLARIFICATION_REQUIRED, TaskEventType.COMPLETE})
+    TaskStatus.PLANNING: frozenset(
+        {
+            TaskEventType.PLAN_READY,
+            TaskEventType.PLAN_FAILED,
+            TaskEventType.FACTS_CAPTURED,
+            TaskEventType.MODEL_RESULT_RECORDED,
+            TaskEventType.CLARIFICATION_REQUIRED,
+            TaskEventType.WAIT_REQUESTED,
+            TaskEventType.COMPLETE,
+        }
+    )
     | _COMMON_ACTIVE,
     TaskStatus.READY: frozenset(
         {
@@ -178,6 +188,7 @@ def _schedule(status: TaskStatus) -> Handler:
         return replace(
             state,
             status=status,
+            suspended_status=state.status,
             next_wake_at=event.wake_at,
             wait_event_key=event.interaction_id,
             pending_reason=event.reason,
@@ -187,7 +198,10 @@ def _schedule(status: TaskStatus) -> Handler:
 
 
 def _timer_elapsed(state: TaskRun, event: TaskEvent) -> StateChange:
-    return replace(state, status=TaskStatus.READY, next_wake_at=None, wait_event_key=None, pending_reason=None), ()
+    resumed = state.suspended_status or TaskStatus.READY
+    if resumed in TERMINAL_STATUSES or resumed in {TaskStatus.WAITING, TaskStatus.RETRY_WAIT, TaskStatus.PAUSED, TaskStatus.TAKEN_OVER}:
+        resumed = TaskStatus.READY
+    return replace(state, status=resumed, suspended_status=None, next_wake_at=None, wait_event_key=None, pending_reason=None), ()
 
 
 def _resume(state: TaskRun, event: TaskEvent) -> StateChange:
@@ -228,6 +242,11 @@ def _terminal(state: TaskRun, event: TaskEvent, status: TaskStatus) -> StateChan
         reason=event.reason,
         evidence_ids=event.evidence_ids,
         finished_at=event.occurred_at,
+        diagnosis=event.diagnosis,
+        action=event.action,
+        current_state=event.current_state,
+        completion_judgment=event.completion_judgment,
+        unresolved_risks=event.unresolved_risks,
     )
     updated = replace(
         state,
@@ -249,6 +268,8 @@ _HANDLERS: dict[TaskEventType, Handler] = {
     TaskEventType.PLAN_REQUESTED: _set(TaskStatus.PLANNING, EffectKind.PLAN),
     TaskEventType.PLAN_READY: _plan_ready,
     TaskEventType.PLAN_FAILED: _terminal_handler(TaskStatus.FAILED),
+    TaskEventType.FACTS_CAPTURED: lambda state, event: (state, ()),
+    TaskEventType.MODEL_RESULT_RECORDED: lambda state, event: (state, ()),
     TaskEventType.CLARIFICATION_REQUIRED: _clarification_required,
     TaskEventType.CLARIFICATION_PROVIDED: _clarification_provided,
     TaskEventType.REVIEW_REQUIRED: _review_required,

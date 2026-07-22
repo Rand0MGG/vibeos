@@ -128,6 +128,17 @@ def build_parser() -> argparse.ArgumentParser:
     secrets_delete.add_argument("route_id")
     secrets_delete.add_argument("--json", action="store_true")
 
+    service = subparsers.add_parser("service", help="run the fixed Goal04 systemd user-service task")
+    service_sub = service.add_subparsers(dest="service_command", required=True)
+    service_recover = service_sub.add_parser("recover-fixture", help="diagnose and recover only the Goal04 fixture")
+    service_recover.add_argument("--route", required=True, help="configured Model Gateway route id")
+    service_recover.add_argument("--json", action="store_true")
+    service_resume = service_sub.add_parser("resume", help="resume one persisted Goal04 fixture task")
+    service_resume.add_argument("task_id")
+    service_resume.add_argument("--route", required=True)
+    service_resume.add_argument("--keyring-unlocked", action="store_true")
+    service_resume.add_argument("--json", action="store_true")
+
     return parser
 
 
@@ -153,6 +164,8 @@ def _run(args: argparse.Namespace) -> int:
 
     if args.command == "secrets":
         return run_secret_command(args)
+    if args.command == "service":
+        return run_system_service_command(args)
 
     if args.command == "doctor":
         report = SessionDoctor().run()
@@ -368,6 +381,31 @@ def _print_secret_result(payload: dict[str, object], json_output: bool, exit_cod
     else:
         print(" ".join(f"{key}={value}" for key, value in payload.items()))
     return exit_code
+
+
+def run_system_service_command(args: argparse.Namespace) -> int:
+    from .runtime_composition import compose_runtime
+    from .system_service_task import FIXED_SERVICE_GOAL
+
+    route = ProviderRouteRepository().get(args.route)
+    if route is None:
+        payload = {"status": "failed", "message": "Model Gateway route is not configured", "route_id": args.route}
+        print(json.dumps(payload, ensure_ascii=False, indent=2) if args.json else payload["message"])
+        return 1
+    components = compose_runtime()
+    run_id = f"goal04-service-{os.getpid()}"
+    if args.service_command == "recover-fixture":
+        result = components.system_service_tasks.start(goal=FIXED_SERVICE_GOAL, route=route, run_id=run_id)
+    else:
+        result = components.system_service_tasks.resume(
+            args.task_id,
+            route=route,
+            run_id=run_id,
+            keyring_unlocked=args.keyring_unlocked,
+        )
+    payload = result.payload()
+    print(json.dumps(payload, ensure_ascii=False, indent=2, default=str) if args.json else f"task={result.task.task_id} status={result.task.status.value}")
+    return 0 if result.task.status.value in {"succeeded", "waiting"} else 1
 
 
 @contextmanager

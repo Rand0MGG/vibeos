@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 FIXTURE_UNIT = "vibeos-goal04-fixture.service"
+SYSTEM_SERVICE_RECOVERY_ACTION = "system.service.recover_fixture"
 
 
 class StrictSystemServiceContract(BaseModel):
@@ -22,7 +23,7 @@ class ServiceProcessFactV2(StrictSystemServiceContract):
 
 class ServiceJournalFactV2(StrictSystemServiceContract):
     schema_version: Literal["v2"] = "v2"
-    unit: Literal[FIXTURE_UNIT] = FIXTURE_UNIT
+    unit: Literal["vibeos-goal04-fixture.service"] = "vibeos-goal04-fixture.service"
     since: str
     until: str
     lines: tuple[str, ...] = Field(max_length=40)
@@ -34,7 +35,7 @@ class ServiceFactsV2(StrictSystemServiceContract):
     """Bounded D0 facts captured through the canonical observation path."""
 
     schema_version: Literal["v2"] = "v2"
-    unit: Literal[FIXTURE_UNIT] = FIXTURE_UNIT
+    unit: Literal["vibeos-goal04-fixture.service"] = "vibeos-goal04-fixture.service"
     load_state: Literal["loaded", "not-found", "error"]
     active_state: Literal["active", "inactive", "failed", "activating", "deactivating", "unknown"]
     sub_state: str = Field(min_length=1, max_length=80)
@@ -54,11 +55,11 @@ class SystemServiceActionSpecV2(StrictSystemServiceContract):
 
     schema_version: Literal["v2"] = "v2"
     operation: Literal["start", "restart"]
-    unit: Literal[FIXTURE_UNIT] = FIXTURE_UNIT
+    unit: Literal["vibeos-goal04-fixture.service"] = "vibeos-goal04-fixture.service"
     resource_scope: Literal["systemd_user_fixture"] = "systemd_user_fixture"
     effect_level: Literal["E1"] = "E1"
     required_load_state: Literal["loaded"] = "loaded"
-    allowed_pre_states: tuple[Literal["inactive", "failed"]] = ("inactive", "failed")
+    allowed_pre_states: tuple[Literal["inactive", "failed"], ...] = ("inactive", "failed")
     timeout_seconds: int = Field(default=15, ge=1, le=30)
     idempotency_key: str = Field(min_length=16, max_length=320)
     max_dispatches: Literal[1] = 1
@@ -77,7 +78,7 @@ class SystemServiceAdapterResultV2(StrictSystemServiceContract):
 
     schema_version: Literal["v2"] = "v2"
     operation: Literal["observe", "start", "restart"]
-    unit: Literal[FIXTURE_UNIT] = FIXTURE_UNIT
+    unit: Literal["vibeos-goal04-fixture.service"] = "vibeos-goal04-fixture.service"
     status: Literal["succeeded", "failed", "unknown"]
     adapter: Literal["systemd_user_dbus", "fixed_systemctl_argv"]
     adapter_status: str = Field(min_length=1, max_length=120)

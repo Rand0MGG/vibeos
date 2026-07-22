@@ -25,6 +25,8 @@ dev = [
 [project.scripts]
 vibe = "vibeos.cli:main"
 vibed = "vibeos.daemon:main"
+vibe-goal04-fixture-service = "vibeos.goal04_fixture_service:main"
+vibe-goal04-fixture-controller = "vibeos.goal04_fixture_controller:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -67,6 +69,14 @@ files = [
   "src/vibeos/recovery_service.py",
   "src/vibeos/result_projection.py",
   "src/vibeos/model_gateway",
+  "src/vibeos/goal04_fixture_controller.py",
+  "src/vibeos/goal04_fixture_service.py",
+  "src/vibeos/system_service_contracts.py",
+  "src/vibeos/system_service_provider.py",
+  "src/vibeos/system_service_reconciliation.py",
+  "src/vibeos/system_service_task.py",
+  "src/vibeos/system_service_task_support.py",
+  "src/vibeos/tools/system_service.py",
   "src/vibeos/runtime_composition.py",
   "src/vibeos/review_identifiers.py",
   "src/vibeos/tools/registry.py",

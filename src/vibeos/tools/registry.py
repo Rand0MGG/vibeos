@@ -14,6 +14,7 @@ from .clipboard import clipboard_tool_specs
 from .fixtures import fixture_tool_specs
 from .media import media_tool_specs
 from .system import system_tool_specs
+from .system_service import SYSTEM_SERVICE_RECOVERY_ACTION, system_service_tool_specs
 from .windows import window_tool_specs
 
 
@@ -58,6 +59,8 @@ class CapabilityRecipeRegistry:
             return (ToolCall("window.resolve", payload), ToolCall(action, payload))
         if action in {"notification.send", "clipboard.write", "portal.open_uri", "system.status", "media.search", "media.play", "media.pause"}:
             return (ToolCall(action, target),)
+        if action == SYSTEM_SERVICE_RECOVERY_ACTION:
+            return (ToolCall(SYSTEM_SERVICE_RECOVERY_ACTION, target),)
         if action == "browser.open_named_target":
             payload = {
                 "name": str(target.get("name") or target.get("target_name") or ""),
@@ -83,6 +86,7 @@ def build_tool_registry(
     clipboard: ClipboardAdapter,
     verifiers: VerifierHarness,
     foundation_specs: tuple[ToolSpec, ...],
+    system_service_provider=None,
 ) -> ToolRegistry:
     """Compose domain-owned ToolSpecs without broker-owned handlers."""
 
@@ -96,5 +100,6 @@ def build_tool_registry(
             *browser_tool_specs(portal, verifiers),
             *fixture_tool_specs(),
             *media_tool_specs(),
+            *(system_service_tool_specs(system_service_provider) if system_service_provider is not None else ()),
         )
     )

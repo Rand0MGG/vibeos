@@ -1,0 +1,19 @@
+[Unit]
+Description=VibeOS Goal04 deterministic user-service fixture
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=@FIXTURE_EXECUTABLE@
+Restart=no
+TimeoutStartSec=10
+TimeoutStopSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state/vibeos/goal04-fixture
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=default.target

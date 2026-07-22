@@ -22,6 +22,7 @@ EXPECTED_STATE_REGISTRY: dict[str, ExpectedStateSpec] = {
     "notification_requested": ExpectedStateSpec("notification_requested", ("title",)),
     "search_results_available": ExpectedStateSpec("search_results_available", ("query",)),
     "media_playing": ExpectedStateSpec("media_playing", ("query",)),
+    "system_service_healthy": ExpectedStateSpec("system_service_healthy", ("unit", "active_state", "sub_state")),
 }
 
 
