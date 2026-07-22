@@ -60,6 +60,7 @@ def write_current_state(connection: Connection, transition: TaskTransition, stat
             set_={
                 "state_version": transition.state.revision,
                 "status": transition.state.status.value,
+                "schema_version": transition.state.schema_version,
                 "payload_json": state_json,
                 "updated_at": transition.state.updated_at,
             },

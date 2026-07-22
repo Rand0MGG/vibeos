@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from .capabilities import allowed_actions
+from .core.domain import EffectLevel
 
 ALLOWED_ACTIONS = allowed_actions()
 
@@ -30,8 +31,6 @@ Action = Literal[
     "system.status",
     "unknown",
 ]
-
-RiskLevel = Literal["L0", "L1", "L2", "L3"]
 
 
 @dataclass(frozen=True)
@@ -59,13 +58,14 @@ class CommandRequest:
 
 
 @dataclass(frozen=True)
-class PermissionReview:
-    risk_level: RiskLevel
+class EffectAssessment:
+    effect_level: EffectLevel
     review_required: bool
     allowed: bool
     reason: str
     effects: tuple[str, ...] = ()
     reversible: bool = False
+    schema_version: str = "v2"
 
 
 @dataclass(frozen=True)
@@ -79,10 +79,11 @@ class CommandResult:
     review_id: str | None = None
     transport: str | None = None
     message: str = ""
-    review: PermissionReview | None = None
+    review: EffectAssessment | None = None
     execution_status: str = "not_started"
     acceptance_status: str = "skipped"
     overall_status: str = "failed"
+    schema_version: str = "v2"
 
 
 @dataclass(frozen=True)
@@ -90,7 +91,7 @@ class ReviewRequest:
     review_id: str
     utterance: str
     intent: Intent
-    review: PermissionReview
+    review: EffectAssessment
     created_at: str
     status: Literal["pending", "approved", "executing", "rejected", "consumed", "expired", "provided", "superseded"] = "pending"
     expires_at: str | None = None
@@ -102,6 +103,7 @@ class ReviewRequest:
     snapshot_payload: dict[str, object] | None = None
     pending_reason: str | None = None
     supplemental_input: str | None = None
+    schema_version: str = "v2"
 
 
 @dataclass(frozen=True)

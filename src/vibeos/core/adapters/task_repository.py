@@ -17,12 +17,8 @@ from .metadata import (
     task_steps,
     wait_conditions,
 )
-from .task_codec import (
-    decode_contract,
-    decode_task,
-    encode_contract,
-    encode_task,
-)
+from .task_codec import encode_contract, encode_task
+from .task_record_decoder import decode_contract_record, decode_task_record
 from .task_persistence import (
     insert_contract_version,
     write_artifacts,
@@ -112,13 +108,23 @@ class SqliteTaskRepository:
 
     def get(self, task_id: str) -> TaskRun | None:
         with self.database.engine.connect() as connection:
-            raw = connection.execute(select(task_runs.c.payload_json).where(task_runs.c.task_id == task_id)).scalar_one_or_none()
-        return decode_task(str(raw)) if raw is not None else None
+            row = (
+                connection.execute(select(task_runs.c.schema_version, task_runs.c.status, task_runs.c.payload_json).where(task_runs.c.task_id == task_id))
+                .mappings()
+                .one_or_none()
+            )
+        return decode_task_record(str(row["schema_version"]), str(row["status"]), str(row["payload_json"])) if row else None
 
     def get_by_interaction(self, interaction_id: str) -> TaskRun | None:
         with self.database.engine.connect() as connection:
-            raw = connection.execute(select(task_runs.c.payload_json).where(task_runs.c.pending_interaction_id == interaction_id)).scalar_one_or_none()
-        return decode_task(str(raw)) if raw is not None else None
+            row = (
+                connection.execute(
+                    select(task_runs.c.schema_version, task_runs.c.status, task_runs.c.payload_json).where(task_runs.c.pending_interaction_id == interaction_id)
+                )
+                .mappings()
+                .one_or_none()
+            )
+        return decode_task_record(str(row["schema_version"]), str(row["status"]), str(row["payload_json"])) if row else None
 
     def get_by_event_key(self, event_key: str) -> TaskRun | None:
         with self.database.engine.connect() as connection:
@@ -132,22 +138,34 @@ class SqliteTaskRepository:
 
     def contract(self, task_id: str) -> GoalContract | None:
         with self.database.engine.connect() as connection:
-            raw = connection.execute(
-                select(goal_contracts.c.payload_json).where(goal_contracts.c.task_id == task_id).order_by(goal_contracts.c.version.desc()).limit(1)
-            ).scalar_one_or_none()
-        return decode_contract(str(raw)) if raw is not None else None
+            row = (
+                connection.execute(
+                    select(goal_contracts.c.schema_version, goal_contracts.c.payload_json, task_runs.c.status)
+                    .join(task_runs, task_runs.c.task_id == goal_contracts.c.task_id)
+                    .where(goal_contracts.c.task_id == task_id)
+                    .order_by(goal_contracts.c.version.desc())
+                    .limit(1)
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if row is None:
+            return None
+        return decode_contract_record(str(row["schema_version"]), str(row["status"]), str(row["payload_json"]))
 
     def add_contract_version(self, contract: GoalContract) -> None:
         with self.database.engine.begin() as connection:
             self._insert_contract_version(connection, contract)
 
     def list(self, *, statuses: tuple[TaskStatus, ...] = (), limit: int = 100) -> tuple[TaskRun, ...]:
-        statement = select(task_runs.c.payload_json).order_by(task_runs.c.updated_at.desc()).limit(max(0, limit))
+        statement = (
+            select(task_runs.c.schema_version, task_runs.c.status, task_runs.c.payload_json).order_by(task_runs.c.updated_at.desc()).limit(max(0, limit))
+        )
         if statuses:
             statement = statement.where(task_runs.c.status.in_([status.value for status in statuses]))
         with self.database.engine.connect() as connection:
-            rows = connection.execute(statement).scalars()
-            return tuple(decode_task(str(raw)) for raw in rows)
+            rows = connection.execute(statement).mappings()
+            return tuple(decode_task_record(str(row["schema_version"]), str(row["status"]), str(row["payload_json"])) for row in rows)
 
     def commit(
         self,

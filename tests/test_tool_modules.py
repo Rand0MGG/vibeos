@@ -1,7 +1,7 @@
 from vibeos.apps import AppRegistry
 from pathlib import Path
 
-from vibeos.capabilities import CAPABILITIES, capability_payload, executable_actions, permission_summary
+from vibeos.capabilities import CAPABILITIES, capability_payload, effect_policy_summary, executable_actions
 from vibeos.clipboard import ClipboardAdapter
 from vibeos.notifications import NotificationAdapter
 from vibeos.core.adapters.database import CoreDatabase
@@ -70,7 +70,7 @@ def test_extracted_domain_tool_specs_preserve_registered_tool_ids(tmp_path: Path
 def test_capability_recipes_cover_every_registered_capability() -> None:
     recipes = CapabilityRecipeRegistry()
     plan = TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id="plan_recipe_coverage",
         utterance="test",
         display=DisplayFields(goal="test"),
@@ -111,7 +111,7 @@ def test_composed_tool_registry_contains_every_recipe_tool(tmp_path: Path) -> No
     )
     recipes = CapabilityRecipeRegistry()
     plan = TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id="plan_recipe_registry",
         utterance="test",
         display=DisplayFields(goal="test"),
@@ -136,8 +136,9 @@ def make_foundation(path: Path):
         portal=PortalAdapter(),
         notifications=NotificationAdapter(),
         capabilities=lambda: {
+            "schema_version": "v2",
             "capabilities": executable_actions(),
             "capability_details": capability_payload(),
-            "permission_policy": permission_summary(),
+            "effect_policy": effect_policy_summary(),
         },
     )

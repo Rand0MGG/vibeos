@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 
-TASK_SCHEMA_VERSION = "v1"
+TASK_SCHEMA_VERSION = "v2"
 
 
 class TaskStatus(StrEnum):

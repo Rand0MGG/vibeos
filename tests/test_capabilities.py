@@ -1,6 +1,6 @@
 from vibeos.capabilities import CAPABILITIES, allowed_actions, capability_payload, executable_actions
 from vibeos.models import ALLOWED_ACTIONS
-from vibeos.permissions import PermissionPolicy
+from vibeos.permissions import EffectPolicy
 from vibeos.models import Intent
 
 
@@ -10,12 +10,12 @@ def test_allowed_actions_match_registry() -> None:
     assert "unknown" in ALLOWED_ACTIONS
 
 
-def test_every_registered_capability_has_permission_review() -> None:
-    policy = PermissionPolicy()
+def test_every_registered_capability_has_effect_assessment() -> None:
+    policy = EffectPolicy()
     for action, spec in CAPABILITIES.items():
-        review = policy.review(Intent(action=action, target=sample_target(action)))
+        review = policy.assess(Intent(action=action, target=sample_target(action)))
         assert review.allowed == spec.allowed
-        assert review.risk_level == spec.risk_level
+        assert review.effect_level == spec.effect_level
         assert review.review_required == spec.review_required
         assert review.effects == spec.effects
 

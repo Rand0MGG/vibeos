@@ -3,8 +3,8 @@ from vibeos.task_models import DisplayFields, TaskPlan, TaskRoute, TaskStep
 
 
 def test_route_selector_prefers_lower_risk_when_scores_tie() -> None:
-    low_risk = make_plan("route_low", ("app.open",), ("L1",))
-    high_risk = make_plan("route_high", ("app.open",), ("L2",))
+    low_risk = make_plan("route_low", ("app.open",), ("E1",))
+    high_risk = make_plan("route_high", ("app.open",), ("E3",))
 
     selected = select_best_plan([high_risk, low_risk], capability_context={"app.open"})
 
@@ -13,8 +13,8 @@ def test_route_selector_prefers_lower_risk_when_scores_tie() -> None:
 
 
 def test_route_selector_prefers_fewer_steps_when_score_and_risk_tie() -> None:
-    short_plan = make_plan("route_short", ("app.list",), ("L0",))
-    long_plan = make_plan("route_long", ("app.list",), ("L0", "L0"))
+    short_plan = make_plan("route_short", ("app.list",), ("E0",))
+    long_plan = make_plan("route_long", ("app.list",), ("E0", "E0"))
 
     selected = select_best_plan([long_plan, short_plan], capability_context={"app.list"})
 
@@ -23,8 +23,8 @@ def test_route_selector_prefers_fewer_steps_when_score_and_risk_tie() -> None:
 
 
 def test_route_selector_uses_route_id_sort_as_final_tie_break() -> None:
-    route_b = make_plan("route_b", ("app.list",), ("L0",))
-    route_a = make_plan("route_a", ("app.list",), ("L0",))
+    route_b = make_plan("route_b", ("app.list",), ("E0",))
+    route_a = make_plan("route_a", ("app.list",), ("E0",))
 
     selected = select_best_plan([route_b, route_a], capability_context={"app.list"})
 
@@ -32,18 +32,18 @@ def test_route_selector_uses_route_id_sort_as_final_tie_break() -> None:
     assert selected.selected_route_id == "route_a"
 
 
-def make_plan(route_id: str, required_capabilities: tuple[str, ...], risk_levels: tuple[str, ...]) -> TaskPlan:
+def make_plan(route_id: str, required_capabilities: tuple[str, ...], effect_levels: tuple[str, ...]) -> TaskPlan:
     steps = tuple(
         TaskStep(
             id=f"step_{index}",
             action=required_capabilities[0],
             capability_id=required_capabilities[0],
-            risk_level=risk,
+            effect_level=effect,  # type: ignore[arg-type]
         )
-        for index, risk in enumerate(risk_levels, start=1)
+        for index, effect in enumerate(effect_levels, start=1)
     )
     return TaskPlan(
-        schema_version="v0.3",
+        schema_version="v2",
         plan_id=f"plan_{route_id}",
         utterance=route_id,
         display=DisplayFields(goal=route_id),

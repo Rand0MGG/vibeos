@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from .models import RiskLevel
+from .core.domain import EffectLevel
 
 
 AnalysisType = Literal["chat", "task", "mixed", "clarification", "rejected"]
@@ -31,7 +31,7 @@ FailureClass = Literal[
 ReplanAction = Literal["stop", "retry_same_attempt", "repair", "replan_with_constraints", "ask_user"]
 RunStatus = Literal["running", "completed", "failed", "incomplete", "blocked", "needs_review", "needs_user_input", "dry_run"]
 SemanticDecision = Literal["complete", "incomplete", "semantic_failure", "clarification_needed", "skipped"]
-ObservationLevel = Literal["L0", "L1", "L2"]
+ObservationLevel = Literal["O0", "O1", "O2"]
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,7 @@ class TaskObservation:
     packages: dict[str, dict[str, Any]] = field(default_factory=dict)
     route_id: str | None = None
     step_id: str | None = None
+    schema_version: str = "v2"
 
 
 @dataclass(frozen=True)
@@ -128,11 +129,12 @@ class TaskStep:
     capability_id: str
     target: dict[str, Any] = field(default_factory=dict)
     depends_on: tuple[str, ...] = ()
-    risk_level: RiskLevel = "L3"
+    effect_level: EffectLevel = EffectLevel.E4
     parallel_group: str | None = None
     expected_state: ExpectedState | None = None
     preconditions: tuple[StepPrecondition, ...] = ()
     provenance: StepProvenance | None = None
+    schema_version: str = "v2"
 
 
 @dataclass(frozen=True)
@@ -155,22 +157,24 @@ class StepReviewRecord:
     step_safety_review_id: str
     step_id: str
     action: str
-    risk_level: RiskLevel
+    effect_level: EffectLevel
     review_required: bool
     allowed: bool
     reason: str
     effects: tuple[str, ...] = ()
     reversible: bool = False
+    schema_version: str = "v2"
 
 
 @dataclass(frozen=True)
 class TaskPlanReviewResult:
     plan_id: str
     status: PlanReviewStatus
-    max_risk_level: RiskLevel
+    max_effect_level: EffectLevel
     review_id: str | None = None
     step_reviews: tuple[StepReviewRecord, ...] = ()
     message: str = ""
+    schema_version: str = "v2"
 
 
 @dataclass(frozen=True)
@@ -429,7 +433,7 @@ def task_step_from_payload(payload: dict[str, Any]) -> TaskStep:
         capability_id=str(payload.get("capability_id", payload["action"])),
         target=canonicalize_target_for_action(action, payload.get("target", {}) if isinstance(payload.get("target"), dict) else {}),
         depends_on=tuple(str(item) for item in payload.get("depends_on", ())),
-        risk_level=str(payload.get("risk_level", "L3")),
+        effect_level=EffectLevel(str(payload.get("effect_level", "E4"))),
         parallel_group=str(payload["parallel_group"]) if payload.get("parallel_group") is not None else None,
         expected_state=ExpectedState(
             kind=str(expected_state_payload.get("kind", "")),
@@ -444,6 +448,7 @@ def task_step_from_payload(payload: dict[str, Any]) -> TaskStep:
         )
         if isinstance(provenance_payload, dict)
         else None,
+        schema_version=str(payload.get("schema_version", "v2")),
     )
 
 

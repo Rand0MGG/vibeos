@@ -36,7 +36,7 @@ class FixtureNotifications:
         return {"status": "sent", "title": title, "adapter": "fixture-notify"}
 
 
-def test_cli_system_status_uses_new_slice_and_returns_receipt_evidence(
+def test_cli_system_status_uses_new_slice_and_returns_one_canonical_receipt(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -48,11 +48,10 @@ def test_cli_system_status_uses_new_slice_and_returns_receipt_evidence(
     payload = json.loads(capsys.readouterr().out)
 
     assert exit_code == 0
-    receipt = recursive_find(payload, "action_receipt")
-    evidence = recursive_find(payload, "observation_evidence")
-    assert receipt["capability_id"] == "system.status"
-    assert receipt["effect_level"] == "E0"
-    assert evidence["capability_count"] == 19
+    receipt = broker.task_repository.receipts(payload["result"]["task_id"])[0]
+    receipt_payload = json.loads(receipt.result_json)
+    assert receipt_payload["capability_id"] == "system.status"
+    assert recursive_find(receipt_payload, "evidence")["capability_count"] == 19
     assert payload["transport"] == "local"
 
 
@@ -66,8 +65,8 @@ def test_http_transport_uses_same_slice_and_rejects_requests_after_drain(tmp_pat
             return build_status_payload(["http"], health=supervisor.health())
 
         router = DaemonHttpRouter(broker=broker, supervisor=supervisor, status_payload=status_payload)
-        body = json.dumps({"schema_version": "v1", "utterance": "status"}).encode("utf-8")
-        request = HttpRequest("POST", "/v1/command", {"content-type": "application/json"}, body)
+        body = json.dumps({"schema_version": "v2", "utterance": "status"}).encode("utf-8")
+        request = HttpRequest("POST", "/v2/command", {"content-type": "application/json"}, body)
 
         before_ready = await router.handle(request)
         assert before_ready.status == 503
@@ -75,15 +74,15 @@ def test_http_transport_uses_same_slice_and_rejects_requests_after_drain(tmp_pat
         response = await router.handle(request)
         payload = json.loads(response.body)
         assert response.status == 200
-        assert recursive_find(payload, "action_receipt")["capability_id"] == "system.status"
+        assert broker.task_repository.receipts(payload["result"]["task_id"])[0].step_id
         assert payload["transport"] == "http"
 
         invalid = await router.handle(
             HttpRequest(
                 "POST",
-                "/v1/command",
+                "/v2/command",
                 {"content-type": "application/json"},
-                json.dumps({"schema_version": "v1", "utterance": "status", "unknown": True}).encode("utf-8"),
+                json.dumps({"schema_version": "v2", "utterance": "status", "unknown": True}).encode("utf-8"),
             )
         )
         assert invalid.status == 400
@@ -102,13 +101,12 @@ def test_e1_notification_production_composition_has_no_legacy_tool_logic(tmp_pat
     broker = make_broker(tmp_path, notifications=notifications)
 
     result = broker.handle(CommandRequest("notify completed", transport="local"))
-    receipt = recursive_find(result.result, "action_receipt")
-    evidence = recursive_find(result.result, "observation_evidence")
+    receipt = broker.task_repository.receipts(result.result["task_id"])[0]
+    receipt_payload = json.loads(receipt.result_json)
 
     assert result.status == "executed"
-    assert receipt["capability_id"] == "notification.send"
-    assert receipt["effect_level"] == "E1"
-    assert evidence["delivery_adapter"] == "fixture-notify"
+    assert receipt_payload["capability_id"] == "notification.send"
+    assert recursive_find(receipt_payload, "evidence")["delivery_adapter"] == "fixture-notify"
     assert notifications.calls == [("VibeOS", "completed")]
     assert broker.tool_registry.get("notification.send").runner.__module__ == "vibeos.core.adapters.tooling"
     assert broker.tool_registry.get("system.status").runner.__module__ == "vibeos.core.adapters.tooling"

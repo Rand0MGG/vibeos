@@ -123,7 +123,7 @@ def is_parallel_eligible(step: TaskStep) -> bool:
     spec = CAPABILITIES.get(step.capability_id)
     if spec is None:
         return False
-    return spec.risk_level == "L0" or spec.parallel_safe
+    return str(spec.effect_level) == "E0" or spec.parallel_safe
 
 
 def with_scheduler_batch(result: StepExecutionResult, batch: tuple[TaskStep, ...]) -> StepExecutionResult:

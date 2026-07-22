@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from pydantic import ValidationError
 
 from .broker import CapabilityBroker
-from .core.adapters.contracts import TransportCommandRequestV1
+from .core.adapters.contracts import TransportCommandRequestV2
 from .core.adapters.http import AsyncHttpServer, HttpRequest, HttpResponse
 from .core.adapters.lifecycle import DatabaseLifecycleComponent
 from .core.adapters.outbox_repository import OutboxRecord, SqliteOutboxRepository
@@ -82,34 +82,34 @@ class DaemonHttpRouter:
     async def handle(self, request: HttpRequest) -> HttpResponse:
         parsed = urlparse(request.target)
         path = parsed.path
-        if request.method == "GET" and path == "/v1/status":
+        if request.method == "GET" and path == "/v2/status":
             return _json_response(200, self._status_payload())
         if request.method == "GET":
             return await self._handle_get(path, parsed.query)
-        if request.method == "POST" and path == "/v1/command":
+        if request.method == "POST" and path == "/v2/command":
             return await self._handle_command(request.body)
-        if request.method == "POST" and path.startswith("/v1/tasks/") and path.endswith("/control"):
+        if request.method == "POST" and path.startswith("/v2/tasks/") and path.endswith("/control"):
             return await self._handle_task_control(path, request.body)
         return _json_response(404, {"error": "not_found"})
 
     async def _handle_get(self, path: str, query_string: str) -> HttpResponse:
         try:
-            if path == "/v1/apps":
+            if path == "/v2/apps":
                 payload = await self._supervisor.submit(lambda: {"apps": self._broker.list_apps(transport="http")})
-            elif path == "/v1/windows":
+            elif path == "/v2/windows":
                 payload = await self._supervisor.submit(lambda: {"windows": self._broker.list_windows(transport="http")})
-            elif path == "/v1/capabilities":
+            elif path == "/v2/capabilities":
                 payload = await self._supervisor.submit(self._broker.capabilities)
-            elif path == "/v1/reviews/pending":
+            elif path == "/v2/reviews/pending":
                 payload = await self._supervisor.submit(lambda: {"reviews": self._broker.pending_reviews()})
-            elif path == "/v1/audit/tail":
+            elif path == "/v2/audit/tail":
                 query = parse_qs(query_string)
                 try:
                     count = max(0, int(query.get("n", ["20"])[0]))
                 except ValueError:
                     count = 20
                 payload = await self._supervisor.submit(lambda: {"entries": self._broker.audit.tail(count)})
-            elif path == "/v1/tasks":
+            elif path == "/v2/tasks":
                 query = parse_qs(query_string)
                 raw_status = query.get("status", [None])[0]
                 try:
@@ -117,8 +117,8 @@ class DaemonHttpRouter:
                 except ValueError:
                     limit = 100
                 payload = await self._supervisor.submit(lambda: {"tasks": self._broker.tasks(status=raw_status, limit=limit)})
-            elif path.startswith("/v1/tasks/"):
-                task_id = unquote(path.removeprefix("/v1/tasks/"))
+            elif path.startswith("/v2/tasks/"):
+                task_id = unquote(path.removeprefix("/v2/tasks/"))
                 task = await self._supervisor.submit(lambda: self._broker.task(task_id))
                 if task is None:
                     return _json_response(404, {"error": "task_not_found", "task_id": task_id})
@@ -134,7 +134,7 @@ class DaemonHttpRouter:
     async def _handle_command(self, body: bytes) -> HttpResponse:
         try:
             raw = json.loads(body.decode("utf-8"))
-            contract = TransportCommandRequestV1.model_validate(raw, strict=True)
+            contract = TransportCommandRequestV2.model_validate(raw, strict=True)
         except (UnicodeDecodeError, json.JSONDecodeError, ValidationError, TypeError) as exc:
             return _json_response(400, {"error": "invalid_contract", "exception_type": type(exc).__name__})
         command = CommandRequest(
@@ -162,13 +162,13 @@ class DaemonHttpRouter:
         return _json_response(200, dataclass_to_jsonable(result))
 
     async def _handle_task_control(self, path: str, body: bytes) -> HttpResponse:
-        task_id = unquote(path.removeprefix("/v1/tasks/").removesuffix("/control"))
+        task_id = unquote(path.removeprefix("/v2/tasks/").removesuffix("/control"))
         try:
             payload = json.loads(body.decode("utf-8"))
             if not isinstance(payload, dict):
                 raise TypeError("control payload must be an object")
             allowed = {"schema_version", "operation", "expected_revision", "owner", "reason"}
-            if set(payload) - allowed or payload.get("schema_version") != "v1":
+            if set(payload) - allowed or payload.get("schema_version") != "v2":
                 raise ValueError("invalid task control contract")
             operation = str(payload["operation"])
             expected_revision = int(payload["expected_revision"])

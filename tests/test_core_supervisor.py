@@ -191,7 +191,7 @@ def test_async_http_adapter_is_owned_by_supervisor_and_rejects_after_drain() -> 
 
 async def http_get(port: int) -> bytes:
     reader, writer = await asyncio.open_connection("127.0.0.1", port)
-    writer.write(b"GET /v1/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+    writer.write(b"GET /v2/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
     await writer.drain()
     response = await reader.read()
     writer.close()

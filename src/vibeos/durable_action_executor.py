@@ -47,7 +47,7 @@ class DurableActionExecutor:
         if (
             existing_proposal is not None
             and not request.dry_run
-            and step.risk_level != "L0"
+            and str(step.effect_level) != "E0"
             and state.last_event != TaskEventType.RECONCILIATION_NOT_APPLIED.value
         ):
             state = self._reconcile(state, step, stored_step, existing_proposal, lease)
@@ -187,7 +187,16 @@ class DurableActionExecutor:
             receipt_id=receipt.receipt_id,
             status="observed" if succeeded else "failed",
             summary=f"{result.capability_id or result.step_id} returned {result.status}",
-            payload_json=json.dumps({"adapter": result.adapter, "adapter_status": result.adapter_status, "error_code": result.error_code}),
+            payload_json=json.dumps(
+                {
+                    "adapter": result.adapter,
+                    "adapter_status": result.adapter_status,
+                    "error_code": result.error_code,
+                    "material": _safe_payload(_adapter_evidence_material(result)),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
             observed_at=timestamp,
         )
         kind = event_type or (TaskEventType.ACTION_SUCCEEDED if succeeded else TaskEventType.ACTION_FAILED)
@@ -212,6 +221,24 @@ def _selected_from_result(result: StepExecutionResult) -> str | None:
             if source.get(key) is not None:
                 return str(source[key])
     return None
+
+
+def _adapter_evidence_material(result: StepExecutionResult) -> list[dict[str, Any]]:
+    invocations = result.result.get("tool_invocations")
+    if not isinstance(invocations, list):
+        return []
+    material: list[dict[str, Any]] = []
+    for invocation in invocations:
+        if not isinstance(invocation, dict) or not isinstance(invocation.get("evidence"), dict):
+            continue
+        material.append(
+            {
+                "tool_id": str(invocation.get("tool_id") or ""),
+                "status": str(invocation.get("status") or ""),
+                "evidence": invocation["evidence"],
+            }
+        )
+    return material
 
 
 def _safe_payload(value: Any) -> Any:

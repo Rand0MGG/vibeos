@@ -26,6 +26,54 @@ def check_repository(root: Path) -> list[GuardViolation]:
     violations = check_boundaries(root / "src" / "vibeos" / "core")
     violations.extend(check_cycles(root / "src" / "vibeos" / "core"))
     violations.extend(check_quality(root, config))
+    violations.extend(check_goal04_contracts(root / "src" / "vibeos"))
+    violations.extend(check_goal04_test_contracts(root / "tests"))
+    return violations
+
+
+def check_goal04_contracts(source_root: Path) -> list[GuardViolation]:
+    violations: list[GuardViolation] = []
+    history_allowlist = {"history_v1.py", "task_history_v1.py"}
+    forbidden_tokens = ("risk_level", "RiskLevel", "PermissionPolicy", "PermissionSummary", "permission_policy")
+    forbidden_levels = {"L0", "L1", "L2", "L3", "L4"}
+    for path in sorted(source_root.rglob("*.py")):
+        if path.name in history_allowlist:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for token in forbidden_tokens:
+            if token in source:
+                violations.append(GuardViolation("goal04_effect_contract", str(path), f"live source contains forbidden token {token}"))
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in forbidden_levels:
+                violations.append(GuardViolation("goal04_effect_contract", str(path), f"live source contains forbidden legacy level {node.value}"))
+    foundation = source_root / "core" / "application" / "slices.py"
+    foundation_source = foundation.read_text(encoding="utf-8")
+    for token in ("ActionReceipt", "EvidenceBundle", "ActionRepository", ".commit("):
+        if token in foundation_source:
+            violations.append(GuardViolation("canonical_action_result", str(foundation), f"Foundation slice contains {token}"))
+    composition = (source_root / "core" / "composition.py").read_text(encoding="utf-8")
+    if "SqliteActionRepository" in composition:
+        violations.append(GuardViolation("canonical_action_result", str(source_root / "core" / "composition.py"), "second action repository is composed"))
+    return violations
+
+
+def check_goal04_test_contracts(test_root: Path) -> list[GuardViolation]:
+    violations: list[GuardViolation] = []
+    fixture_allowlist = {"test_goal03_migrations.py", "test_goal04_execution_foundation.py"}
+    forbidden_tokens = ("risk_level", "RiskLevel", "PermissionPolicy", "PermissionSummary", "permission_policy")
+    forbidden_levels = {"L0", "L1", "L2", "L3", "L4"}
+    for path in sorted(test_root.rglob("*.py")):
+        if path.name in fixture_allowlist:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for token in forbidden_tokens:
+            if token in source:
+                violations.append(GuardViolation("goal04_test_contract", str(path), f"ordinary test contains forbidden token {token}"))
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in forbidden_levels:
+                violations.append(GuardViolation("goal04_test_contract", str(path), f"ordinary test contains legacy level {node.value}"))
     return violations
 
 

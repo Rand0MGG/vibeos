@@ -7,6 +7,9 @@ from enum import StrEnum
 class EffectLevel(StrEnum):
     E0 = "E0"
     E1 = "E1"
+    E2 = "E2"
+    E3 = "E3"
+    E4 = "E4"
 
 
 class ActionStatus(StrEnum):
@@ -17,7 +20,7 @@ class ActionStatus(StrEnum):
 @dataclass(frozen=True)
 class CapabilityDetail:
     action: str
-    risk_level: str
+    effect_level: EffectLevel
     review_required: bool
     allowed: bool
     reason: str
@@ -28,11 +31,12 @@ class CapabilityDetail:
 
 
 @dataclass(frozen=True)
-class PermissionSummary:
-    l0: str
-    l1: str
-    l2: str
-    l3: str
+class EffectPolicySummary:
+    e0: str
+    e1: str
+    e2: str
+    e3: str
+    e4: str
 
 
 @dataclass(frozen=True)
@@ -49,7 +53,25 @@ class StatusSnapshot:
     portal: PortalStatus
     capabilities: tuple[str, ...]
     capability_details: tuple[CapabilityDetail, ...]
-    permission_policy: PermissionSummary
+    effect_policy: EffectPolicySummary
+
+
+@dataclass(frozen=True)
+class AdapterResult:
+    """A provider-local result used to mint one canonical durable outcome.
+
+    This value is deliberately not an ActionReceipt or EvidenceBundle. It does
+    not assert task completion and it has no independent task persistence.
+    """
+
+    status: ActionStatus
+    adapter: str
+    adapter_status: str
+    evidence_material: dict[str, object]
+    output: dict[str, object]
+    external_reference: str | None = None
+    error: str | None = None
+    status_snapshot: StatusSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -75,83 +97,3 @@ class NotificationCommand:
     title: str
     body: str
     dry_run: bool
-
-
-@dataclass(frozen=True)
-class Evidence:
-    evidence_id: str
-    action_id: str
-    capability_id: str
-    kind: str
-    summary: str
-    observed_at: str
-    capability_count: int | None = None
-    title: str | None = None
-    delivery_adapter: str | None = None
-    dry_run: bool = False
-
-
-@dataclass(frozen=True)
-class ActionReceipt:
-    receipt_id: str
-    action_id: str
-    capability_id: str
-    effect_level: EffectLevel
-    status: ActionStatus
-    adapter: str
-    adapter_status: str
-    occurred_at: str
-    evidence_id: str
-    selected_target: str | None = None
-    error: str | None = None
-    dry_run: bool = False
-
-
-@dataclass(frozen=True)
-class SliceResult:
-    receipt: ActionReceipt
-    evidence: Evidence
-    status_snapshot: StatusSnapshot | None = None
-
-
-@dataclass(frozen=True)
-class ActionState:
-    state_key: str
-    action_id: str
-    capability_id: str
-    status: ActionStatus
-    version: int
-    receipt: ActionReceipt
-    evidence: Evidence
-    updated_at: str
-
-
-@dataclass(frozen=True)
-class ActionEvent:
-    event_id: str
-    state_key: str
-    action_id: str
-    capability_id: str
-    event_type: str
-    occurred_at: str
-    receipt: ActionReceipt
-    evidence: Evidence
-
-
-@dataclass(frozen=True)
-class OutboxMessage:
-    message_id: str
-    state_key: str
-    action_id: str
-    capability_id: str
-    topic: str
-    occurred_at: str
-    receipt_id: str
-    evidence_id: str
-
-
-@dataclass(frozen=True)
-class ActionTransition:
-    state: ActionState
-    event: ActionEvent
-    outbox: OutboxMessage

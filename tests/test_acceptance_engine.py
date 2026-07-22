@@ -7,7 +7,7 @@ from vibeos.task_models import PlanExecutionResult, TaskPlan, TaskRoute
 def test_browser_acceptance_fails_on_tls_error_fixture() -> None:
     engine = AcceptanceEngine()
     plan = TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id="plan_tls",
         utterance="open https://example.com",
         selected_route_id="browser_open_url_route",
@@ -44,7 +44,7 @@ def test_browser_acceptance_fails_on_tls_error_fixture() -> None:
 def test_browser_acceptance_fails_on_dns_error_fixture() -> None:
     engine = AcceptanceEngine()
     plan = TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id="plan_dns",
         utterance="open https://example.com",
         selected_route_id="browser_open_url_route",
@@ -79,7 +79,7 @@ def test_browser_acceptance_fails_on_dns_error_fixture() -> None:
 def test_browser_acceptance_fails_on_http_404_fixture() -> None:
     engine = AcceptanceEngine()
     plan = TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id="plan_404",
         utterance="open https://example.com/missing",
         selected_route_id="browser_open_url_route",
@@ -114,7 +114,7 @@ def test_browser_acceptance_fails_on_http_404_fixture() -> None:
 def test_browser_acceptance_passes_with_matching_query_fixture() -> None:
     engine = AcceptanceEngine()
     plan = TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id="plan_query",
         utterance="search web for hello",
         selected_route_id="browser_search_web_route",
@@ -146,7 +146,7 @@ def test_browser_acceptance_passes_with_matching_query_fixture() -> None:
 def test_browser_acceptance_is_indeterminate_when_only_requested_query_exists() -> None:
     engine = AcceptanceEngine()
     plan = TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id="plan_requested_only",
         utterance="search web for hello",
         selected_route_id="browser_search_web_route",
@@ -193,7 +193,7 @@ def test_browser_acceptance_is_indeterminate_when_only_requested_query_exists() 
 def test_browser_acceptance_is_indeterminate_when_navigation_was_only_requested() -> None:
     engine = AcceptanceEngine()
     plan = TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id="plan_requested_navigation_only",
         utterance="open https://www.baidu.com",
         selected_route_id="browser_open_url_route",
@@ -233,7 +233,7 @@ def test_browser_acceptance_is_indeterminate_when_navigation_was_only_requested(
 def test_browser_acceptance_summary_and_decision_remain_deterministic_by_default() -> None:
     engine = AcceptanceEngine()
     plan = TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id="plan_complete",
         utterance="search web for hello",
         selected_route_id="browser_search_web_route",
@@ -383,7 +383,7 @@ class CountingSemanticProvider(SemanticAcceptanceProvider):
 def test_acceptance_engine_supports_bounded_provider_override() -> None:
     engine = AcceptanceEngine(provider=FixedSemanticProvider())
     plan = TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id="plan_provider_override",
         utterance="search web for hello",
         selected_route_id="browser_search_web_route",
@@ -417,7 +417,7 @@ def test_acceptance_engine_passes_structured_browser_evidence_to_provider() -> N
     provider = CapturingSemanticProvider()
     engine = AcceptanceEngine(provider=provider)
     plan = TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id="plan_structured_evidence",
         utterance="search web for hello",
         selected_route_id="browser_search_web_route",
@@ -473,7 +473,7 @@ def test_acceptance_engine_reuses_semantic_summary_for_identical_evidence() -> N
     provider = CountingSemanticProvider()
     engine = AcceptanceEngine(provider=provider)
     plan = TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id="plan_cached_summary",
         utterance="search web for hello",
         selected_route_id="browser_search_web_route",

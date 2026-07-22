@@ -191,7 +191,7 @@ class DurablePlanningCoordinator:
         capabilities = tuple(dict.fromkeys(step.capability_id for step in plan.steps))
         verifier_ids = tuple(dict.fromkeys(item for route in plan.routes for item in route.default_verifier_ids))
         expected = tuple(dict.fromkeys(step.expected_state.kind for step in plan.steps if step.expected_state is not None))
-        risks = tuple(dict.fromkeys(step.risk_level for step in plan.steps))
+        effect_levels = tuple(dict.fromkeys(step.effect_level for step in plan.steps))
         return replace(
             current,
             contract_id=stable_id("contract", state.task_id, current.version + 1, plan.plan_id),
@@ -200,7 +200,7 @@ class DurablePlanningCoordinator:
             + tuple(f"verifier:{item}" for item in verifier_ids)
             + ("semantic_acceptance:passed",),
             allowed_effects=tuple(f"capability:{item}" for item in capabilities),
-            reality_boundaries=tuple(f"risk_level:{item}" for item in risks) + ("unknown external outcomes require reconciliation proof",),
+            reality_boundaries=tuple(f"effect_level:{item}" for item in effect_levels) + ("unknown external outcomes require reconciliation proof",),
             version=current.version + 1,
             created_at=now_iso(),
         )

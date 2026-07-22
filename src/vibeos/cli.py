@@ -27,13 +27,13 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--offline", action="store_true", help="force the deterministic local parser path")
     ask.add_argument("--debug", action="store_true", help="include raw provider payloads in debug_trace")
 
-    plan = subparsers.add_parser("plan", help="build a v0.3 task plan without executing it")
+    plan = subparsers.add_parser("plan", help="build a v2 task plan without executing it")
     plan.add_argument("utterance")
     plan.add_argument("--json", action="store_true", help="print machine-readable JSON")
     plan.add_argument("--offline", action="store_true", help="force the deterministic local parser path")
     plan.add_argument("--debug", action="store_true", help="include raw provider payloads in debug_trace")
 
-    approve = subparsers.add_parser("approve", help="approve and execute a pending L2 review request")
+    approve = subparsers.add_parser("approve", help="approve and execute a pending E3 review request")
     approve.add_argument("review_id")
     approve.add_argument("--dry-run", action="store_true", help="resolve the stored review without executing capabilities")
     approve.add_argument("--json", action="store_true", help="print machine-readable JSON")
@@ -47,13 +47,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     reviews = subparsers.add_parser("reviews", help="inspect pending permission reviews")
     reviews_sub = reviews.add_subparsers(dest="reviews_command", required=True)
-    reviews_pending = reviews_sub.add_parser("pending", help="list pending L2 review requests")
+    reviews_pending = reviews_sub.add_parser("pending", help="list pending E3 review requests")
     reviews_pending.add_argument("--json", action="store_true", help="print machine-readable JSON")
     reviews_provide = reviews_sub.add_parser("provide", help="provide supplemental input for a pending user-input review")
     reviews_provide.add_argument("review_id")
     reviews_provide.add_argument("supplemental_input", nargs="+")
     reviews_provide.add_argument("--json", action="store_true", help="print machine-readable JSON")
-    reviews_reject = reviews_sub.add_parser("reject", help="reject a pending L2 review request")
+    reviews_reject = reviews_sub.add_parser("reject", help="reject a pending E3 review request")
     reviews_reject.add_argument("review_id")
     reviews_reject.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
@@ -311,7 +311,7 @@ def repl(runtime) -> int:
         result = runtime.handle(CommandRequest(utterance))
         if result.status == "review_required":
             print_result(result, json_output=False)
-            answer = input("approve this L2 action? [y/N] ").strip().lower()
+            answer = input("approve this E3 action? [y/N] ").strip().lower()
             if answer in {"y", "yes"}:
                 result = runtime.handle(CommandRequest("", review_id=result.review_id, approve=True))
         print_result(result, json_output=False)
@@ -334,7 +334,7 @@ def print_result(result, json_output: bool = False) -> None:
     if result.trace_run_id:
         print(f"trace_run_id: {result.trace_run_id}")
     if result.review:
-        print(f"risk: {result.review.risk_level}")
+        print(f"effect: {result.review.effect_level}")
         print(f"review_required: {result.review.review_required}")
         print(f"review_reason: {result.review.reason}")
         if result.review.effects:
@@ -403,7 +403,7 @@ def print_doctor(report: dict[str, object]) -> None:
 def print_capabilities(payload: dict[str, object]) -> None:
     for item in payload["capability_details"]:
         review = "review" if item["review_required"] else "auto"
-        print(f"{item['action']:<18} {item['risk_level']:<2} {review:<6} {item['reason']}")
+        print(f"{item['action']:<18} {item['effect_level']:<2} {review:<6} {item['reason']}")
 
 
 def print_pending_reviews(payload: list[dict[str, object]]) -> None:
@@ -413,7 +413,7 @@ def print_pending_reviews(payload: list[dict[str, object]]) -> None:
     for item in payload:
         intent = item["intent"]
         review = item["review"]
-        print(f"{item['review_id']}  {review['risk_level']}  {intent['action']}  {item['utterance']}")
+        print(f"{item['review_id']}  {review['effect_level']}  {intent['action']}  {item['utterance']}")
 
 
 def print_task_payload(payload, *, json_output: bool) -> None:

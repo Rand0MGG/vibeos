@@ -9,7 +9,7 @@ from .audit import AuditLog
 from .candidate_selection import CandidateSelectionProvider
 from .clarification import ClarificationProvider
 from .clipboard import ClipboardAdapter
-from .capabilities import capability_payload, executable_actions, permission_summary
+from .capabilities import capability_payload, effect_policy_summary, executable_actions
 from .core.adapters.database import CoreDatabase
 from .core.domain import TaskRun, TaskStatus
 from .durable_task_models import TaskEnginePolicy
@@ -18,7 +18,7 @@ from .goal_synthesizer import GoalSynthesisProvider
 from .intent import IntentBroker
 from .models import CommandRequest, CommandResult
 from .notifications import NotificationAdapter
-from .permissions import PermissionPolicy
+from .permissions import EffectPolicy
 from .portal import PortalAdapter
 from .replanner import Replanner
 from .runtime_composition import RuntimeComponents, compose_runtime
@@ -47,7 +47,7 @@ class CapabilityBroker:
         portal: PortalAdapter | None = None,
         notifications: NotificationAdapter | None = None,
         clipboard: ClipboardAdapter | None = None,
-        policy: PermissionPolicy | None = None,
+        policy: EffectPolicy | None = None,
         audit: AuditLog | None = None,
         reviews: _LegacyDatabaseSource | None = None,
         trace_store: TaskTraceStore | None = None,
@@ -120,9 +120,10 @@ class CapabilityBroker:
 
     def capabilities(self) -> dict[str, object]:
         return {
+            "schema_version": "v2",
             "capabilities": executable_actions(),
             "capability_details": capability_payload(),
-            "permission_policy": permission_summary(),
+            "effect_policy": effect_policy_summary(),
         }
 
     def pending_reviews(self) -> list[dict[str, object]]:
@@ -224,6 +225,7 @@ class CapabilityBroker:
         step = next((item for item in plan.steps if item.id == state.current_step_id), None) if plan is not None else None
         review = self.review_service.review_step(plan, step, None)[0] if step is not None and plan is not None else None
         return {
+            "schema_version": "v2",
             "review_id": state.pending_interaction_id,
             "task_id": state.task_id,
             "revision": state.revision,

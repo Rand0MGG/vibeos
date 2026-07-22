@@ -23,7 +23,7 @@ from .durable_task_support import (
     stable_id,
 )
 from .execution_service import StepExecutionService
-from .models import CommandRequest, PermissionReview
+from .models import CommandRequest, EffectAssessment
 from .observation_service import ObservationService
 from .planning_models import PlanningArtifacts
 from .planning_service import PlanningService
@@ -104,7 +104,7 @@ class DurableTaskEngine:
         step = _step_by_id(planning.plan, state.current_step_id)
         if step is None:
             return self.results.build(state, request, planning, message="pending review is missing its bound step")
-        pre = self.observation.observe(plan=planning.plan, step=step, phase="pre", level="L0")
+        pre = self.observation.observe(plan=planning.plan, step=step, phase="pre", level="O0")
         review, record = self.reviews.review_step(planning.plan, step, pre)
         current_id = "review_" + record.step_safety_review_id.removeprefix("srev_")
         if request.dry_run:
@@ -325,7 +325,7 @@ class DurableTaskEngine:
         if lease is None:
             return self.results.build(state, request, planning, message="task is currently owned by another worker")
         execution: PlanExecutionResult | None = None
-        review: PermissionReview | None = None
+        review: EffectAssessment | None = None
         review_id: str | None = None
         try:
             with self._heartbeat(lease) as heartbeat:

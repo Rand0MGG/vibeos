@@ -4,8 +4,6 @@ import json
 import sqlite3
 import subprocess
 import sys
-import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,22 +11,11 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
-from vibeos.capabilities import capability_payload, executable_actions, permission_summary
-from vibeos.core.adapters.contracts import NotificationRequestV1, StatusRequestV1
+from vibeos.capabilities import capability_payload, effect_policy_summary, executable_actions
+from vibeos.core.adapters.contracts import NotificationRequestV2, StatusRequestV2
 from vibeos.core.adapters.database import CoreDatabase, DatabaseMigrationError
 from vibeos.core.adapters.metadata import current_state, domain_events, outbox
-from vibeos.core.adapters.repository import SqliteActionRepository
 from vibeos.core.composition import compose_foundation
-from vibeos.core.domain import (
-    ActionEvent,
-    ActionReceipt,
-    ActionState,
-    ActionStatus,
-    ActionTransition,
-    EffectLevel,
-    Evidence,
-    OutboxMessage,
-)
 from vibeos.notifications import NotificationAdapter
 from vibeos.tool_protocol import ToolExecutionContext
 
@@ -58,23 +45,23 @@ class StubNotifications:
 def test_strict_contracts_fail_closed_on_version_unknown_field_enum_and_coercion() -> None:
     valid = {"action_id": "action-1", "task_step_id": "status", "dry_run": False}
 
-    assert StatusRequestV1.model_validate(valid, strict=True).schema_version == "v1"
+    assert StatusRequestV2.model_validate(valid, strict=True).schema_version == "v2"
     with pytest.raises(ValidationError):
-        StatusRequestV1.model_validate({**valid, "schema_version": "v2"}, strict=True)
+        StatusRequestV2.model_validate({**valid, "schema_version": "v1"}, strict=True)
     with pytest.raises(ValidationError):
-        StatusRequestV1.model_validate({**valid, "unexpected": True}, strict=True)
+        StatusRequestV2.model_validate({**valid, "unexpected": True}, strict=True)
     with pytest.raises(ValidationError):
-        StatusRequestV1.model_validate({**valid, "dry_run": "false"}, strict=True)
+        StatusRequestV2.model_validate({**valid, "dry_run": "false"}, strict=True)
     with pytest.raises(ValidationError):
-        StatusRequestV1.model_validate({**valid, "capability_id": "window.list"}, strict=True)
-    notification = NotificationRequestV1.model_validate(
+        StatusRequestV2.model_validate({**valid, "capability_id": "window.list"}, strict=True)
+    notification = NotificationRequestV2.model_validate(
         {"action_id": "action-2", "task_step_id": "notification", "title": "   ", "dry_run": False},
         strict=True,
     )
     assert notification.canonical_title() == "VibeOS"
     assert notification.canonical_body() == ""
     with pytest.raises(ValidationError):
-        NotificationRequestV1.model_validate(
+        NotificationRequestV2.model_validate(
             {"action_id": "action-2", "task_step_id": "notification", "body": 7, "dry_run": False},
             strict=True,
         )
@@ -90,15 +77,15 @@ def test_empty_database_is_created_by_alembic_with_required_pragmas(tmp_path: Pa
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
     assert {"goal_contracts", "task_runs", "task_leases", "current_state", "domain_events", "outbox"} <= tables
     assert {"reviews", "review_events"}.isdisjoint(tables)
-    assert revision == "0005_persist_dry_run_intent"
+    assert revision == "0006_effect_contract_v2"
     assert database.health() == {
         "ready": True,
         "journal_mode": "wal",
         "foreign_keys": 1,
         "busy_timeout_ms": 5000,
         "schema_ready": True,
-        "alembic_revision": "0005_persist_dry_run_intent",
-        "expected_alembic_revision": "0005_persist_dry_run_intent",
+        "alembic_revision": "0006_effect_contract_v2",
+        "expected_alembic_revision": "0006_effect_contract_v2",
         "missing_tables": "",
         "path": str(database.path),
     }
@@ -122,7 +109,7 @@ def test_legacy_goal_contract_task_uniqueness_is_repaired_for_versioning(tmp_pat
         versions = connection.execute("SELECT version FROM goal_contracts WHERE task_id = 'task_1' ORDER BY version").fetchall()
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
     assert versions == [(1,), (2,)]
-    assert revision == "0005_persist_dry_run_intent"
+    assert revision == "0006_effect_contract_v2"
 
 
 def test_database_health_rejects_pragmas_without_authoritative_schema(tmp_path: Path) -> None:
@@ -191,7 +178,7 @@ def test_legacy_review_with_complete_plan_migrates_plan_and_steps(tmp_path: Path
                 "action": "window.close",
                 "capability_id": "window.close",
                 "target": {"name": "Firefox"},
-                "risk_level": "L2",
+                "effect_level": "E3",
             }
         ],
     }
@@ -260,44 +247,6 @@ def test_failed_migration_restores_exact_preupgrade_database(tmp_path: Path, mon
     assert "half_migrated" not in tables
 
 
-def test_state_event_and_outbox_commit_atomically_and_rollback_on_fault(tmp_path: Path) -> None:
-    database = CoreDatabase(tmp_path / "atomic.sqlite3")
-    database.upgrade()
-    repository = SqliteActionRepository(
-        database,
-        fault_injector=lambda stage: (_ for _ in ()).throw(RuntimeError("injected")) if stage == "after_event" else None,
-    )
-
-    with pytest.raises(RuntimeError, match="injected"):
-        repository.commit(make_transition("atomic-failure"))
-
-    assert table_counts(database) == (0, 0, 0)
-    SqliteActionRepository(database).commit(make_transition("atomic-success"))
-    assert table_counts(database) == (1, 1, 1)
-
-
-def test_concurrent_writers_and_busy_timeout_are_bounded(tmp_path: Path) -> None:
-    database = CoreDatabase(tmp_path / "concurrent.sqlite3", busy_timeout_ms=2_000)
-    database.upgrade()
-    repository = SqliteActionRepository(database)
-
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        list(executor.map(lambda index: repository.commit(make_transition(f"writer-{index}")), range(8)))
-    assert table_counts(database) == (8, 8, 8)
-
-    blocker = database.compatibility_connection()
-    blocker.execute("BEGIN IMMEDIATE")
-    started = time.monotonic()
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        pending = executor.submit(repository.commit, make_transition("waited-writer"))
-        time.sleep(0.2)
-        blocker.rollback()
-        pending.result(timeout=3)
-    blocker.close()
-    assert time.monotonic() - started >= 0.2
-    assert table_counts(database) == (9, 9, 9)
-
-
 def test_process_crash_does_not_commit_partial_wal_transaction(tmp_path: Path) -> None:
     database = CoreDatabase(tmp_path / "crash.sqlite3")
     database.upgrade()
@@ -330,7 +279,7 @@ def test_safe_downgrade_recreates_legacy_rollback_schema(tmp_path: Path) -> None
     assert {"current_state", "domain_events", "outbox", "task_runs"}.isdisjoint(tables)
 
 
-def test_two_slices_emit_typed_receipt_evidence_and_authoritative_state(tmp_path: Path) -> None:
+def test_two_slices_return_adapter_material_without_a_second_durable_aggregate(tmp_path: Path) -> None:
     database = CoreDatabase(tmp_path / "slices.sqlite3")
     database.upgrade()
     notifications = StubNotifications()
@@ -354,13 +303,14 @@ def test_two_slices_emit_typed_receipt_evidence_and_authoritative_state(tmp_path
     notification = tools["notification.send"].runner({"task_step_id": "notification_send", "title": "VibeOS", "body": "done"}, context)
 
     assert status.status == "succeeded"
-    assert status.output["action_receipt"]["effect_level"] == "E0"
-    assert status.output["observation_evidence"]["capability_count"] == 19
+    assert status.evidence["capability_count"] == 19
+    assert "action_receipt" not in status.output
+    assert "observation_evidence" not in status.output
     assert notification.status == "succeeded"
-    assert notification.output["action_receipt"]["effect_level"] == "E1"
+    assert "action_receipt" not in notification.output
     assert notification.output["notification_adapter"] == "stub-notify"
     assert notifications.calls == [("VibeOS", "done")]
-    assert table_counts(database) == (2, 2, 2)
+    assert table_counts(database) == (0, 0, 0)
 
 
 @pytest.mark.parametrize("dry_run", [False, True], ids=["execute", "dry-run"])
@@ -531,63 +481,6 @@ def test_real_notification_adapter_is_retained_below_the_new_slice(tmp_path: Pat
     assert {spec.tool_id for spec in foundation.tool_specs} == {"system.status", "notification.send"}
 
 
-def make_transition(action_id: str) -> ActionTransition:
-    occurred_at = "2099-01-01T00:00:00.000Z"
-    evidence = Evidence(
-        evidence_id=f"ev-{action_id}",
-        action_id=action_id,
-        capability_id="system.status",
-        kind="status",
-        summary="observed",
-        observed_at=occurred_at,
-        capability_count=19,
-    )
-    receipt = ActionReceipt(
-        receipt_id=f"receipt-{action_id}",
-        action_id=action_id,
-        capability_id="system.status",
-        effect_level=EffectLevel.E0,
-        status=ActionStatus.SUCCEEDED,
-        adapter="system.status",
-        adapter_status="succeeded",
-        occurred_at=occurred_at,
-        evidence_id=evidence.evidence_id,
-    )
-    state_key = f"action:{action_id}"
-    return ActionTransition(
-        state=ActionState(
-            state_key=state_key,
-            action_id=action_id,
-            capability_id="system.status",
-            status=ActionStatus.SUCCEEDED,
-            version=1,
-            receipt=receipt,
-            evidence=evidence,
-            updated_at=occurred_at,
-        ),
-        event=ActionEvent(
-            event_id=f"event-{action_id}",
-            state_key=state_key,
-            action_id=action_id,
-            capability_id="system.status",
-            event_type="action.succeeded",
-            occurred_at=occurred_at,
-            receipt=receipt,
-            evidence=evidence,
-        ),
-        outbox=OutboxMessage(
-            message_id=f"message-{action_id}",
-            state_key=state_key,
-            action_id=action_id,
-            capability_id="system.status",
-            topic="vibeos.action.outcome.v1",
-            occurred_at=occurred_at,
-            receipt_id=receipt.receipt_id,
-            evidence_id=evidence.evidence_id,
-        ),
-    )
-
-
 def table_counts(database: CoreDatabase) -> tuple[int, int, int]:
     with database.engine.connect() as connection:
         return (
@@ -610,7 +503,8 @@ def _tool_context(*, dry_run: bool) -> ToolExecutionContext:
 
 def _capabilities() -> dict[str, object]:
     return {
+        "schema_version": "v2",
         "capabilities": executable_actions(),
         "capability_details": capability_payload(),
-        "permission_policy": permission_summary(),
+        "effect_policy": effect_policy_summary(),
     }

@@ -7,7 +7,7 @@ from typing import Any, Literal
 ContextPackageStatus = Literal["loaded", "unavailable", "stale", "skipped", "error"]
 VerifierStatus = Literal["passed", "failed", "unavailable", "skipped"]
 
-DOMAIN_SCHEMA_VERSION = "v0.4"
+DOMAIN_SCHEMA_VERSION = "v2"
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,7 @@ class DomainPack:
     route_ids: tuple[str, ...] = ()
     allowed_context_package_ids: tuple[str, ...] = ()
     capability_families: tuple[str, ...] = ()
-    policy_defaults: dict[str, str] = field(default_factory=dict)
+    effect_defaults: dict[str, str] = field(default_factory=dict)
     default_verifier_ids: tuple[str, ...] = ()
     optional_fallback_domain_ids: tuple[str, ...] = ()
 

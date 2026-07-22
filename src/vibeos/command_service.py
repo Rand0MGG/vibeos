@@ -176,7 +176,7 @@ class CommandService:
                 CommandResult(
                     status="rejected",
                     intent=Intent.unknown("approval requires a stored review id"),
-                    message="L2 approval must use a stored review id; run without approval first, then `vibe approve <review_id>`",
+                    message="E3 approval must use a stored review id; run without approval first, then `vibe approve <review_id>`",
                 ),
                 request.transport,
             )

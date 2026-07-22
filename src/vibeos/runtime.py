@@ -15,7 +15,8 @@ from typing import Any
 from .audit import AuditLog
 from .broker import CapabilityBroker
 from .config import transport_timeout_seconds
-from .models import CommandRequest, CommandResult, Intent, PermissionReview, utc_now_iso
+from .core.domain import EffectLevel
+from .models import CommandRequest, CommandResult, EffectAssessment, Intent, utc_now_iso
 from .task_models import AgentRun, FailureClassification, PlanAttempt, ReplanDecision
 from .windows import unwrap_gdbus_string
 
@@ -119,7 +120,7 @@ class DBusDaemonRuntime:
     def reject_review(self, review_id: str) -> CommandResult:
         request = CommandRequest("", review_id=review_id, transport=self.transport_name)
         try:
-            response = self.client.request_payload({"schema_version": "v1", "review_id": review_id, "reject": True})
+            response = self.client.request_payload({"schema_version": "v2", "review_id": review_id, "reject": True})
         except RuntimeError as exc:
             return self._record_transport_failure(request, str(exc))
         return with_transport(command_result_from_payload(response), self.transport_name)
@@ -133,7 +134,7 @@ class DBusDaemonRuntime:
         return [*remote_entries, *local_entries][-count:]
 
     def tasks(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, object]]:
-        payload = {"schema_version": "v1", "status": status, "limit": limit}
+        payload = {"schema_version": "v2", "status": status, "limit": limit}
         return self.client.call_json_method("TasksList", json.dumps(payload, separators=(",", ":")))
 
     def task(self, task_id: str) -> dict[str, object] | None:
@@ -141,7 +142,7 @@ class DBusDaemonRuntime:
 
     def control_task(self, task_id: str, operation: str, *, expected_revision: int, owner: str | None = None, reason: str = "") -> dict[str, object]:
         payload = {
-            "schema_version": "v1",
+            "schema_version": "v2",
             "task_id": task_id,
             "operation": operation,
             "expected_revision": expected_revision,
@@ -181,25 +182,25 @@ class HTTPDaemonRuntime:
         return with_transport(command_result_from_payload(response), self.transport_name)
 
     def list_apps(self) -> list[dict[str, Any]]:
-        payload = self.client.get_json("/v1/apps")
+        payload = self.client.get_json("/v2/apps")
         return payload.get("apps", []) if isinstance(payload, dict) else []
 
     def list_windows(self) -> list[dict[str, Any]]:
-        payload = self.client.get_json("/v1/windows")
+        payload = self.client.get_json("/v2/windows")
         return payload.get("windows", []) if isinstance(payload, dict) else []
 
     def capabilities(self) -> dict[str, Any]:
-        payload = self.client.get_json("/v1/capabilities")
+        payload = self.client.get_json("/v2/capabilities")
         return payload if isinstance(payload, dict) else {}
 
     def pending_reviews(self) -> list[dict[str, Any]]:
-        payload = self.client.get_json("/v1/reviews/pending")
+        payload = self.client.get_json("/v2/reviews/pending")
         return payload.get("reviews", []) if isinstance(payload, dict) else []
 
     def reject_review(self, review_id: str) -> CommandResult:
         request = CommandRequest("", review_id=review_id, transport=self.transport_name)
         try:
-            response = self.client.request_payload({"schema_version": "v1", "review_id": review_id, "reject": True})
+            response = self.client.request_payload({"schema_version": "v2", "review_id": review_id, "reject": True})
         except RuntimeError as exc:
             return self._record_transport_failure(request, str(exc))
         return with_transport(command_result_from_payload(response), self.transport_name)
@@ -207,7 +208,7 @@ class HTTPDaemonRuntime:
     def audit_tail(self, count: int = 20) -> list[dict[str, Any]]:
         local_entries = self.audit.tail(count)
         try:
-            payload = self.client.get_json(f"/v1/audit/tail?n={count}")
+            payload = self.client.get_json(f"/v2/audit/tail?n={count}")
             remote_entries = payload.get("entries", []) if isinstance(payload, dict) else []
         except RuntimeError:
             remote_entries = []
@@ -215,11 +216,11 @@ class HTTPDaemonRuntime:
 
     def tasks(self, *, status: str | None = None, limit: int = 100) -> list[dict[str, object]]:
         query = urllib.parse.urlencode({"status": status, "limit": limit} if status is not None else {"limit": limit})
-        payload = self.client.get_json(f"/v1/tasks?{query}")
+        payload = self.client.get_json(f"/v2/tasks?{query}")
         return payload.get("tasks", []) if isinstance(payload, dict) else []
 
     def task(self, task_id: str) -> dict[str, object] | None:
-        payload = self.client.get_json(f"/v1/tasks/{urllib.parse.quote(task_id, safe='')}")
+        payload = self.client.get_json(f"/v2/tasks/{urllib.parse.quote(task_id, safe='')}")
         return payload if isinstance(payload, dict) else None
 
     def control_task(
@@ -232,9 +233,9 @@ class HTTPDaemonRuntime:
         reason: str = "",
     ) -> dict[str, object]:
         payload = self.client.post_json(
-            f"/v1/tasks/{urllib.parse.quote(task_id, safe='')}/control",
+            f"/v2/tasks/{urllib.parse.quote(task_id, safe='')}/control",
             {
-                "schema_version": "v1",
+                "schema_version": "v2",
                 "operation": operation,
                 "expected_revision": expected_revision,
                 "owner": owner,
@@ -320,13 +321,13 @@ class HTTPDaemonClient:
         if os.environ.get("VIBEOS_PREFER_LOCAL_BROKER") == "1":
             return False
         try:
-            payload = self.get_json("/v1/status")
+            payload = self.get_json("/v2/status")
         except RuntimeError:
             return False
         return isinstance(payload, dict) and payload.get("status") == "ok"
 
     def request_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        response = self.post_json("/v1/command", payload)
+        response = self.post_json("/v2/command", payload)
         if not isinstance(response, dict):
             raise RuntimeError(f"unexpected command response: {response!r}")
         return response
@@ -369,7 +370,7 @@ def daemon_required() -> bool:
 
 def command_request_payload(request: CommandRequest) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "schema_version": "v1",
+        "schema_version": "v2",
         "utterance": request.utterance,
         "mode": request.mode,
         "dry_run": request.dry_run,
@@ -488,18 +489,18 @@ def command_result_from_payload(payload: dict[str, Any]) -> CommandResult:
         review_id=_optional_text(payload.get("review_id")),
         transport=_optional_text(payload.get("transport")),
         message=str(payload.get("message", "")),
-        review=permission_review_from_payload(review_payload),
+        review=effect_assessment_from_payload(review_payload),
         execution_status=str(payload.get("execution_status", "not_started")),
         acceptance_status=str(payload.get("acceptance_status", "skipped")),
         overall_status=str(payload.get("overall_status", "failed")),
     )
 
 
-def permission_review_from_payload(payload: dict[str, Any] | None) -> PermissionReview | None:
+def effect_assessment_from_payload(payload: dict[str, Any] | None) -> EffectAssessment | None:
     if not payload:
         return None
-    return PermissionReview(
-        risk_level=str(payload.get("risk_level", "L3")),
+    return EffectAssessment(
+        effect_level=EffectLevel(str(payload.get("effect_level", "E4"))),
         review_required=bool(payload.get("review_required", False)),
         allowed=bool(payload.get("allowed", False)),
         reason=str(payload.get("reason", "")),

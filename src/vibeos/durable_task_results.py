@@ -4,7 +4,7 @@ from .core.adapters.task_repository import SqliteTaskRepository
 from .core.domain.task import TaskRun, TaskStatus
 from .durable_task_models import DurableTaskResult
 from .durable_task_support import overall_status, public_attempts, restore_step_results, selected_target
-from .models import CommandRequest, PermissionReview
+from .models import CommandRequest, EffectAssessment
 from .planning_models import PlanningArtifacts
 from .task_models import PlanExecutionResult
 
@@ -20,7 +20,7 @@ class DurableTaskResultFactory:
         planning: PlanningArtifacts | None,
         *,
         execution: PlanExecutionResult | None = None,
-        review: PermissionReview | None = None,
+        review: EffectAssessment | None = None,
         review_id: str | None = None,
         message: str = "",
         run_id: str | None = None,

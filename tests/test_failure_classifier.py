@@ -87,7 +87,7 @@ def test_classify_acceptance_failed_after_successful_execution() -> None:
 
 def make_plan(capability_id: str, *, route_id: str = "route_1") -> TaskPlan:
     return TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id="plan_1",
         utterance="test",
         display=DisplayFields(goal="test"),

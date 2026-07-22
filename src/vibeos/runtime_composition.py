@@ -24,7 +24,7 @@ from .goal_synthesizer import GoalSynthesisProvider
 from .intent import IntentBroker, OpenAICompatibleIntentBroker
 from .notifications import NotificationAdapter
 from .observation_service import ObservationService
-from .permissions import PermissionPolicy
+from .permissions import EffectPolicy
 from .planner import plan_turn
 from .planning_service import PlanningService
 from .portal import PortalAdapter
@@ -64,7 +64,7 @@ class RuntimeComponents:
     portal: PortalAdapter
     notifications: NotificationAdapter
     clipboard: ClipboardAdapter
-    policy: PermissionPolicy
+    policy: EffectPolicy
     tool_registry: ToolRegistry
     verifier_registry: VerifierRegistry
     verifier_harness: VerifierHarness
@@ -80,7 +80,7 @@ def compose_runtime(
     portal: PortalAdapter | None = None,
     notifications: NotificationAdapter | None = None,
     clipboard: ClipboardAdapter | None = None,
-    policy: PermissionPolicy | None = None,
+    policy: EffectPolicy | None = None,
     audit: AuditLog | None = None,
     trace_store: TaskTraceStore | None = None,
     clarification_provider: ClarificationProvider | None = None,
@@ -105,7 +105,7 @@ def compose_runtime(
     resolved_portal = portal or PortalAdapter()
     resolved_notifications = notifications or NotificationAdapter()
     resolved_clipboard = clipboard or ClipboardAdapter()
-    resolved_policy = policy or PermissionPolicy()
+    resolved_policy = policy or EffectPolicy()
     resolved_audit = audit or AuditLog()
     resolved_database = database or CoreDatabase(_default_database_path())
     resolved_database.upgrade()
@@ -200,10 +200,11 @@ def _default_database_path() -> Path:
 
 
 def _capabilities_payload() -> dict[str, object]:
-    from .capabilities import capability_payload, executable_actions, permission_summary
+    from .capabilities import capability_payload, effect_policy_summary, executable_actions
 
     return {
+        "schema_version": "v2",
         "capabilities": executable_actions(),
         "capability_details": capability_payload(),
-        "permission_policy": permission_summary(),
+        "effect_policy": effect_policy_summary(),
     }

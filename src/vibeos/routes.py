@@ -33,8 +33,8 @@ def score_plan_candidate(plan: TaskPlan, available: set[str]) -> TaskPlan:
     covered = len(required & available)
     total = len(required) or 1
     capability_coverage = covered / total
-    max_risk = max((risk_rank(step.risk_level) for step in plan.steps), default=0)
-    risk_penalty = max_risk / 4.0
+    max_effect = max((effect_rank(step.effect_level) for step in plan.steps), default=0)
+    effect_penalty = max_effect / 5.0
     domain_match = 1.0
     precondition_score = capability_coverage
     clarification_penalty = 0.0 if not plan.needs_user_input else 1.0
@@ -44,7 +44,7 @@ def score_plan_candidate(plan: TaskPlan, available: set[str]) -> TaskPlan:
         + capability_coverage * 0.30
         + precondition_score * 0.20
         + preference_bonus * 0.05
-        - risk_penalty * 0.10
+        - effect_penalty * 0.10
         - clarification_penalty * 0.20
     )
     rescored_route = replace(
@@ -59,7 +59,7 @@ def score_plan_candidate(plan: TaskPlan, available: set[str]) -> TaskPlan:
             "domain_match": round(domain_match, 4),
             "capability_coverage": round(capability_coverage, 4),
             "precondition_score": round(precondition_score, 4),
-            "risk_penalty": round(risk_penalty, 4),
+            "effect_penalty": round(effect_penalty, 4),
             "clarification_penalty": round(clarification_penalty, 4),
             "preference_bonus": round(preference_bonus, 4),
         },
@@ -69,9 +69,9 @@ def score_plan_candidate(plan: TaskPlan, available: set[str]) -> TaskPlan:
 
 def route_sort_key(plan: TaskPlan, available: set[str]) -> tuple[float, int, int, int, str]:
     route = plan.routes[0]
-    max_risk = max((risk_rank(step.risk_level) for step in plan.steps), default=0)
+    max_effect = max((effect_rank(step.effect_level) for step in plan.steps), default=0)
     missing = len([cap for cap in route.required_capabilities if cap not in available])
-    return (-route.score, max_risk, missing, len(plan.steps), route.id)
+    return (-route.score, max_effect, missing, len(plan.steps), route.id)
 
 
 def route_is_satisfied(plan: TaskPlan, available: set[str]) -> bool:
@@ -79,8 +79,8 @@ def route_is_satisfied(plan: TaskPlan, available: set[str]) -> bool:
     return all(capability in available for capability in route.required_capabilities)
 
 
-def risk_rank(risk_level: str) -> int:
-    return {"L0": 0, "L1": 1, "L2": 2, "L3": 3}.get(risk_level, 4)
+def effect_rank(effect_level: object) -> int:
+    return {"E0": 0, "E1": 1, "E2": 2, "E3": 3, "E4": 4}.get(str(effect_level), 5)
 
 
 def route_preference_bonus(plan: TaskPlan) -> float:

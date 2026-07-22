@@ -16,6 +16,7 @@ from .candidate_selection import (
 from .capabilities import CAPABILITIES
 from .clarification import ClarificationProvider
 from .config import search_engine_template
+from .core.domain import EffectLevel
 from .debug_trace import build_debug_trace, serialize_provider_exchange
 from .domain_models import CapabilityExposure, DomainRoutingResult, ObservationReceipt, ObservationRequest
 from .domain_registry import DomainRegistry, RouteDefinition, default_domain_registry
@@ -400,7 +401,7 @@ def build_named_website_candidates(
         capability_id="browser.open_named_target",
         target={"name": target_name, "resolution_mode": "direct"},
         depends_on=(),
-        risk_level=CAPABILITIES["browser.open_named_target"].risk_level,
+        effect_level=CAPABILITIES["browser.open_named_target"].effect_level,
         expected_state=ExpectedState(kind="named_site_open_requested", fields={"name": target_name}),
         preconditions=(StepPrecondition(kind="capability_available", capability_id="browser.open_named_target"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.8_goal_directed_planner"),
@@ -420,14 +421,14 @@ def build_named_website_candidates(
         capability_id="browser.search_web",
         target={"query": target_name, "follow_search_result": True, "named_target": target_name},
         depends_on=(),
-        risk_level=CAPABILITIES["browser.search_web"].risk_level,
+        effect_level=CAPABILITIES["browser.search_web"].effect_level,
         expected_state=ExpectedState(kind="named_site_open_requested", fields={"name": target_name}),
         preconditions=(StepPrecondition(kind="capability_available", capability_id="browser.search_web"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.8_goal_directed_planner"),
     )
     return [
         TaskPlan(
-            schema_version="v0.5",
+            schema_version="v2",
             plan_id=make_plan_id(utterance, direct_route.id),
             utterance=utterance,
             display=DisplayFields(
@@ -446,7 +447,7 @@ def build_named_website_candidates(
             },
         ),
         TaskPlan(
-            schema_version="v0.5",
+            schema_version="v2",
             plan_id=make_plan_id(utterance, search_route.id),
             utterance=utterance,
             display=DisplayFields(
@@ -580,14 +581,14 @@ def normalize_intent_to_task_plan(
         capability_id=intent.action,
         target=canonical_target,
         depends_on=(),
-        risk_level=capability.risk_level,
+        effect_level=capability.effect_level,
         parallel_group="g1",
         expected_state=expected_state_for_intent(intent),
         preconditions=(StepPrecondition(kind="capability_available", capability_id=intent.action),),
         provenance=StepProvenance(source_span_id=span_id, planner="legacy_intent_normalizer"),
     )
     return TaskPlan(
-        schema_version="v0.3",
+        schema_version="v2",
         plan_id=make_plan_id(utterance, route_id),
         utterance=utterance,
         display=display,
@@ -618,7 +619,7 @@ def music_app_media_plan(utterance: str, span: TaskSpan, query: str) -> TaskPlan
             capability_id="app.open",
             target={"name": "music"},
             depends_on=(),
-            risk_level="L1",
+            effect_level=EffectLevel.E1,
             parallel_group="g1",
             expected_state=ExpectedState(kind="app_opened_or_focused", fields={"app": "music"}),
             preconditions=(StepPrecondition(kind="capability_available", capability_id="app.open"),),
@@ -630,7 +631,7 @@ def music_app_media_plan(utterance: str, span: TaskSpan, query: str) -> TaskPlan
             capability_id="media.search",
             target={"query": query},
             depends_on=("open_music_app",),
-            risk_level="L1",
+            effect_level=EffectLevel.E1,
             expected_state=ExpectedState(kind="search_results_available", fields={"query": query}),
             preconditions=(StepPrecondition(kind="capability_available", capability_id="media.search"),),
             provenance=StepProvenance(source_span_id=span.id, planner="v0.5_media_route"),
@@ -641,14 +642,14 @@ def music_app_media_plan(utterance: str, span: TaskSpan, query: str) -> TaskPlan
             capability_id="media.play",
             target={"query": query, "selection": "best_match"},
             depends_on=("search_track",),
-            risk_level="L1",
+            effect_level=EffectLevel.E1,
             expected_state=ExpectedState(kind="media_playing", fields={"query": query}),
             preconditions=(StepPrecondition(kind="capability_available", capability_id="media.play"),),
             provenance=StepProvenance(source_span_id=span.id, planner="v0.5_media_route"),
         ),
     )
     return TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id=make_plan_id(utterance, route.id),
         utterance=utterance,
         display=DisplayFields(
@@ -690,14 +691,14 @@ def browser_media_plan(utterance: str, span: TaskSpan, query: str) -> TaskPlan:
             capability_id="browser.open_site_search",
             target={"site": "youtube.com", "query": query},
             depends_on=(),
-            risk_level="L1",
+            effect_level=EffectLevel.E1,
             expected_state=ExpectedState(kind="search_results_available", fields={"query": query}),
             preconditions=(StepPrecondition(kind="capability_available", capability_id="browser.open_site_search"),),
             provenance=StepProvenance(source_span_id=span.id, planner="v0.5_browser_fallback"),
         ),
     )
     return TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id=make_plan_id(utterance, route.id),
         utterance=utterance,
         display=DisplayFields(
@@ -752,13 +753,13 @@ def build_browser_open_url_plan(
         capability_id=capability_id,
         target=target,
         depends_on=(),
-        risk_level=CAPABILITIES[capability_id].risk_level,
+        effect_level=CAPABILITIES[capability_id].effect_level,
         expected_state=ExpectedState(kind=expected_kind, fields={target_key: value}),
         preconditions=(StepPrecondition(kind="capability_available", capability_id=capability_id),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_browser_route"),
     )
     return TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id=make_plan_id(utterance, route.id),
         utterance=utterance,
         display=DisplayFields(goal=goal, explanation="Use a typed browser capability through the durable task path."),
@@ -788,13 +789,13 @@ def build_browser_search_web_plan(
         capability_id="browser.search_web",
         target={"query": query},
         depends_on=(),
-        risk_level=CAPABILITIES["browser.search_web"].risk_level,
+        effect_level=CAPABILITIES["browser.search_web"].effect_level,
         expected_state=ExpectedState(kind="search_results_available", fields={"query": query}),
         preconditions=(StepPrecondition(kind="capability_available", capability_id="browser.search_web"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_browser_route"),
     )
     return TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id=make_plan_id(utterance, route.id),
         utterance=utterance,
         display=DisplayFields(goal="search the web", explanation="Use browser-domain search semantics with narrowed route exposure."),
@@ -826,13 +827,13 @@ def build_browser_site_search_plan(
         capability_id="browser.open_site_search",
         target={"site": site, "query": query},
         depends_on=(),
-        risk_level=CAPABILITIES["browser.open_site_search"].risk_level,
+        effect_level=CAPABILITIES["browser.open_site_search"].effect_level,
         expected_state=ExpectedState(kind="search_results_available", fields={"query": query}),
         preconditions=(StepPrecondition(kind="capability_available", capability_id="browser.open_site_search"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_browser_route"),
     )
     return TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id=make_plan_id(utterance, route.id),
         utterance=utterance,
         display=DisplayFields(goal=f"search {site}", explanation="Use site-scoped browser search semantics."),
@@ -878,7 +879,7 @@ def build_media_search_plan(
         capability_id="media.search",
         target={"query": query},
         depends_on=(),
-        risk_level=CAPABILITIES["media.search"].risk_level,
+        effect_level=CAPABILITIES["media.search"].effect_level,
         expected_state=ExpectedState(kind="search_results_available", fields={"query": query}),
         preconditions=(StepPrecondition(kind="capability_available", capability_id="media.search"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_media_route"),
@@ -904,7 +905,7 @@ def build_media_pause_plan(
         capability_id="media.pause",
         target={},
         depends_on=(),
-        risk_level=CAPABILITIES["media.pause"].risk_level,
+        effect_level=CAPABILITIES["media.pause"].effect_level,
         expected_state=ExpectedState(kind="media_playing", fields={"query": "pause"}),
         preconditions=(StepPrecondition(kind="capability_available", capability_id="media.pause"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_media_route"),
@@ -951,7 +952,7 @@ def build_apps_list_plan(
         capability_id="app.list",
         target={},
         depends_on=(),
-        risk_level=CAPABILITIES["app.list"].risk_level,
+        effect_level=CAPABILITIES["app.list"].effect_level,
         expected_state=ExpectedState(kind="app_list_requested"),
         preconditions=(StepPrecondition(kind="capability_available", capability_id="app.list"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_apps_route"),
@@ -978,7 +979,7 @@ def build_apps_open_plan(
         capability_id="app.open",
         target=target,
         depends_on=(),
-        risk_level=CAPABILITIES["app.open"].risk_level,
+        effect_level=CAPABILITIES["app.open"].effect_level,
         expected_state=ExpectedState(kind="app_opened_or_focused", fields={"app": str(target.get("name") or "")}),
         preconditions=(StepPrecondition(kind="capability_available", capability_id="app.open"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_apps_route"),
@@ -1044,7 +1045,7 @@ def build_app_search_plan(
         capability_id="app.search_history",
         target={"app": app_name, "query": query, "interaction_surface": interaction_surface},
         depends_on=(),
-        risk_level=CAPABILITIES["app.search_history"].risk_level,
+        effect_level=CAPABILITIES["app.search_history"].effect_level,
         expected_state=ExpectedState(kind="search_results_available", fields={"query": query}),
         preconditions=(StepPrecondition(kind="capability_available", capability_id="app.search_history"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.8_app_interaction_route"),
@@ -1058,7 +1059,7 @@ def build_app_search_plan(
         ),
     )
     return TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id=make_plan_id(utterance, route.id),
         utterance=utterance,
         display=display,
@@ -1091,7 +1092,7 @@ def build_window_list_plan(
         capability_id="window.list",
         target={},
         depends_on=(),
-        risk_level=CAPABILITIES["window.list"].risk_level,
+        effect_level=CAPABILITIES["window.list"].effect_level,
         expected_state=ExpectedState(kind="window_list_requested"),
         preconditions=(StepPrecondition(kind="capability_available", capability_id="window.list"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_window_route"),
@@ -1151,7 +1152,7 @@ def build_clipboard_write_plan(
         capability_id="clipboard.write",
         target=target,
         depends_on=(),
-        risk_level=CAPABILITIES["clipboard.write"].risk_level,
+        effect_level=CAPABILITIES["clipboard.write"].effect_level,
         expected_state=ExpectedState(kind="clipboard_content_requested", fields={"text": str(target.get("text") or "")}),
         preconditions=(StepPrecondition(kind="capability_available", capability_id="clipboard.write"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_clipboard_route"),
@@ -1178,7 +1179,7 @@ def build_notification_send_plan(
         capability_id="notification.send",
         target=target,
         depends_on=(),
-        risk_level=CAPABILITIES["notification.send"].risk_level,
+        effect_level=CAPABILITIES["notification.send"].effect_level,
         expected_state=ExpectedState(kind="notification_requested", fields={"title": str(target.get("title") or "VibeOS")}),
         preconditions=(StepPrecondition(kind="capability_available", capability_id="notification.send"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_notification_route"),
@@ -1204,7 +1205,7 @@ def build_system_status_plan(
         capability_id="system.status",
         target={},
         depends_on=(),
-        risk_level=CAPABILITIES["system.status"].risk_level,
+        effect_level=CAPABILITIES["system.status"].effect_level,
         expected_state=ExpectedState(kind="system_status_requested"),
         preconditions=(StepPrecondition(kind="capability_available", capability_id="system.status"),),
         provenance=StepProvenance(source_span_id=span.id, planner="v0.5_system_route"),
@@ -1233,7 +1234,7 @@ def build_single_window_action_plan(
         capability_id=action,
         target=target,
         depends_on=(),
-        risk_level=CAPABILITIES[action].risk_level,
+        effect_level=CAPABILITIES[action].effect_level,
         expected_state=ExpectedState(
             kind="window_state_requested", fields={"window": str(target.get("name") or "current"), "requested_state": requested_state}
         ),
@@ -1260,7 +1261,7 @@ def make_explicit_plan(
     explanation: str,
 ) -> TaskPlan:
     return TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id=make_plan_id(utterance, route.id),
         utterance=utterance,
         display=DisplayFields(goal=goal, explanation=explanation),

@@ -38,7 +38,7 @@ class CommandResultProjector:
                 "plan_id": plan.plan_id,
                 "status": "review_required",
                 "review_id": result.review_id,
-                "max_risk_level": result.review.risk_level if result.review is not None else "L2",
+                "max_effect_level": str(result.review.effect_level) if result.review is not None else "E3",
                 "message": result.message,
             }
         payload["run"] = asdict(
@@ -111,6 +111,7 @@ class AuditResultRecorder:
 def _task_payload(result: DurableTaskResult) -> dict[str, object]:
     state = result.task
     return {
+        "schema_version": state.schema_version,
         "task_id": state.task_id,
         "contract_id": state.contract_id,
         "status": state.status.value,

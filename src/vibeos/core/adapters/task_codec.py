@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from .task_contracts import (
-    ActionProposalPayloadV1,
-    ActionReceiptPayloadV1,
-    AttemptPayloadV1,
-    EvidenceBundlePayloadV1,
-    GoalContractPayloadV1,
-    PlanRevisionPayloadV1,
-    StepPayloadV1,
-    TaskEffectPayloadV1,
-    TaskEventPayloadV1,
-    TaskStatePayloadV1,
+    ActionProposalPayloadV2,
+    ActionReceiptPayloadV2,
+    AttemptPayloadV2,
+    EvidenceBundlePayloadV2,
+    GoalContractPayloadV2,
+    PlanRevisionPayloadV2,
+    StepPayloadV2,
+    TaskEffectPayloadV2,
+    TaskEventPayloadV2,
+    TaskStatePayloadV2,
 )
 from ..domain.task import (
     ActionProposal,
@@ -30,7 +30,7 @@ from ..domain.task import (
 
 def encode_task(state: TaskRun) -> str:
     terminal = state.terminal_outcome
-    payload = TaskStatePayloadV1.model_validate(
+    payload = TaskStatePayloadV2.model_validate(
         {
             "schema_version": state.schema_version,
             "task_id": state.task_id,
@@ -68,7 +68,7 @@ def encode_task(state: TaskRun) -> str:
 
 
 def decode_task(raw: str) -> TaskRun:
-    payload = TaskStatePayloadV1.model_validate_json(raw, strict=True)
+    payload = TaskStatePayloadV2.model_validate_json(raw, strict=True)
     terminal = payload.terminal_outcome
     return TaskRun(
         task_id=payload.task_id,
@@ -104,11 +104,11 @@ def decode_task(raw: str) -> TaskRun:
 
 
 def encode_contract(contract: GoalContract) -> str:
-    return GoalContractPayloadV1.model_validate(contract, from_attributes=True, strict=True).model_dump_json()
+    return GoalContractPayloadV2.model_validate(contract, from_attributes=True, strict=True).model_dump_json()
 
 
 def decode_contract(raw: str) -> GoalContract:
-    payload = GoalContractPayloadV1.model_validate_json(raw, strict=True)
+    payload = GoalContractPayloadV2.model_validate_json(raw, strict=True)
     return GoalContract(
         contract_id=payload.contract_id,
         task_id=payload.task_id,
@@ -125,7 +125,7 @@ def decode_contract(raw: str) -> GoalContract:
 
 
 def encode_event(event: TaskEvent, state_revision: int) -> str:
-    return TaskEventPayloadV1.model_validate(
+    return TaskEventPayloadV2.model_validate(
         {
             "event_id": event.event_id,
             "task_id": event.task_id,
@@ -146,7 +146,7 @@ def encode_event(event: TaskEvent, state_revision: int) -> str:
 
 
 def encode_effect(effect: TransitionEffect) -> str:
-    return TaskEffectPayloadV1.model_validate(
+    return TaskEffectPayloadV2.model_validate(
         {
             "effect_id": effect.effect_id,
             "task_id": effect.task_id,
@@ -158,25 +158,25 @@ def encode_effect(effect: TransitionEffect) -> str:
     ).model_dump_json()
 
 
-def validated_plan(plan: PlanRevision) -> PlanRevisionPayloadV1:
-    return PlanRevisionPayloadV1.model_validate(plan, from_attributes=True, strict=True)
+def validated_plan(plan: PlanRevision) -> PlanRevisionPayloadV2:
+    return PlanRevisionPayloadV2.model_validate(plan, from_attributes=True, strict=True)
 
 
-def validated_step(step: Step) -> StepPayloadV1:
-    return StepPayloadV1.model_validate(step, from_attributes=True, strict=True)
+def validated_step(step: Step) -> StepPayloadV2:
+    return StepPayloadV2.model_validate(step, from_attributes=True, strict=True)
 
 
-def validated_attempt(attempt: Attempt) -> AttemptPayloadV1:
-    return AttemptPayloadV1.model_validate(attempt, from_attributes=True, strict=True)
+def validated_attempt(attempt: Attempt) -> AttemptPayloadV2:
+    return AttemptPayloadV2.model_validate(attempt, from_attributes=True, strict=True)
 
 
-def validated_proposal(proposal: ActionProposal) -> ActionProposalPayloadV1:
-    return ActionProposalPayloadV1.model_validate(proposal, from_attributes=True, strict=True)
+def validated_proposal(proposal: ActionProposal) -> ActionProposalPayloadV2:
+    return ActionProposalPayloadV2.model_validate(proposal, from_attributes=True, strict=True)
 
 
-def validated_receipt(receipt: ActionReceipt) -> ActionReceiptPayloadV1:
-    return ActionReceiptPayloadV1.model_validate(receipt, from_attributes=True, strict=True)
+def validated_receipt(receipt: ActionReceipt) -> ActionReceiptPayloadV2:
+    return ActionReceiptPayloadV2.model_validate(receipt, from_attributes=True, strict=True)
 
 
-def validated_evidence(evidence: EvidenceBundle) -> EvidenceBundlePayloadV1:
-    return EvidenceBundlePayloadV1.model_validate(evidence, from_attributes=True, strict=True)
+def validated_evidence(evidence: EvidenceBundle) -> EvidenceBundlePayloadV2:
+    return EvidenceBundlePayloadV2.model_validate(evidence, from_attributes=True, strict=True)

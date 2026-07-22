@@ -15,11 +15,11 @@ from .verifiers import VerifierHarness, VerifierRegistry
 
 VOLATILE_OBSERVATION_KEYS = {"attempt_id", "captured_at", "freshness_ts", "run_id"}
 OBSERVATION_PACKAGE_LEVELS: dict[str, ObservationLevel] = {
-    "session_context": "L0",
-    "browser_context": "L1",
-    "window_context": "L1",
-    "media_context": "L1",
-    "system_context": "L1",
+    "session_context": "O0",
+    "browser_context": "O1",
+    "window_context": "O1",
+    "media_context": "O1",
+    "system_context": "O1",
 }
 
 
@@ -165,18 +165,18 @@ def _packages_for_observation_level(
     route_required = tuple(dict.fromkeys(package_id for package_id in route_package_ids if package_id))
     baseline = route_required or tuple(package_id for package_id in ("session_context",) if package_id in allowed)
 
-    if level == "L0":
+    if level == "O0":
         if baseline:
             return baseline
         if route_required:
             return route_required[:1]
         return allowed[:1]
-    if level == "L1":
+    if level == "O1":
         targeted = tuple(
             dict.fromkeys(
                 package_id
                 for package_id in (*baseline, *allowed)
-                if _observation_level_rank(OBSERVATION_PACKAGE_LEVELS.get(package_id, "L2")) <= _observation_level_rank("L1")
+                if _observation_level_rank(OBSERVATION_PACKAGE_LEVELS.get(package_id, "O2")) <= _observation_level_rank("O1")
             )
         )
         if targeted:
@@ -192,7 +192,7 @@ def _packages_for_observation_level(
 
 
 def _observation_level_rank(level: ObservationLevel) -> int:
-    return {"L0": 0, "L1": 1, "L2": 2}[level]
+    return {"O0": 0, "O1": 1, "O2": 2}[level]
 
 
 def _make_observation_id(plan_id: str, step_id: str, phase: str, level: ObservationLevel) -> str:

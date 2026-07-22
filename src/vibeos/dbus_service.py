@@ -8,8 +8,8 @@ from typing import Callable
 from pydantic import ValidationError
 
 from .broker import CapabilityBroker
-from .core.adapters.contracts import TransportCommandRequestV1
-from .core.adapters.task_contracts import TaskControlRequestV1, TaskListRequestV1
+from .core.adapters.contracts import TransportCommandRequestV2
+from .core.adapters.task_contracts import TaskControlRequestV2, TaskListRequestV2
 from .core.application import AsyncSupervisor, SupervisorNotReady
 from .models import CommandRequest, CommandResult, Intent
 
@@ -71,7 +71,7 @@ class DBusServiceComponent:
             async def CommandRequest(self, payload_json: "s") -> "s":
                 try:
                     raw = json.loads(payload_json)
-                    contract = TransportCommandRequestV1.model_validate(raw, strict=True)
+                    contract = TransportCommandRequestV2.model_validate(raw, strict=True)
                 except (json.JSONDecodeError, ValidationError, TypeError) as exc:
                     return serialize_command_result(_invalid_contract("dbus", exc))
                 request = _request_from_contract(contract, transport="dbus")
@@ -108,7 +108,7 @@ class DBusServiceComponent:
             @method()
             async def TasksList(self, payload_json: "s") -> "s":
                 try:
-                    contract = TaskListRequestV1.model_validate_json(payload_json, strict=True)
+                    contract = TaskListRequestV2.model_validate_json(payload_json, strict=True)
                 except ValidationError as exc:
                     return json.dumps({"error": "invalid_contract", "exception_type": type(exc).__name__})
                 return await owner._read(lambda: json.dumps(owner._broker.tasks(status=contract.status, limit=contract.limit), ensure_ascii=False))
@@ -120,7 +120,7 @@ class DBusServiceComponent:
             @method()
             async def TaskControl(self, payload_json: "s") -> "s":
                 try:
-                    contract = TaskControlRequestV1.model_validate_json(payload_json, strict=True)
+                    contract = TaskControlRequestV2.model_validate_json(payload_json, strict=True)
                 except ValidationError as exc:
                     return json.dumps({"error": "invalid_contract", "exception_type": type(exc).__name__})
 
@@ -185,7 +185,7 @@ class DBusServiceComponent:
             return json.dumps({"error": "daemon_not_ready"}, ensure_ascii=False)
 
 
-def _request_from_contract(contract: TransportCommandRequestV1, *, transport: str) -> CommandRequest:
+def _request_from_contract(contract: TransportCommandRequestV2, *, transport: str) -> CommandRequest:
     return CommandRequest(
         utterance=contract.utterance.strip(),
         mode=contract.mode,

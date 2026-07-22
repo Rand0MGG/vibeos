@@ -25,7 +25,7 @@ class FakeDaemonClient:
             "review_id": None,
             "message": "",
             "review": {
-                "risk_level": "L1",
+                "effect_level": "E1",
                 "review_required": False,
                 "allowed": True,
                 "reason": "allowed",
@@ -67,17 +67,17 @@ class FakeHttpClient:
         }
 
     def get_json(self, path):
-        if path == "/v1/apps":
+        if path == "/v2/apps":
             return {"apps": [{"desktop_id": "firefox.desktop"}]}
-        if path == "/v1/windows":
+        if path == "/v2/windows":
             return {"windows": [{"window_id": "1"}]}
-        if path == "/v1/capabilities":
+        if path == "/v2/capabilities":
             return {"capabilities": ["window.list"]}
-        if path == "/v1/reviews/pending":
+        if path == "/v2/reviews/pending":
             return {"reviews": [{"review_id": "rev_123"}]}
-        if path.startswith("/v1/audit/tail?n="):
+        if path.startswith("/v2/audit/tail?n="):
             return {"entries": [{"audit_id": "aud_456", "transport": "http"}]}
-        if path == "/v1/status":
+        if path == "/v2/status":
             return {"status": "ok"}
         raise AssertionError(f"unexpected path {path}")
 
@@ -91,7 +91,7 @@ class FailingDaemonClient(FakeDaemonClient):
 class FailingHttpClient(FakeHttpClient):
     def request_payload(self, payload):
         self.payloads.append(payload)
-        raise RuntimeError("POST /v1/command failed")
+        raise RuntimeError("POST /v2/command failed")
 
 
 class FakePlanDaemonClient(FakeDaemonClient):
@@ -107,14 +107,14 @@ class FakePlanDaemonClient(FakeDaemonClient):
             },
             "result": {
                 "analysis": {"type": "mixed", "chat_response": "explain clipboard permissions"},
-                "plan": {"schema_version": "v0.3"},
+                "plan": {"schema_version": "v2"},
                 "validation": {"ok": True},
                 "plan_review": {"status": "review_required", "review_id": "rev_plan_123"},
             },
             "review_id": "rev_plan_123",
             "message": "explicit approval is required",
             "review": {
-                "risk_level": "L2",
+                "effect_level": "E3",
                 "review_required": True,
                 "allowed": True,
                 "reason": "Stored task plan requires approval before execution.",
@@ -130,7 +130,7 @@ class FakePlanDaemonClient(FakeDaemonClient):
                     "review_id": "rev_plan_123",
                     "review_kind": "plan",
                     "plan_id": "plan_123",
-                    "plan_payload": {"schema_version": "v0.3"},
+                    "plan_payload": {"schema_version": "v2"},
                     "step_reviews": [{"step_id": "step_clipboard_write", "action": "clipboard.write"}],
                 }
             ]
@@ -150,14 +150,14 @@ class FakePlanHttpClient(FakeHttpClient):
             },
             "result": {
                 "analysis": {"type": "mixed", "chat_response": "explain clipboard permissions"},
-                "plan": {"schema_version": "v0.3"},
+                "plan": {"schema_version": "v2"},
                 "validation": {"ok": True},
                 "plan_review": {"status": "review_required", "review_id": "rev_plan_456"},
             },
             "review_id": "rev_plan_456",
             "message": "explicit approval is required",
             "review": {
-                "risk_level": "L2",
+                "effect_level": "E3",
                 "review_required": True,
                 "allowed": True,
                 "reason": "Stored task plan requires approval before execution.",
@@ -167,14 +167,14 @@ class FakePlanHttpClient(FakeHttpClient):
         }
 
     def get_json(self, path):
-        if path == "/v1/reviews/pending":
+        if path == "/v2/reviews/pending":
             return {
                 "reviews": [
                     {
                         "review_id": "rev_plan_456",
                         "review_kind": "plan",
                         "plan_id": "plan_456",
-                        "plan_payload": {"schema_version": "v0.3"},
+                        "plan_payload": {"schema_version": "v2"},
                         "step_reviews": [{"step_id": "step_clipboard_write", "action": "clipboard.write"}],
                     }
                 ]
@@ -219,7 +219,7 @@ class FakePlanApproveDaemonClient(FakeDaemonClient):
             "review_id": "rev_plan_approved",
             "message": "stored task plan executed",
             "review": {
-                "risk_level": "L2",
+                "effect_level": "E3",
                 "review_required": True,
                 "allowed": True,
                 "reason": "Stored task plan requires approval before execution.",
@@ -266,7 +266,7 @@ class FakePlanApproveHttpClient(FakeHttpClient):
             "review_id": "rev_plan_approved_http",
             "message": "stored task plan executed",
             "review": {
-                "risk_level": "L2",
+                "effect_level": "E3",
                 "review_required": True,
                 "allowed": True,
                 "reason": "Stored task plan requires approval before execution.",
@@ -409,7 +409,7 @@ def test_dbus_runtime_serializes_full_command_request() -> None:
 
     assert client.payloads == [
         {
-            "schema_version": "v1",
+            "schema_version": "v2",
             "utterance": "open browser",
             "mode": "auto_low_risk",
             "dry_run": True,
@@ -432,7 +432,7 @@ def test_http_runtime_uses_http_contract() -> None:
 
     assert client.payloads == [
         {
-            "schema_version": "v1",
+            "schema_version": "v2",
             "utterance": "list windows",
             "mode": "auto_low_risk",
             "dry_run": False,
@@ -526,7 +526,7 @@ def test_dbus_runtime_preserves_plan_review_metadata() -> None:
     assert result.transport == "dbus"
     assert result.review_id == "rev_plan_123"
     assert result.result["analysis"]["type"] == "mixed"
-    assert result.result["plan"]["schema_version"] == "v0.3"
+    assert result.result["plan"]["schema_version"] == "v2"
     assert result.result["plan_review"]["status"] == "review_required"
 
 
@@ -540,7 +540,7 @@ def test_http_runtime_preserves_plan_review_metadata() -> None:
     assert result.transport == "http"
     assert result.review_id == "rev_plan_456"
     assert result.result["analysis"]["type"] == "mixed"
-    assert result.result["plan"]["schema_version"] == "v0.3"
+    assert result.result["plan"]["schema_version"] == "v2"
     assert result.result["plan_review"]["status"] == "review_required"
 
 
@@ -552,7 +552,7 @@ def test_dbus_runtime_pending_reviews_preserves_plan_fields() -> None:
 
     assert reviews[0]["review_kind"] == "plan"
     assert reviews[0]["plan_id"] == "plan_123"
-    assert reviews[0]["plan_payload"]["schema_version"] == "v0.3"
+    assert reviews[0]["plan_payload"]["schema_version"] == "v2"
 
 
 def test_http_runtime_pending_reviews_preserves_plan_fields() -> None:
@@ -563,7 +563,7 @@ def test_http_runtime_pending_reviews_preserves_plan_fields() -> None:
 
     assert reviews[0]["review_kind"] == "plan"
     assert reviews[0]["plan_id"] == "plan_456"
-    assert reviews[0]["plan_payload"]["schema_version"] == "v0.3"
+    assert reviews[0]["plan_payload"]["schema_version"] == "v2"
 
 
 def test_dbus_runtime_approve_review_preserves_plan_execution_metadata() -> None:

@@ -40,31 +40,31 @@ TARGETS: dict[str, dict[str, object]] = {
 
 @dataclass(frozen=True)
 class CapabilityContract:
-    risk: str
+    effect: str
     real_outcome: str
     invalid_error: str
 
 
 CONTRACTS: dict[str, CapabilityContract] = {
-    "app.list": CapabilityContract("L0", "succeeded", "unexpected target"),
-    "window.list": CapabilityContract("L0", "succeeded", "unexpected target"),
-    "system.status": CapabilityContract("L0", "succeeded", "unexpected target"),
-    "app.open": CapabilityContract("L1", "succeeded", "missing installed app name"),
-    "window.focus": CapabilityContract("L1", "succeeded", "missing visible window"),
-    "window.minimize": CapabilityContract("L1", "succeeded", "missing visible window"),
-    "window.maximize": CapabilityContract("L1", "succeeded", "missing visible window"),
-    "notification.send": CapabilityContract("L1", "succeeded", "empty notification body"),
-    "window.close": CapabilityContract("L2", "review_then_succeeded", "missing visible window"),
-    "portal.open_uri": CapabilityContract("L2", "review_then_environment_incomplete", "unsupported URI scheme"),
-    "clipboard.write": CapabilityContract("L2", "review_then_succeeded", "empty clipboard text"),
-    "browser.open_url": CapabilityContract("L1", "environment_incomplete", "unsupported URL scheme"),
-    "browser.search_web": CapabilityContract("L1", "environment_incomplete", "empty search query"),
-    "browser.open_named_target": CapabilityContract("L1", "environment_incomplete", "unknown named target"),
-    "browser.open_site_search": CapabilityContract("L1", "environment_incomplete", "empty site or query"),
-    "media.search": CapabilityContract("L1", "clarification_unavailable", "empty media query"),
-    "media.play": CapabilityContract("L1", "environment_incomplete", "empty media query"),
-    "media.pause": CapabilityContract("L1", "clarification_unavailable", "dedicated adapter unavailable"),
-    "app.search_history": CapabilityContract("L1", "succeeded", "missing fixture or query"),
+    "app.list": CapabilityContract("E0", "succeeded", "unexpected target"),
+    "window.list": CapabilityContract("E0", "succeeded", "unexpected target"),
+    "system.status": CapabilityContract("E0", "succeeded", "unexpected target"),
+    "app.open": CapabilityContract("E1", "succeeded", "missing installed app name"),
+    "window.focus": CapabilityContract("E1", "succeeded", "missing visible window"),
+    "window.minimize": CapabilityContract("E1", "succeeded", "missing visible window"),
+    "window.maximize": CapabilityContract("E1", "succeeded", "missing visible window"),
+    "notification.send": CapabilityContract("E1", "succeeded", "empty notification body"),
+    "window.close": CapabilityContract("E3", "review_then_succeeded", "missing visible window"),
+    "portal.open_uri": CapabilityContract("E1", "environment_incomplete", "unsupported URI scheme"),
+    "clipboard.write": CapabilityContract("E1", "succeeded", "empty clipboard text"),
+    "browser.open_url": CapabilityContract("E1", "environment_incomplete", "unsupported URL scheme"),
+    "browser.search_web": CapabilityContract("E1", "environment_incomplete", "empty search query"),
+    "browser.open_named_target": CapabilityContract("E1", "environment_incomplete", "unknown named target"),
+    "browser.open_site_search": CapabilityContract("E1", "environment_incomplete", "empty site or query"),
+    "media.search": CapabilityContract("E1", "clarification_unavailable", "empty media query"),
+    "media.play": CapabilityContract("E1", "environment_incomplete", "empty media query"),
+    "media.pause": CapabilityContract("E1", "clarification_unavailable", "dedicated adapter unavailable"),
+    "app.search_history": CapabilityContract("E1", "succeeded", "missing fixture or query"),
 }
 
 
@@ -163,7 +163,7 @@ def test_all_19_capabilities_enter_only_through_durable_task_engine(tmp_path: Pa
     assert len(tasks) == 1
     task = tasks[0]
     assert task.status in {TaskStatus.DRY_RUN, TaskStatus.AWAITING_REVIEW, TaskStatus.AWAITING_CLARIFICATION}
-    assert CAPABILITIES[capability_id].risk_level == expected.risk
+    assert str(CAPABILITIES[capability_id].effect_level) == expected.effect
     assert expected.invalid_error
     if capability_id in {"media.search", "media.play", "media.pause"}:
         assert isinstance(result.result, dict)

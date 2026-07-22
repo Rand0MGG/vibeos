@@ -249,7 +249,7 @@ Reviewer 的职责只是在既有用户契约和策略下审核具体边界跨�
 
 ```text
 approved | denied | needs_user
-risk_level
+effect_level
 authorized_scope
 lease_duration
 rationale

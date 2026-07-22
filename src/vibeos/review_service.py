@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import asdict
 from hashlib import sha256
 
-from .models import Intent, PermissionReview
-from .permissions import PermissionPolicy
+from .core.domain import EffectLevel
+from .models import EffectAssessment, Intent
+from .permissions import EffectPolicy
 from .task_models import StepReviewRecord, TaskObservation, TaskPlan, TaskPlanReviewResult, TaskStep, canonicalize_target_for_action
 from .task_trace import record_trace_event
 from .task_validation import validate_plan
@@ -13,7 +14,7 @@ from .task_validation import validate_plan
 class ReviewService:
     """Makes deterministic safety decisions; task persistence belongs to Task Store."""
 
-    def __init__(self, *, policy: PermissionPolicy, review_escalation_enabled: bool = True) -> None:
+    def __init__(self, *, policy: EffectPolicy, review_escalation_enabled: bool = True) -> None:
         self.policy = policy
         self.review_escalation_enabled = review_escalation_enabled
 
@@ -21,20 +22,27 @@ class ReviewService:
         del stored_payload
         _ensure_task_plan(plan)
         if not validate_plan(plan).ok:
-            return self._record(TaskPlanReviewResult(plan_id=plan.plan_id, status="rejected", max_risk_level="L3", message="task plan failed validation"))
+            return self._record(
+                TaskPlanReviewResult(
+                    plan_id=plan.plan_id,
+                    status="rejected",
+                    max_effect_level=EffectLevel.E4,
+                    message="task plan failed validation",
+                )
+            )
         records: list[StepReviewRecord] = []
-        max_risk = "L0"
+        max_effect = EffectLevel.E0
         requires_review = False
         for step in plan.steps:
             review, record = self.review_step(plan, step, None)
             records.append(record)
-            max_risk = max_risk_level(max_risk, review.risk_level)
+            max_effect = max_effect_level(max_effect, review.effect_level)
             if not review.allowed:
                 return self._record(
                     TaskPlanReviewResult(
                         plan_id=plan.plan_id,
                         status="rejected",
-                        max_risk_level=max_risk,
+                        max_effect_level=max_effect,
                         step_reviews=tuple(records),
                         message=review.reason,
                     )
@@ -47,7 +55,7 @@ class ReviewService:
             TaskPlanReviewResult(
                 plan_id=plan.plan_id,
                 status=status,
-                max_risk_level=max_risk,
+                max_effect_level=max_effect,
                 review_id=review_id,
                 step_reviews=tuple(records),
                 message=message,
@@ -59,15 +67,15 @@ class ReviewService:
         plan: TaskPlan,
         step: TaskStep,
         observation: TaskObservation | None,
-    ) -> tuple[PermissionReview, StepReviewRecord]:
+    ) -> tuple[EffectAssessment, StepReviewRecord]:
         _ensure_task_plan(plan)
-        review = self.policy.review(intent_from_task_step(step))
+        review = self.policy.assess(intent_from_task_step(step))
         review = self._contextualize(step.action, review, observation)
         record = StepReviewRecord(
             step_safety_review_id=_step_review_id(plan, step, review, observation),
             step_id=step.id,
             action=step.action,
-            risk_level=review.risk_level,
+            effect_level=review.effect_level,
             review_required=review.review_required,
             allowed=review.allowed,
             reason=review.reason,
@@ -85,13 +93,13 @@ class ReviewService:
         )
         return review, record
 
-    def _contextualize(self, action: str, review: PermissionReview, observation: TaskObservation | None) -> PermissionReview:
+    def _contextualize(self, action: str, review: EffectAssessment, observation: TaskObservation | None) -> EffectAssessment:
         if not self.review_escalation_enabled or observation is None or action not in {"browser.search_web", "app.search_history"}:
             return review
         if not _observation_requires_review(observation):
             return review
-        return PermissionReview(
-            risk_level="L2" if review.risk_level in {"L0", "L1"} else review.risk_level,
+        return EffectAssessment(
+            effect_level=EffectLevel.E3 if review.effect_level in {EffectLevel.E0, EffectLevel.E1} else review.effect_level,
             review_required=True,
             allowed=review.allowed,
             reason="current observed surface may expose sensitive content; explicit review is required before searching",
@@ -122,8 +130,8 @@ def intent_from_task_step(step: TaskStep) -> Intent:
     )
 
 
-def max_risk_level(left: str, right: str) -> str:
-    order = {"L0": 0, "L1": 1, "L2": 2, "L3": 3}
+def max_effect_level(left: EffectLevel, right: EffectLevel) -> EffectLevel:
+    order = {level: index for index, level in enumerate(EffectLevel)}
     return left if order[left] >= order[right] else right
 
 
@@ -137,9 +145,9 @@ def _plan_review_id(plan: TaskPlan, records: tuple[StepReviewRecord, ...]) -> st
     return f"review_{sha256(source.encode('utf-8')).hexdigest()[:20]}"
 
 
-def _step_review_id(plan: TaskPlan, step: TaskStep, review: PermissionReview, observation: TaskObservation | None) -> str:
+def _step_review_id(plan: TaskPlan, step: TaskStep, review: EffectAssessment, observation: TaskObservation | None) -> str:
     fingerprint = _observation_fingerprint(observation) if step.action in {"browser.search_web", "app.search_history"} else "not-safety-relevant"
-    source = f"{plan.plan_id}:{step.id}:{step.action}:{review.risk_level}:{review.review_required}:{review.allowed}:{review.reason}:{fingerprint}"
+    source = f"{plan.plan_id}:{step.id}:{step.action}:{review.effect_level}:{review.review_required}:{review.allowed}:{review.reason}:{fingerprint}"
     return f"srev_{sha256(source.encode('utf-8')).hexdigest()[:20]}"
 
 

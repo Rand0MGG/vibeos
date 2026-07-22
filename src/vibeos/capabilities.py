@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+from .core.domain import EffectLevel
+
 
 @dataclass(frozen=True)
 class CapabilitySpec:
     action: str
-    risk_level: str
+    effect_level: EffectLevel
     review_required: bool
     allowed: bool
     reason: str
@@ -14,12 +16,13 @@ class CapabilitySpec:
     reversible: bool
     parallel_safe: bool = False
     constraints: tuple[str, ...] = ()
+    schema_version: str = "v2"
 
 
 CAPABILITIES: dict[str, CapabilitySpec] = {
     "app.list": CapabilitySpec(
         action="app.list",
-        risk_level="L0",
+        effect_level=EffectLevel.E0,
         review_required=False,
         allowed=True,
         reason="Observe-only capability with no system side effects.",
@@ -29,7 +32,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "window.list": CapabilitySpec(
         action="window.list",
-        risk_level="L0",
+        effect_level=EffectLevel.E0,
         review_required=False,
         allowed=True,
         reason="Observe-only capability with no system side effects.",
@@ -39,7 +42,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "system.status": CapabilitySpec(
         action="system.status",
-        risk_level="L0",
+        effect_level=EffectLevel.E0,
         review_required=False,
         allowed=True,
         reason="Observe-only capability with no system side effects.",
@@ -49,7 +52,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "app.open": CapabilitySpec(
         action="app.open",
-        risk_level="L1",
+        effect_level=EffectLevel.E1,
         review_required=False,
         allowed=True,
         reason="Low-risk user-session action with limited side effects.",
@@ -59,7 +62,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "window.focus": CapabilitySpec(
         action="window.focus",
-        risk_level="L1",
+        effect_level=EffectLevel.E1,
         review_required=False,
         allowed=True,
         reason="Low-risk user-session action with limited side effects.",
@@ -69,7 +72,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "window.minimize": CapabilitySpec(
         action="window.minimize",
-        risk_level="L1",
+        effect_level=EffectLevel.E1,
         review_required=False,
         allowed=True,
         reason="Low-risk user-session action with limited side effects.",
@@ -79,7 +82,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "window.maximize": CapabilitySpec(
         action="window.maximize",
-        risk_level="L1",
+        effect_level=EffectLevel.E1,
         review_required=False,
         allowed=True,
         reason="Low-risk user-session action with limited side effects.",
@@ -89,7 +92,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "notification.send": CapabilitySpec(
         action="notification.send",
-        risk_level="L1",
+        effect_level=EffectLevel.E1,
         review_required=False,
         allowed=True,
         reason="Low-risk user-session action with limited side effects.",
@@ -99,7 +102,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "window.close": CapabilitySpec(
         action="window.close",
-        risk_level="L2",
+        effect_level=EffectLevel.E3,
         review_required=True,
         allowed=True,
         reason="Closing a window can discard unsaved work.",
@@ -109,8 +112,8 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "portal.open_uri": CapabilitySpec(
         action="portal.open_uri",
-        risk_level="L2",
-        review_required=True,
+        effect_level=EffectLevel.E1,
+        review_required=False,
         allowed=True,
         reason="Opening a URI can launch another app or contact a remote site.",
         effects=("May open a URI in another application or browser.",),
@@ -119,8 +122,8 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "clipboard.write": CapabilitySpec(
         action="clipboard.write",
-        risk_level="L2",
-        review_required=True,
+        effect_level=EffectLevel.E1,
+        review_required=False,
         allowed=True,
         reason="Writing the clipboard replaces user-controlled session state.",
         effects=("May replace the user's clipboard contents.",),
@@ -129,7 +132,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "browser.open_url": CapabilitySpec(
         action="browser.open_url",
-        risk_level="L1",
+        effect_level=EffectLevel.E1,
         review_required=False,
         allowed=True,
         reason="Opening a normal browser URL is a bounded low-risk browsing action.",
@@ -139,7 +142,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "browser.search_web": CapabilitySpec(
         action="browser.search_web",
-        risk_level="L1",
+        effect_level=EffectLevel.E1,
         review_required=False,
         allowed=True,
         reason="Searching the web with user-provided text is a bounded low-risk browsing action.",
@@ -149,7 +152,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "browser.open_named_target": CapabilitySpec(
         action="browser.open_named_target",
-        risk_level="L1",
+        effect_level=EffectLevel.E1,
         review_required=False,
         allowed=True,
         reason="Opening a named website target remains a bounded browser action while local resolution stays host-owned.",
@@ -159,7 +162,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "browser.open_site_search": CapabilitySpec(
         action="browser.open_site_search",
-        risk_level="L1",
+        effect_level=EffectLevel.E1,
         review_required=False,
         allowed=True,
         reason="Searching a site in the browser is a bounded low-risk browsing action.",
@@ -169,7 +172,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "media.search": CapabilitySpec(
         action="media.search",
-        risk_level="L1",
+        effect_level=EffectLevel.E1,
         review_required=False,
         allowed=True,
         reason="Media search is planner-visible but may be unavailable on the local host.",
@@ -179,7 +182,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "media.play": CapabilitySpec(
         action="media.play",
-        risk_level="L1",
+        effect_level=EffectLevel.E1,
         review_required=False,
         allowed=True,
         reason="Media play is planner-visible but may be unavailable on the local host.",
@@ -189,7 +192,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "media.pause": CapabilitySpec(
         action="media.pause",
-        risk_level="L1",
+        effect_level=EffectLevel.E1,
         review_required=False,
         allowed=True,
         reason="Media pause is planner-visible but may be unavailable on the local host.",
@@ -199,7 +202,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
     ),
     "app.search_history": CapabilitySpec(
         action="app.search_history",
-        risk_level="L1",
+        effect_level=EffectLevel.E1,
         review_required=False,
         allowed=True,
         reason="Searching inside an application remains a bounded user-session action when executed through typed fixtures or controlled UI surfaces.",
@@ -211,7 +214,7 @@ CAPABILITIES: dict[str, CapabilitySpec] = {
 
 UNKNOWN_CAPABILITY = CapabilitySpec(
     action="unknown",
-    risk_level="L3",
+    effect_level=EffectLevel.E4,
     review_required=False,
     allowed=False,
     reason="Unsupported or unclear request.",
@@ -233,10 +236,11 @@ def capability_payload() -> list[dict[str, object]]:
     return [asdict(CAPABILITIES[action]) for action in executable_actions()]
 
 
-def permission_summary() -> dict[str, str]:
+def effect_policy_summary() -> dict[str, str]:
     return {
-        "L0": "automatic observe-only",
-        "L1": "automatic low-risk action with audit",
-        "L2": "requires stored review_id approval",
-        "L3": "rejected",
+        "E0": "automatic observe-only",
+        "E1": "automatic bounded local action with independent verification",
+        "E2": "requires an independent reviewer and a complete rollback contract",
+        "E3": "requires stored per-action user approval",
+        "E4": "rejected",
     }

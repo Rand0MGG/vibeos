@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime
 from typing import Protocol
-from uuid import uuid4
 
 from .contracts import CapabilityPayloadContract, NotificationAdapterResultContract, PortalStatusContract
 from ..domain import (
     ActionStatus,
     CapabilityDetail,
+    EffectLevel,
+    EffectPolicySummary,
     NotificationDelivery,
-    PermissionSummary,
     PortalStatus,
     StatusSnapshot,
 )
@@ -22,16 +21,6 @@ class PortalStatusSource(Protocol):
 
 class NotificationSource(Protocol):
     def send(self, title: str, body: str = "") -> dict[str, str]: ...
-
-
-class SystemClock:
-    def now_iso(self) -> str:
-        return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-class UuidIdGenerator:
-    def new_id(self, prefix: str) -> str:
-        return f"{prefix}_{uuid4().hex}"
 
 
 class RuntimeStatusReader:
@@ -54,7 +43,7 @@ class RuntimeStatusReader:
             capability_details=tuple(
                 CapabilityDetail(
                     action=item.action,
-                    risk_level=item.risk_level,
+                    effect_level=EffectLevel(item.effect_level),
                     review_required=item.review_required,
                     allowed=item.allowed,
                     reason=item.reason,
@@ -65,11 +54,12 @@ class RuntimeStatusReader:
                 )
                 for item in capabilities.capability_details
             ),
-            permission_policy=PermissionSummary(
-                l0=capabilities.permission_policy.l0,
-                l1=capabilities.permission_policy.l1,
-                l2=capabilities.permission_policy.l2,
-                l3=capabilities.permission_policy.l3,
+            effect_policy=EffectPolicySummary(
+                e0=capabilities.effect_policy.e0,
+                e1=capabilities.effect_policy.e1,
+                e2=capabilities.effect_policy.e2,
+                e3=capabilities.effect_policy.e3,
+                e4=capabilities.effect_policy.e4,
             ),
         )
 

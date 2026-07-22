@@ -170,7 +170,7 @@ def test_replanner_never_replans_a_completed_effect_only_to_repair_unverified_ac
 
 def make_plan(capability_id: str, *, route_id: str, domain_id: str = "desktop") -> TaskPlan:
     return TaskPlan(
-        schema_version="v0.5",
+        schema_version="v2",
         plan_id="plan_1",
         utterance="test",
         display=DisplayFields(goal="test"),

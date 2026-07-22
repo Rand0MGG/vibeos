@@ -32,8 +32,8 @@ class StrictTaskContract(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
-class TerminalOutcomePayloadV1(StrictTaskContract):
-    schema_version: Literal["v1"] = "v1"
+class TerminalOutcomePayloadV2(StrictTaskContract):
+    schema_version: Literal["v2"] = "v2"
     task_id: str = Field(min_length=1, max_length=240)
     status: Literal["dry_run", "succeeded", "failed", "cancelled", "blocked"]
     reason: str = Field(max_length=20_000)
@@ -41,8 +41,8 @@ class TerminalOutcomePayloadV1(StrictTaskContract):
     finished_at: str
 
 
-class TaskStatePayloadV1(StrictTaskContract):
-    schema_version: Literal["v1"] = "v1"
+class TaskStatePayloadV2(StrictTaskContract):
+    schema_version: Literal["v2"] = "v2"
     task_id: str = Field(min_length=1, max_length=240)
     contract_id: str = Field(min_length=1, max_length=240)
     status: TaskStatusValue
@@ -61,11 +61,11 @@ class TaskStatePayloadV1(StrictTaskContract):
     cancel_requested: bool = False
     takeover_owner: str | None = Field(default=None, max_length=240)
     last_event: str = Field(min_length=1, max_length=120)
-    terminal_outcome: TerminalOutcomePayloadV1 | None = None
+    terminal_outcome: TerminalOutcomePayloadV2 | None = None
 
 
-class GoalContractPayloadV1(StrictTaskContract):
-    schema_version: Literal["v1"] = "v1"
+class GoalContractPayloadV2(StrictTaskContract):
+    schema_version: Literal["v2"] = "v2"
     contract_id: str = Field(min_length=1, max_length=240)
     task_id: str = Field(min_length=1, max_length=240)
     goal: str = Field(min_length=1, max_length=20_000)
@@ -78,8 +78,8 @@ class GoalContractPayloadV1(StrictTaskContract):
     dry_run: bool | None = None
 
 
-class TaskEventPayloadV1(StrictTaskContract):
-    schema_version: Literal["v1"] = "v1"
+class TaskEventPayloadV2(StrictTaskContract):
+    schema_version: Literal["v2"] = "v2"
     event_id: str = Field(min_length=1, max_length=240)
     task_id: str = Field(min_length=1, max_length=240)
     event_type: str = Field(min_length=1, max_length=120)
@@ -95,8 +95,8 @@ class TaskEventPayloadV1(StrictTaskContract):
     state_revision: int = Field(ge=1)
 
 
-class TaskEffectPayloadV1(StrictTaskContract):
-    schema_version: Literal["v1"] = "v1"
+class TaskEffectPayloadV2(StrictTaskContract):
+    schema_version: Literal["v2"] = "v2"
     effect_id: str = Field(min_length=1, max_length=320)
     task_id: str = Field(min_length=1, max_length=240)
     kind: Literal["plan", "dispatch_action", "verify", "reconcile", "schedule_timer", "cancel_action", "notify"]
@@ -104,8 +104,8 @@ class TaskEffectPayloadV1(StrictTaskContract):
     not_before: str | None = None
 
 
-class PlanRevisionPayloadV1(StrictTaskContract):
-    schema_version: Literal["v1"] = "v1"
+class PlanRevisionPayloadV2(StrictTaskContract):
+    schema_version: Literal["v2"] = "v2"
     plan_revision_id: str = Field(min_length=1, max_length=240)
     task_id: str = Field(min_length=1, max_length=240)
     revision: int = Field(ge=1)
@@ -115,8 +115,8 @@ class PlanRevisionPayloadV1(StrictTaskContract):
     reason: str = Field(max_length=20_000)
 
 
-class StepPayloadV1(StrictTaskContract):
-    schema_version: Literal["v1"] = "v1"
+class StepPayloadV2(StrictTaskContract):
+    schema_version: Literal["v2"] = "v2"
     step_id: str = Field(min_length=1, max_length=240)
     task_id: str = Field(min_length=1, max_length=240)
     plan_revision_id: str = Field(min_length=1, max_length=240)
@@ -130,8 +130,8 @@ class StepPayloadV1(StrictTaskContract):
     updated_at: str
 
 
-class ActionProposalPayloadV1(StrictTaskContract):
-    schema_version: Literal["v1"] = "v1"
+class ActionProposalPayloadV2(StrictTaskContract):
+    schema_version: Literal["v2"] = "v2"
     proposal_id: str = Field(min_length=1, max_length=240)
     task_id: str = Field(min_length=1, max_length=240)
     step_id: str = Field(min_length=1, max_length=240)
@@ -145,8 +145,8 @@ class ActionProposalPayloadV1(StrictTaskContract):
     updated_at: str
 
 
-class AttemptPayloadV1(StrictTaskContract):
-    schema_version: Literal["v1"] = "v1"
+class AttemptPayloadV2(StrictTaskContract):
+    schema_version: Literal["v2"] = "v2"
     attempt_id: str = Field(min_length=1, max_length=240)
     task_id: str = Field(min_length=1, max_length=240)
     step_id: str | None = Field(default=None, max_length=240)
@@ -158,8 +158,8 @@ class AttemptPayloadV1(StrictTaskContract):
     detail_json: str
 
 
-class ActionReceiptPayloadV1(StrictTaskContract):
-    schema_version: Literal["v1"] = "v1"
+class ActionReceiptPayloadV2(StrictTaskContract):
+    schema_version: Literal["v2"] = "v2"
     receipt_id: str = Field(min_length=1, max_length=240)
     task_id: str = Field(min_length=1, max_length=240)
     step_id: str = Field(min_length=1, max_length=240)
@@ -172,8 +172,8 @@ class ActionReceiptPayloadV1(StrictTaskContract):
     occurred_at: str
 
 
-class EvidenceBundlePayloadV1(StrictTaskContract):
-    schema_version: Literal["v1"] = "v1"
+class EvidenceBundlePayloadV2(StrictTaskContract):
+    schema_version: Literal["v2"] = "v2"
     evidence_id: str = Field(min_length=1, max_length=240)
     task_id: str = Field(min_length=1, max_length=240)
     step_id: str | None = Field(default=None, max_length=240)
@@ -184,8 +184,8 @@ class EvidenceBundlePayloadV1(StrictTaskContract):
     observed_at: str
 
 
-class TaskControlRequestV1(StrictTaskContract):
-    schema_version: Literal["v1"] = "v1"
+class TaskControlRequestV2(StrictTaskContract):
+    schema_version: Literal["v2"] = "v2"
     task_id: str = Field(min_length=1, max_length=240)
     operation: Literal["pause", "resume", "cancel", "takeover", "release"]
     expected_revision: int = Field(ge=0)
@@ -193,13 +193,13 @@ class TaskControlRequestV1(StrictTaskContract):
     reason: str = Field(default="", max_length=20_000)
 
     @model_validator(mode="after")
-    def takeover_requires_owner(self) -> "TaskControlRequestV1":
+    def takeover_requires_owner(self) -> "TaskControlRequestV2":
         if self.operation == "takeover" and not (self.owner or "").strip():
             raise ValueError("takeover requires an owner")
         return self
 
 
-class TaskListRequestV1(StrictTaskContract):
-    schema_version: Literal["v1"] = "v1"
+class TaskListRequestV2(StrictTaskContract):
+    schema_version: Literal["v2"] = "v2"
     status: TaskStatusValue | None = None
     limit: int = Field(default=100, ge=0, le=1000)

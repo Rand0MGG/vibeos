@@ -4,7 +4,7 @@ from vibeos.task_models import DisplayFields, StepExecutionResult, TaskPlan, Tas
 
 def test_execute_plan_graph_groups_parallel_safe_l0_steps() -> None:
     plan = TaskPlan(
-        schema_version="v0.3",
+        schema_version="v2",
         plan_id="plan_parallel",
         utterance="inspect apps and windows",
         display=DisplayFields(goal="inspect apps and windows"),
@@ -43,7 +43,7 @@ def test_execute_plan_graph_groups_parallel_safe_l0_steps() -> None:
 
 def test_execute_plan_graph_keeps_state_changing_steps_sequential() -> None:
     plan = TaskPlan(
-        schema_version="v0.3",
+        schema_version="v2",
         plan_id="plan_sequential",
         utterance="open app and notify",
         display=DisplayFields(goal="open app and notify"),

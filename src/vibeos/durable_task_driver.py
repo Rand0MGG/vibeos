@@ -7,7 +7,7 @@ from .core.domain.task import TaskEventType, TaskLease, TaskRun, TaskStatus
 from .durable_action_executor import DurableActionExecutor
 from .durable_task_planning import DurablePlanningCoordinator
 from .durable_task_support import event, restore_step_results
-from .models import CommandRequest, PermissionReview
+from .models import CommandRequest, EffectAssessment
 from .observation_service import ObservationService
 from .planning_models import PlanningArtifacts
 from .review_service import ReviewService
@@ -18,7 +18,7 @@ DriveResult = tuple[
     TaskRun,
     PlanningArtifacts,
     PlanExecutionResult | None,
-    PermissionReview | None,
+    EffectAssessment | None,
     str | None,
     str | None,
     bool,
@@ -53,7 +53,7 @@ class DurableTaskDriver:
         run_id: str,
         lease: TaskLease,
         execution: PlanExecutionResult | None,
-        review: PermissionReview | None,
+        review: EffectAssessment | None,
         review_id: str | None,
         approved_review_id: str | None,
     ) -> DriveResult:
@@ -124,8 +124,8 @@ class DurableTaskDriver:
         *,
         approved_review_id: str | None,
         lease: TaskLease,
-    ) -> tuple[TaskRun, PermissionReview, str | None]:
-        pre = self.observation.observe(plan=plan, step=step, phase="pre", level="L0")
+    ) -> tuple[TaskRun, EffectAssessment, str | None]:
+        pre = self.observation.observe(plan=plan, step=step, phase="pre", level="O0")
         review, record = self.reviews.review_step(plan, step, pre)
         if not review.allowed:
             state = self._commit(state, TaskEventType.FAIL, reason=review.reason, terminal_status=TaskStatus.BLOCKED, lease=lease)

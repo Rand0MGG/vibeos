@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from dataclasses import asdict
 
-from .models import CommandRequest, Intent, PermissionReview, utc_now_iso
+from .models import CommandRequest, EffectAssessment, Intent, utc_now_iso
 
 _CONTENT_BEARING_ACTIONS = {"clipboard.write", "notification.send"}
 _SENSITIVE_PAYLOAD_KEYS = {"body", "content", "message", "supplemental_input", "text"}
@@ -41,7 +41,7 @@ class AuditLog:
         result: Any = None,
         selected_target: str | None = None,
         message: str = "",
-        review: PermissionReview | None = None,
+        review: EffectAssessment | None = None,
         review_id: str | None = None,
         plan_id: str | None = None,
         step_id: str | None = None,

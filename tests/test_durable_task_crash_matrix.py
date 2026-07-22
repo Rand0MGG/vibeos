@@ -172,7 +172,7 @@ def test_real_process_crash_matrix_reopens_authoritative_state(tmp_path: Path, b
 
 
 def test_unknown_e1_proposal_pauses_instead_of_replaying_after_restart(tmp_path: Path) -> None:
-    repository, state, plan, stored_step = _running_task(tmp_path, risk_level="L1")
+    repository, state, plan, stored_step = _running_task(tmp_path, effect_level="E1")
     proposal = _persist_proposal(repository, state, stored_step)
     state = repository.get(state.task_id)
     assert state is not None
@@ -198,7 +198,7 @@ def test_unknown_e1_proposal_pauses_instead_of_replaying_after_restart(tmp_path:
 
 
 def test_l0_recovery_reuses_proposal_attempt_and_receipt_then_finishes_without_duplicate(tmp_path: Path) -> None:
-    repository, state, plan, stored_step = _running_task(tmp_path, risk_level="L0")
+    repository, state, plan, stored_step = _running_task(tmp_path, effect_level="E0")
     proposal = _persist_proposal(repository, state, stored_step)
     state = repository.get(state.task_id)
     assert state is not None
@@ -225,7 +225,7 @@ def test_l0_recovery_reuses_proposal_attempt_and_receipt_then_finishes_without_d
 
 
 def test_reconciliation_proof_records_receipt_without_replaying_e1_action(tmp_path: Path) -> None:
-    repository, state, plan, stored_step = _running_task(tmp_path, risk_level="L1")
+    repository, state, plan, stored_step = _running_task(tmp_path, effect_level="E1")
     _persist_proposal(repository, state, stored_step)
     state = repository.get(state.task_id)
     assert state is not None
@@ -249,7 +249,7 @@ def test_reconciliation_proof_records_receipt_without_replaying_e1_action(tmp_pa
 
 
 def test_reconciliation_not_applied_allows_one_safe_dispatch(tmp_path: Path) -> None:
-    repository, state, plan, stored_step = _running_task(tmp_path, risk_level="L1")
+    repository, state, plan, stored_step = _running_task(tmp_path, effect_level="E1")
     proposal = _persist_proposal(repository, state, stored_step)
     state = repository.get(state.task_id)
     assert state is not None
@@ -272,7 +272,7 @@ def test_reconciliation_not_applied_allows_one_safe_dispatch(tmp_path: Path) -> 
 
 
 def test_receipt_is_redacted_and_committed_before_verify_boundary(tmp_path: Path) -> None:
-    repository, state, plan, stored_step = _running_task(tmp_path, risk_level="L0")
+    repository, state, plan, stored_step = _running_task(tmp_path, effect_level="E0")
     execution = RecordingExecution(
         StepExecutionResult(
             step_id=plan.steps[0].id,
@@ -302,7 +302,7 @@ def test_receipt_is_redacted_and_committed_before_verify_boundary(tmp_path: Path
     assert repository.recoverable("2099-01-01T00:10:01.000Z") == (state.task_id,)
 
 
-def _running_task(tmp_path: Path, *, risk_level: str) -> tuple[SqliteTaskRepository, TaskRun, TaskPlan, Step]:
+def _running_task(tmp_path: Path, *, effect_level: str) -> tuple[SqliteTaskRepository, TaskRun, TaskPlan, Step]:
     database = CoreDatabase(tmp_path / "tasks.sqlite3")
     database.upgrade()
     repository = SqliteTaskRepository(database)
@@ -311,10 +311,8 @@ def _running_task(tmp_path: Path, *, risk_level: str) -> tuple[SqliteTaskReposit
     state = TaskRun("task-crash", contract.contract_id, TaskStatus.CREATED, 0, timestamp, timestamp)
     repository.create(contract, state)
     planning = repository.commit(transition(state, _event(state, TaskEventType.PLAN_REQUESTED)))
-    task_step = TaskStep("step-crash", "system.status", "system.status", risk_level=risk_level)  # type: ignore[arg-type]
-    plan = TaskPlan(
-        "v0.3", "plan-crash", "status", selected_route_id="system_status_route", routes=(TaskRoute("system_status_route", 1.0),), steps=(task_step,)
-    )
+    task_step = TaskStep("step-crash", "system.status", "system.status", effect_level=effect_level)  # type: ignore[arg-type]
+    plan = TaskPlan("v2", "plan-crash", "status", selected_route_id="system_status_route", routes=(TaskRoute("system_status_route", 1.0),), steps=(task_step,))
     plan_revision = PlanRevision("planrev-crash", state.task_id, 1, plan.plan_id, "{}", timestamp, "fixture")
     stored_step = Step(
         task_step.id,

@@ -1,11 +1,10 @@
 # VibeOS current status
 
-Last verified: 2026-07-22. Goal 03 remediation is merged and pushed: before
-this planning-only documentation revision, local `main` and `origin/main` both
-pointed to merge commit `c9b7ca6` and the tracked worktree was clean. This
-revision must be committed before Goal 04 starts, so its actual starting HEAD
-will be later. The 13 files under `.codex_vm_artifacts` are committed Goal 03
-evidence assets, not untracked Goal 04 input.
+Last verified: 2026-07-22. Goal 04 starts from frozen planning commit
+`efe2267` on `codex/goal04-execution-foundation`. The 13 files under
+`.codex_vm_artifacts` remain committed Goal 03 evidence assets. Goal 04A has
+replaced the unreleased effect/observation contracts and converged canonical
+action-result ownership; 04B and 04C remain gated follow-on work.
 
 ## Supported runtime
 
@@ -35,7 +34,7 @@ database; it has no independent task or review authority.
 
 ## Migration and compatibility
 
-Alembic head is `0005_persist_dry_run_intent`. Goal 03 used the approved
+Alembic head is `0006_effect_contract_v2`. Goal 03 used the approved
 pre-release exception to freeze the actual Goal 01 schema in `0001`, then made
 all revisions self-contained. Revision `0005` was added without modifying the
 frozen `0001`-`0004` history. It persists the immutable dry-run flag in each
@@ -55,32 +54,50 @@ The replacement and deletion evidence is in the
 The old GoalLoop, ReviewStore, AgentRuntime, loop snapshot, and run ledger
 modules are physically removed after their public contracts passed.
 
-## Remaining convergence debt before Goal 04
+## Goal 04A execution foundation
 
-The Goal 03 merge established one authoritative durable task path, but it did
-not yet establish one effect vocabulary or one canonical action-result owner:
+The live task path now has one effect vocabulary and one canonical action-result owner:
 
-- capability, task, plan, review, CLI, D-Bus, HTTP, and Python live contracts
-  still use effect `L0-L3`/`risk_level`, while the Goal 01 core slice uses
-  partial `E0/E1` values;
-- the unrelated observation-depth contract also uses `L0/L1/L2`; Goal 04 will
-  rename that namespace to `O0/O1/O2` rather than preserve an ambiguous
-  architecture-guard exception;
-- `FoundationSliceService` persists an inner receipt/evidence pair and the
-  durable executor persists an outer pair. Providers must be reduced to strict
-  adapter results and provider-local reconciliation references; only the
-  durable execution boundary may mint canonical task receipts and evidence;
+- capability, task, plan, step, review, CLI, D-Bus, HTTP and Python live
+  contracts use v2 `effect_level` E0-E4; observation depth uses O0-O2;
+- the deterministic `EffectPolicy` is the only policy. E0 observes, E1 permits
+  bounded reversible task actions, E2 is declared but unimplemented, E3 needs
+  stored per-action approval, and E4 rejects;
+- `FoundationSliceService` and providers return strict `AdapterResult` plus
+  evidence material. Only `DurableActionExecutor` creates the task receipt and
+  evidence and commits them through `SqliteTaskRepository`;
+- revision `0006` upgrades deterministically classifiable nonterminal JSON,
+  pauses ambiguous effect bindings for manual disposition, and leaves terminal
+  v1 rows byte-preserving and read-only;
+- `/v2` is the loopback HTTP task/effect contract. D-Bus and Python projections
+  carry the same schema and vocabulary;
+- fixed system-service facts and E1 start/restart ActionSpec contracts exist
+  for the single Goal 04 fixture; no arbitrary unit, shell, root or system-bus
+  authority is exposed.
+
+The classification and ownership details are in the
+[`effect matrix`](goal04_effect_reclassification_matrix.md) and
+[`execution convergence matrix`](goal04_execution_convergence.md).
+
+## Remaining Goal 04 work
+
+- establish the production Model Gateway v1, SecretRef/keyring transport and
+  verifiable semantic-worker/secret-transport process boundary;
+- prove the locked/unlocked, leak-canary and one controlled real-provider smoke
+  gates before starting the real-provider-dependent system-service scenario;
+- implement and validate the deterministic systemd user fixture, independent
+  fact collection/action/verification path, crash matrix and Fedora GNOME
+  evidence.
+
+Existing pre-04A debt that is owned by 04B:
+
 - semantic modules still call `provider_client` directly, provider keys can
   still come from `.env` or ordinary environment variables, and the session
   install script injects that environment into the user service;
-- no production Model Gateway, SecretRef/Broker process boundary, or governed
-  systemd user-service fact/action provider exists yet.
+- no production Model Gateway or SecretRef/Broker process boundary exists yet.
 
-Goal 04 owns these changes through a v2 live contract, a JSON-aware additive
-migration after revision `0005`, explicit disposition for nonterminal v1 work,
-read-only immutable v1 history, and three gated commits. Goal 05 must extend the
-Gateway/SecretRef/transport v1 contract delivered by Goal 04 rather than replace
-it.
+Goal 05 must extend the Gateway/SecretRef/transport v1 contract delivered by
+04B rather than replace it.
 
 ## Committed Goal 03 remediation baseline
 

@@ -35,12 +35,12 @@ def test_cli_dbus_http_and_python_share_one_durable_task_store(tmp_path: Path) -
         await supervisor.start()
         try:
             for path in (
-                "/v1/status",
-                "/v1/apps",
-                "/v1/windows",
-                "/v1/capabilities",
-                "/v1/reviews/pending",
-                "/v1/audit/tail?n=5",
+                "/v2/status",
+                "/v2/apps",
+                "/v2/windows",
+                "/v2/capabilities",
+                "/v2/reviews/pending",
+                "/v2/audit/tail?n=5",
             ):
                 response = await router.handle(HttpRequest("GET", path, {}, b""))
                 assert response.status == 200
@@ -48,8 +48,8 @@ def test_cli_dbus_http_and_python_share_one_durable_task_store(tmp_path: Path) -
                 assert json.loads(response.body)
 
             baseline_task_count = len(broker.tasks())
-            body = json.dumps({"schema_version": "v1", "utterance": "status"}).encode()
-            http_result = await router.handle(HttpRequest("POST", "/v1/command", {}, body))
+            body = json.dumps({"schema_version": "v2", "utterance": "status"}).encode()
+            http_result = await router.handle(HttpRequest("POST", "/v2/command", {}, body))
             assert http_result.status == 200
             assert json.loads(http_result.body)["transport"] == "http"
             assert len(broker.tasks()) == baseline_task_count + 1
@@ -62,7 +62,7 @@ def test_cli_dbus_http_and_python_share_one_durable_task_store(tmp_path: Path) -
             assert python_result.transport == "local"
             assert len(broker.tasks()) == baseline_task_count + 3
 
-            tasks_response = await router.handle(HttpRequest("GET", "/v1/tasks", {}, b""))
+            tasks_response = await router.handle(HttpRequest("GET", "/v2/tasks", {}, b""))
             normalized_python_tasks = json.loads(json.dumps(broker.tasks()))
             assert json.loads(tasks_response.body)["tasks"] == normalized_python_tasks
         finally:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 from .capabilities import CAPABILITIES, UNKNOWN_CAPABILITY
-from .models import Intent, PermissionReview
+from .models import EffectAssessment, Intent
 
 
 MAX_NAME_LENGTH = 160
@@ -13,17 +13,17 @@ MAX_NOTIFICATION_TITLE_LENGTH = 80
 MAX_NOTIFICATION_BODY_LENGTH = 500
 
 
-class PermissionPolicy:
-    """Risk policy for VibeOS system capabilities.
+class EffectPolicy:
+    """Deterministic effect policy for VibeOS system capabilities.
 
     The model may request capabilities, but this policy decides whether the
     broker can execute them automatically, must ask for review, or must reject.
     """
 
-    def review(self, intent: Intent) -> PermissionReview:
+    def assess(self, intent: Intent) -> EffectAssessment:
         if intent.action == "unknown":
-            return PermissionReview(
-                risk_level=UNKNOWN_CAPABILITY.risk_level,
+            return EffectAssessment(
+                effect_level=UNKNOWN_CAPABILITY.effect_level,
                 review_required=UNKNOWN_CAPABILITY.review_required,
                 allowed=UNKNOWN_CAPABILITY.allowed,
                 reason=intent.reason or "Unsupported or unclear request.",
@@ -35,24 +35,24 @@ class PermissionPolicy:
         if spec:
             target_error = validate_target(intent)
             if target_error:
-                return PermissionReview(
-                    risk_level=UNKNOWN_CAPABILITY.risk_level,
+                return EffectAssessment(
+                    effect_level=UNKNOWN_CAPABILITY.effect_level,
                     review_required=UNKNOWN_CAPABILITY.review_required,
                     allowed=UNKNOWN_CAPABILITY.allowed,
                     reason=target_error,
                     effects=UNKNOWN_CAPABILITY.effects,
                     reversible=UNKNOWN_CAPABILITY.reversible,
                 )
-            return PermissionReview(
-                risk_level=spec.risk_level,
+            return EffectAssessment(
+                effect_level=spec.effect_level,
                 review_required=spec.review_required,
                 allowed=spec.allowed,
                 reason=spec.reason,
                 effects=spec.effects,
                 reversible=spec.reversible,
             )
-        return PermissionReview(
-            risk_level=UNKNOWN_CAPABILITY.risk_level,
+        return EffectAssessment(
+            effect_level=UNKNOWN_CAPABILITY.effect_level,
             review_required=UNKNOWN_CAPABILITY.review_required,
             allowed=UNKNOWN_CAPABILITY.allowed,
             reason=f"Capability {intent.action!r} is not allowed by VibeOS v0.1.",
