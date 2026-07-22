@@ -59,8 +59,6 @@ ExecStart=${VIBED_BIN} --dbus
 Restart=on-failure
 RestartSec=2
 Environment=PYTHONUNBUFFERED=1
-Environment=VIBEOS_ENV_FILE=${ROOT_DIR}/.env
-EnvironmentFile=-${ROOT_DIR}/.env
 
 [Install]
 WantedBy=default.target

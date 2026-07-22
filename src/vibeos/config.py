@@ -17,7 +17,7 @@ def load_dotenv(path: str | Path | None = None) -> None:
         key, value = line.split("=", 1)
         key = key.strip()
         value = strip_env_value(value.strip())
-        if key and key not in os.environ:
+        if key and key not in os.environ and not _is_secret_environment_name(key):
             os.environ[key] = value
 
 
@@ -42,6 +42,11 @@ def strip_env_value(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]
     return value
+
+
+def _is_secret_environment_name(name: str) -> bool:
+    normalized = name.upper()
+    return any(marker in normalized for marker in ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"))
 
 
 def env_int(name: str, default: int) -> int:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import sys
@@ -11,6 +12,14 @@ from .broker import CapabilityBroker
 from .doctor import SessionDoctor
 from .intent import RuleIntentBroker
 from .models import CommandRequest
+from .model_gateway.contracts import ProviderRoute, SecretRef
+from .model_gateway.secrets import (
+    ProviderRouteRepository,
+    SecretStoreError,
+    SecretStoreLocked,
+    SecretToolSecretStore,
+    import_secret_from_environment,
+)
 from .planner import plan_payload
 from .runtime import LocalRuntime, RuntimeSelectionError, build_runtime
 from .task_trace import TaskTraceStore, bind_trace_session, make_trace_run_id
@@ -104,6 +113,21 @@ def build_parser() -> argparse.ArgumentParser:
     trace_model.add_argument("run_id")
     trace_model.add_argument("--json", action="store_true", help="print machine-readable JSON")
 
+    secrets = subparsers.add_parser("secrets", help="manage provider credentials in the session Secret Service")
+    secrets_sub = secrets.add_subparsers(dest="secrets_command", required=True)
+    secrets_import = secrets_sub.add_parser("import", help="securely import one provider key")
+    secrets_import.add_argument("route_id")
+    secrets_import.add_argument("--model", required=True)
+    secrets_import.add_argument("--base-url", required=True)
+    secrets_import.add_argument("--from-env", metavar="NAME", help="explicitly migrate one environment value, then unset it in this process")
+    secrets_import.add_argument("--json", action="store_true")
+    secrets_status = secrets_sub.add_parser("status", help="show only the state of one credential reference")
+    secrets_status.add_argument("route_id")
+    secrets_status.add_argument("--json", action="store_true")
+    secrets_delete = secrets_sub.add_parser("delete", help="delete one provider credential and its non-secret route metadata")
+    secrets_delete.add_argument("route_id")
+    secrets_delete.add_argument("--json", action="store_true")
+
     return parser
 
 
@@ -126,6 +150,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
+
+    if args.command == "secrets":
+        return run_secret_command(args)
 
     if args.command == "doctor":
         report = SessionDoctor().run()
@@ -276,6 +303,71 @@ def _run(args: argparse.Namespace) -> int:
         return 0 if result.message == "review request rejected by user" else 1
 
     return 2
+
+
+def run_secret_command(
+    args: argparse.Namespace,
+    *,
+    store: SecretToolSecretStore | None = None,
+    repository: ProviderRouteRepository | None = None,
+) -> int:
+    secret_store = store or SecretToolSecretStore()
+    routes = repository or ProviderRouteRepository()
+    route = routes.get(args.route_id)
+    try:
+        if args.secrets_command == "import":
+            ref = SecretRef(secret_id=args.route_id, provider="openai-compatible")
+            configured = ProviderRoute(
+                route_id=args.route_id,
+                model=args.model,
+                base_url=args.base_url.rstrip("/"),
+                secret_ref=ref,
+            )
+            if args.from_env:
+                secret = import_secret_from_environment(args.from_env)
+            else:
+                if not sys.stdin.isatty():
+                    return _print_secret_result({"status": "failed", "message": "interactive TTY is required for secret import"}, args.json, 2)
+                secret = getpass.getpass("Provider API key: ")
+            try:
+                secret_store.store(ref, secret)
+            finally:
+                secret = ""
+            routes.save(configured)
+            return _print_secret_result(
+                {"status": "imported", "route_id": configured.route_id, "secret_ref": ref.uri, "environment_fallback": False},
+                args.json,
+                0,
+            )
+        if route is None:
+            return _print_secret_result({"status": "missing", "route_id": args.route_id}, args.json, 1)
+        if args.secrets_command == "status":
+            status = secret_store.status(route.secret_ref)
+            code = 0 if status.status == "available" else 1
+            return _print_secret_result(
+                {"status": status.status, "route_id": route.route_id, "secret_ref": status.secret_ref_uri, "provider": route.provider, "model": route.model},
+                args.json,
+                code,
+            )
+        if args.secrets_command == "delete":
+            removed_secret = secret_store.delete(route.secret_ref)
+            removed_route = routes.delete(route.route_id)
+            return _print_secret_result(
+                {"status": "deleted", "route_id": route.route_id, "secret_deleted": removed_secret, "metadata_deleted": removed_route}, args.json, 0
+            )
+    except SecretStoreLocked:
+        return _print_secret_result({"status": "locked", "route_id": args.route_id, "message": "unlock the session keyring and retry"}, args.json, 1)
+    except (SecretStoreError, ValueError) as exc:
+        return _print_secret_result({"status": "failed", "route_id": args.route_id, "message": str(exc)}, args.json, 1)
+    return 2
+
+
+def _print_secret_result(payload: dict[str, object], json_output: bool, exit_code: int) -> int:
+    if json_output:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(" ".join(f"{key}={value}" for key, value in payload.items()))
+    return exit_code
 
 
 @contextmanager

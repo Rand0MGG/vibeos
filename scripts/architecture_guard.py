@@ -55,6 +55,25 @@ def check_goal04_contracts(source_root: Path) -> list[GuardViolation]:
     composition = (source_root / "core" / "composition.py").read_text(encoding="utf-8")
     if "SqliteActionRepository" in composition:
         violations.append(GuardViolation("canonical_action_result", str(source_root / "core" / "composition.py"), "second action repository is composed"))
+    direct_provider_allowlist = {
+        "candidate_selection.py",
+        "clarification.py",
+        "command_service.py",
+        "daemon.py",
+        "goal_synthesizer.py",
+        "intent.py",
+        "replanner.py",
+        "semantic_acceptance.py",
+        "strategy.py",
+        "understanding.py",
+    }
+    for path in sorted(source_root.rglob("*.py")):
+        if "provider_client" in path.read_text(encoding="utf-8") and path.name not in direct_provider_allowlist:
+            violations.append(GuardViolation("model_gateway_authority", str(path), "new provider_client caller bypasses Model Gateway v1"))
+    gateway_root = source_root / "model_gateway"
+    for path in sorted(gateway_root.rglob("*.py")):
+        if path.name != "provider.py" and "Authorization" in path.read_text(encoding="utf-8"):
+            violations.append(GuardViolation("secret_transport_boundary", str(path), "provider authorization escaped the transport adapter"))
     return violations
 
 

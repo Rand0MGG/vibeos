@@ -9,6 +9,7 @@ from typing import Callable
 
 from .apps import AppRegistry
 from .config import load_dotenv
+from .model_gateway.secrets import ProviderRouteRepository, SECRET_TOOL
 from .portal import PortalAdapter
 from .runtime import detect_runtime_entry
 from .windows import call_vibeos_shell
@@ -150,21 +151,22 @@ class SessionDoctor:
         return DoctorCheck("action_helpers", "warn", f"missing helper tools: {', '.join(missing)}", detail)
 
     def check_model_config(self) -> DoctorCheck:
-        provider = os.environ.get("VIBEOS_MODEL_PROVIDER", "openai-compatible")
-        if provider == "deepseek":
-            key_set = bool(os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY"))
-            model = os.environ.get("DEEPSEEK_MODEL") or os.environ.get("OPENAI_MODEL") or "deepseek-v4-flash"
-            if key_set:
-                return DoctorCheck("model_config", "ok", "DeepSeek API key is configured", {"provider": provider, "model": model})
-            return DoctorCheck("model_config", "warn", "DeepSeek provider selected but no API key is configured", {"provider": provider, "model": model})
-        key_set = bool(os.environ.get("OPENAI_API_KEY"))
-        if key_set:
-            return DoctorCheck("model_config", "ok", "OpenAI-compatible API key is configured", {"provider": provider})
+        try:
+            routes = ProviderRouteRepository().list_routes()
+        except (OSError, ValueError):
+            return DoctorCheck("model_config", "warn", "Model Gateway route metadata is invalid", {"gateway_schema": "v1"})
+        if routes and os.path.exists(SECRET_TOOL):
+            return DoctorCheck(
+                "model_config",
+                "ok",
+                "Model Gateway route metadata and Secret Service client are configured; use `vibe secrets status` to verify the keyring item",
+                {"gateway_schema": "v1", "routes": [route.route_id for route in routes], "secret_transport": "secret-tool"},
+            )
         return DoctorCheck(
             "model_config",
             "warn",
-            "no model API key configured; use --offline for the deterministic local rule parser",
-            {"provider": provider},
+            "no Model Gateway SecretRef route configured; use `vibe secrets import` or use --offline",
+            {"gateway_schema": "v1", "routes": [route.route_id for route in routes], "secret_tool": os.path.exists(SECRET_TOOL)},
         )
 
 

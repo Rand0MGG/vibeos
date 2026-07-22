@@ -4,7 +4,8 @@ Last verified: 2026-07-22. Goal 04 starts from frozen planning commit
 `efe2267` on `codex/goal04-execution-foundation`. The 13 files under
 `.codex_vm_artifacts` remain committed Goal 03 evidence assets. Goal 04A has
 replaced the unreleased effect/observation contracts and converged canonical
-action-result ownership; 04B and 04C remain gated follow-on work.
+action-result ownership. Goal 04B's offline Gateway/SecretRef/process contract
+is implemented; its controlled real-provider gate and 04C remain pending.
 
 ## Supported runtime
 
@@ -79,22 +80,40 @@ The classification and ownership details are in the
 [`effect matrix`](goal04_effect_reclassification_matrix.md) and
 [`execution convergence matrix`](goal04_execution_convergence.md).
 
+## Goal 04B model and secret boundary
+
+Model Gateway v1 now binds the fixed service diagnosis request to a task and
+attempt, one D0 context manifest, strict schema, cancellation and wall/token
+budgets. A scrubbed semantic subprocess has neither session bus nor secret-like
+environment names. A separate transport subprocess alone resolves an opaque
+SecretRef through `secret-tool` and calls the OpenAI-compatible HTTPS adapter.
+
+The old `provider_client` transport is disabled and no longer loads or sends
+environment credentials. Its callers remain as a ratcheted Goal 05 migration
+inventory and fail closed until they acquire typed Gateway purposes. The Linux
+user-service installer no longer injects `.env`. TTY import/status/delete and
+one-shot explicit environment migration are documented in the
+[`SecretRef runbook`](../operations/goal04_secretref_runbook.md); architecture,
+failure semantics and the threat model are in the
+[`Gateway boundary`](goal04_model_gateway_and_secret_boundary.md).
+
+Offline tests cover D0 success, 429/5xx/timeout/bad JSON/schema/budget/cancel/
+unknown-delivery failures, locked-to-wait/unlock-to-resume, leak canary, strict
+route persistence and the real subprocess isolation probe. The controlled
+real-provider smoke remains `not run` until a user-owned credential is present;
+it is not claimed as passed.
+
 ## Remaining Goal 04 work
 
-- establish the production Model Gateway v1, SecretRef/keyring transport and
-  verifiable semantic-worker/secret-transport process boundary;
-- prove the locked/unlocked, leak-canary and one controlled real-provider smoke
-  gates before starting the real-provider-dependent system-service scenario;
+- run and record one controlled real-provider smoke with a user-owned SecretRef;
 - implement and validate the deterministic systemd user fixture, independent
   fact collection/action/verification path, crash matrix and Fedora GNOME
   evidence.
 
-Existing pre-04A debt that is owned by 04B:
+Existing compatibility debt owned by Goal 05:
 
-- semantic modules still call `provider_client` directly, provider keys can
-  still come from `.env` or ordinary environment variables, and the session
-  install script injects that environment into the user service;
-- no production Model Gateway or SecretRef/Broker process boundary exists yet.
+- semantic modules retain the disabled `provider_client` import surface and
+  cannot use remote models until each purpose is migrated to Gateway v1.
 
 Goal 05 must extend the Gateway/SecretRef/transport v1 contract delivered by
 04B rather than replace it.

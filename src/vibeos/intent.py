@@ -240,7 +240,6 @@ class OpenAICompatibleIntentBroker(IntentBroker):
         self.config = load_openai_compatible_provider_config(default_openai_model=None)
         self.provider = self.config.provider_name
         self.model = self.config.model_name
-        self.api_key = self.config.api_key
         self.base_url = self.config.base_url
         self._successful_parse_cache: dict[str, Intent] = {}
 

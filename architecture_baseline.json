@@ -16,6 +16,7 @@
       "src/vibeos/daemon.py",
       "src/vibeos/dbus_service.py",
       "src/vibeos/task_application.py",
+      "src/vibeos/model_gateway",
       "migrations/env.py",
       "migrations/versions/0001_core_foundation.py",
       "migrations/versions/0003_repair_durable_task_semantics.py",

@@ -52,36 +52,32 @@ chmod +x scripts/*.sh
 vibe doctor
 ```
 
-The installer wires the generated `vibed.service` to the project `.env`, so the daemon and CLI use the same model API settings.
-
-Set model configuration when using the model broker. The recommended local workflow is to copy `.env.example` to `.env` and fill in your key:
-
-```bash
-cp .env.example .env
-```
-
-For DeepSeek:
-
-```env
-VIBEOS_MODEL_PROVIDER=deepseek
-DEEPSEEK_API_KEY=sk-your-deepseek-api-key
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-flash
-```
-
-Do not commit `.env`; it is ignored by git.
-
-You can also set environment variables manually:
+The generated `vibed.service` deliberately does not load provider credentials
+from `.env` or ordinary environment variables. Import a provider key through a
+TTY into the freedesktop Secret Service/GNOME Keyring:
 
 ```bash
-export OPENAI_API_KEY="..."
-export OPENAI_BASE_URL="https://api.openai.com/v1"
-export OPENAI_MODEL="..."
+vibe secrets import deepseek \
+  --model deepseek-v4-flash \
+  --base-url https://api.deepseek.com
+vibe secrets status deepseek --json
 ```
 
-Provider-backed planning fails closed when no API key is configured. Use the
-explicit `--offline` flag for deterministic local rule-based synthesis and
-planning.
+The key is read with hidden TTY input and is never put in argv, task state,
+traces, model context, or the daemon environment. An existing environment key
+can be migrated once, explicitly:
+
+```bash
+vibe secrets import deepseek \
+  --model deepseek-v4-flash \
+  --base-url https://api.deepseek.com \
+  --from-env DEEPSEEK_API_KEY
+```
+
+Goal04's `service_diagnosis` model call uses Model Gateway v1. Older semantic
+purposes remain inventoried for Goal05 migration and their direct provider
+transport is disabled; use `--offline` for the deterministic local path until
+each purpose is migrated.
 
 ## Current Architecture
 
