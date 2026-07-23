@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from ..apps import AppRegistry
 from ..clipboard import ClipboardAdapter
 from ..portal import PortalAdapter
+from ..system_service_contracts import SYSTEM_SERVICE_RECOVERY_ACTION
+from ..system_service_provider import SystemdUserServiceProvider
 from ..task_models import TaskPlan, TaskStep
 from ..tool_protocol import ToolRegistry, ToolSpec
 from ..verifiers import VerifierHarness
@@ -14,7 +16,7 @@ from .clipboard import clipboard_tool_specs
 from .fixtures import fixture_tool_specs
 from .media import media_tool_specs
 from .system import system_tool_specs
-from .system_service import SYSTEM_SERVICE_RECOVERY_ACTION, system_service_tool_specs
+from .system_service import system_service_tool_specs
 from .windows import window_tool_specs
 
 
@@ -86,7 +88,7 @@ def build_tool_registry(
     clipboard: ClipboardAdapter,
     verifiers: VerifierHarness,
     foundation_specs: tuple[ToolSpec, ...],
-    system_service_provider=None,
+    system_service_provider: SystemdUserServiceProvider | None = None,
 ) -> ToolRegistry:
     """Compose domain-owned ToolSpecs without broker-owned handlers."""
 
