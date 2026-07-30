@@ -118,3 +118,39 @@ that VMware verification be skipped for this pass. An SSH attempt reached the
 VM but had no accepted public key; no password was placed in argv, environment,
 files or tool logs. These gates remain external follow-up evidence and are not
 claimed as passing.
+
+## 2026-07-30 review remediation
+
+The non-external findings from the follow-up review were reproduced and fixed:
+
+- secret status uses Secret Service metadata search and never resolves the
+  plaintext value in the CLI process;
+- model dispatch is persisted before provider I/O. Recovery pauses an
+  unresolved dispatch instead of replaying it, while the stable request ID is
+  propagated as idempotency and trace headers;
+- the specialized Goal 04 resumer enforces `deadline_at`, and each provider
+  budget is capped by the remaining task deadline;
+- fresh 0006 upgrades write the canonical E0-E4 policy summary, and 0007
+  corrects active databases that already contain the original mechanical
+  mapping;
+- the D-Bus, WSL and VM evidence scripts use schema v2, canonical task receipts,
+  `EffectPolicy`, `effect_level` and `effect_policy`.
+
+Verification after remediation:
+
+```text
+python -m pytest -q                                    -> 1072 passed in 113.13s
+Goal04 real worker-process crash matrix                -> 12 passed
+safe/offline collect_vm_evidence.py                    -> overall ok; 0 failed; 0 blocked
+ruff check .                                           -> passed
+ruff format --check .                                  -> 202 files already formatted
+python -m mypy --strict                                -> 0 issues in 67 source files
+python scripts/architecture_guard.py                    -> ok; 0 violations
+```
+
+The direct `verify_foundation_dbus.py` entry could not be rerun in this WSL
+image because `dbus-run-session` is not installed; its v2 request/task-receipt
+logic is covered by `tests/test_goal04_acceptance_scripts.py`. The controlled
+real-provider smoke, GNOME Keyring locked/unlocked behavior and complete Fedora
+GNOME VM fixture remain explicitly **not run**, so Goal 04 is still not claimed
+as fully externally accepted.

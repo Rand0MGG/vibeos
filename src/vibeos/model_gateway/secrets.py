@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
 import subprocess
-from typing import Protocol
+from typing import Any, Protocol
 
 from .contracts import ProviderRoute, SecretRef
 
@@ -33,10 +34,60 @@ class SecretStore(Protocol):
     def delete(self, ref: SecretRef) -> bool: ...
 
 
+class SecretStatusReader(Protocol):
+    def status(self, ref: SecretRef) -> "SecretStatus": ...
+
+
 @dataclass(frozen=True)
 class SecretStatus:
     secret_ref_uri: str
     status: str
+
+
+class SecretServiceStatusStore:
+    """Reads Secret Service item metadata without requesting secret values."""
+
+    def status(self, ref: SecretRef) -> SecretStatus:
+        try:
+            return asyncio.run(self._status(ref))
+        except SecretStoreError:
+            raise
+        except Exception as exc:
+            raise SecretStoreError("Secret Service metadata query failed") from exc
+
+    async def _status(self, ref: SecretRef) -> SecretStatus:
+        try:
+            from dbus_next import BusType, Message, MessageType
+            from dbus_next.aio import MessageBus
+        except ImportError as exc:
+            raise SecretStoreError("Secret Service D-Bus client is unavailable") from exc
+
+        bus: Any = None
+        try:
+            bus = await MessageBus(bus_type=BusType.SESSION).connect()
+            reply = await bus.call(
+                Message(
+                    destination="org.freedesktop.secrets",
+                    path="/org/freedesktop/secrets",
+                    interface="org.freedesktop.Secret.Service",
+                    member="SearchItems",
+                    signature="a{ss}",
+                    body=[{"application": "vibeos", "secret-ref": ref.uri}],
+                )
+            )
+            if reply.message_type is MessageType.ERROR:
+                raise SecretStoreError("Secret Service metadata query failed")
+            if len(reply.body) != 2 or not all(isinstance(items, list) for items in reply.body):
+                raise SecretStoreError("Secret Service returned an invalid metadata response")
+            unlocked, locked = reply.body
+            if unlocked:
+                return SecretStatus(ref.uri, "available")
+            if locked:
+                return SecretStatus(ref.uri, "locked")
+            return SecretStatus(ref.uri, "missing")
+        finally:
+            if bus is not None:
+                bus.disconnect()
 
 
 class SecretToolSecretStore:
@@ -64,16 +115,6 @@ class SecretToolSecretStore:
         if not value:
             raise SecretNotFound("secret reference is not present")
         return value
-
-    def status(self, ref: SecretRef) -> SecretStatus:
-        try:
-            value = self.resolve(ref)
-        except SecretStoreLocked:
-            return SecretStatus(ref.uri, "locked")
-        except SecretNotFound:
-            return SecretStatus(ref.uri, "missing")
-        del value
-        return SecretStatus(ref.uri, "available")
 
     def delete(self, ref: SecretRef) -> bool:
         result = self._run([self.executable, "clear", "application", "vibeos", "secret-ref", ref.uri])

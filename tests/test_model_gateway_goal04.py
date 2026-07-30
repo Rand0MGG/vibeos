@@ -34,7 +34,7 @@ from vibeos.model_gateway.contracts import (
 )
 from vibeos.model_gateway.gateway import ModelGateway
 from vibeos.model_gateway.provider import OpenAICompatibleTransport, ProviderHttpResponse
-from vibeos.model_gateway.secrets import ProviderRouteRepository, SecretStoreLocked, SecretToolSecretStore
+from vibeos.model_gateway.secrets import ProviderRouteRepository, SecretStatus, SecretStoreLocked, SecretToolSecretStore
 from vibeos.model_gateway.task_integration import keyring_unlocked_event, keyring_wait_event
 from vibeos.system_service_contracts import ServiceFactsV2, ServiceProcessFactV2
 
@@ -179,7 +179,12 @@ def test_openai_transport_returns_strict_response_without_leaking_secret() -> No
     assert result.response is not None
     assert result.response.result.proposal.action == "restart"
     assert result.response.receipt.secret_resolved is True
-    assert client.calls[0]["headers"] == {"Authorization": f"Bearer {LEAK_CANARY}", "Content-Type": "application/json"}
+    assert client.calls[0]["headers"] == {
+        "Authorization": f"Bearer {LEAK_CANARY}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": request.request_id,
+        "X-VibeOS-Request-Id": request.request_id,
+    }
     assert LEAK_CANARY.encode() not in client.calls[0]["body"]
     assert LEAK_CANARY not in result.model_dump_json()
     assert LEAK_CANARY not in request.model_dump_json()
@@ -425,9 +430,27 @@ def test_cli_secret_status_and_delete_are_redacted(tmp_path: Path, capsys) -> No
     store = FakeSecretStore()
     store.store(route.secret_ref, LEAK_CANARY)
     status = argparse.Namespace(secrets_command="status", route_id=route.route_id, json=True)
-    assert run_secret_command(status, store=store, repository=repository) == 0
+    assert run_secret_command(status, store=store, status_store=store, repository=repository) == 0
     assert LEAK_CANARY not in capsys.readouterr().out
     delete = argparse.Namespace(secrets_command="delete", route_id=route.route_id, json=True)
     assert run_secret_command(delete, store=store, repository=repository) == 0
     assert repository.get(route.route_id) is None
     assert LEAK_CANARY not in capsys.readouterr().out
+
+
+def test_cli_secret_status_uses_metadata_reader_without_resolving_secret(tmp_path: Path, capsys) -> None:
+    repository = ProviderRouteRepository(tmp_path / "routes.json")
+    route = _route()
+    repository.save(route)
+
+    class ResolveForbiddenStore(FakeSecretStore):
+        def resolve(self, ref: SecretRef) -> str:
+            raise AssertionError(f"status must not resolve {ref.uri}")
+
+    class MetadataStatusReader:
+        def status(self, ref: SecretRef) -> SecretStatus:
+            return SecretStatus(ref.uri, "available")
+
+    args = argparse.Namespace(secrets_command="status", route_id=route.route_id, json=True)
+    assert run_secret_command(args, store=ResolveForbiddenStore(), status_store=MetadataStatusReader(), repository=repository) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "available"

@@ -544,10 +544,10 @@ def target_policy_command() -> list[str]:
         "import json;"
         "from dataclasses import asdict;"
         "from vibeos.models import Intent;"
-        "from vibeos.permissions import PermissionPolicy;"
-        "review=PermissionPolicy().review(Intent(action='portal.open_uri', target={'uri':'file:///etc/passwd'}));"
-        "print(json.dumps(asdict(review), ensure_ascii=False));"
-        "raise SystemExit(0 if review.risk_level == 'L3' and not review.allowed else 1)"
+        "from vibeos.permissions import EffectPolicy;"
+        "assessment=EffectPolicy().assess(Intent(action='portal.open_uri', target={'uri':'file:///etc/passwd'}));"
+        "print(json.dumps(asdict(assessment), ensure_ascii=False));"
+        "raise SystemExit(0 if assessment.effect_level == 'E4' and not assessment.allowed else 1)"
     )
     return [sys.executable, "-c", code]
 
@@ -628,7 +628,13 @@ def doctor_ok(value: Any, strict: bool = False) -> bool:
 
 
 def capabilities_ok(value: Any) -> bool:
-    return isinstance(value, dict) and bool(value.get("capability_details")) and bool(value.get("permission_policy"))
+    return (
+        isinstance(value, dict)
+        and value.get("schema_version") == "v2"
+        and bool(value.get("capability_details"))
+        and isinstance(value.get("effect_policy"), dict)
+        and set(value["effect_policy"]) == {"E0", "E1", "E2", "E3", "E4"}
+    )
 
 
 def pending_reviews_ok(value: Any) -> bool:
@@ -636,7 +642,7 @@ def pending_reviews_ok(value: Any) -> bool:
 
 
 def target_policy_ok(value: Any) -> bool:
-    return isinstance(value, dict) and value.get("risk_level") == "L3" and value.get("allowed") is False
+    return isinstance(value, dict) and value.get("effect_level") == "E4" and value.get("allowed") is False
 
 
 def contract_probe_ok(value: Any, action: str, canonical_key: str, expected_value: str) -> bool:

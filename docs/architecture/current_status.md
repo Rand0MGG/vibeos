@@ -1,13 +1,16 @@
 # VibeOS current status
 
-Last verified: 2026-07-22. Goal 04 starts from frozen planning commit
-`efe2267` on `codex/goal04-execution-foundation`. The 13 files under
+Last verified: 2026-07-30. Goal 04 starts from frozen planning commit
+`efe2267`. The 13 files under
 `.codex_vm_artifacts` remain committed Goal 03 evidence assets. Goal 04A has
 replaced the unreleased effect/observation contracts and converged canonical
 action-result ownership. Goal 04B's offline Gateway/SecretRef/process contract
 is implemented. Goal 04C's fixed systemd user-service slice, real worker-crash
 matrix and WSL systemd D-Bus evidence are implemented. The controlled real
-provider and Fedora GNOME VM gates remain explicitly not run.
+provider and Fedora GNOME VM gates remain explicitly not run. Review findings
+against the offline implementation were remediated on
+`codex/goal04-review-remediation`; this is an implementation candidate, not a
+claim that the external Goal 04 gates have passed.
 
 ## Supported runtime
 
@@ -37,7 +40,7 @@ database; it has no independent task or review authority.
 
 ## Migration and compatibility
 
-Alembic head is `0006_effect_contract_v2`. Goal 03 used the approved
+Alembic head is `0007_repair_effect_policy_summary`. Goal 03 used the approved
 pre-release exception to freeze the actual Goal 01 schema in `0001`, then made
 all revisions self-contained. Revision `0005` was added without modifying the
 frozen `0001`-`0004` history. It persists the immutable dry-run flag in each
@@ -76,7 +79,12 @@ The live task path now has one effect vocabulary and one canonical action-result
   carry the same schema and vocabulary;
 - fixed system-service facts and E1 start/restart ActionSpec contracts exist
   for the single Goal 04 fixture; no arbitrary unit, shell, root or system-bus
-  authority is exposed.
+authority is exposed.
+
+Revision `0006` now replaces a legacy policy-summary dictionary with the
+canonical E0-E4 definitions instead of mechanically renaming L-level keys.
+Revision `0007` repairs active databases that had already run the original
+0006 implementation; terminal rows remain untouched.
 
 The classification and ownership details are in the
 [`effect matrix`](goal04_effect_reclassification_matrix.md) and
@@ -105,6 +113,11 @@ route persistence and the real subprocess isolation probe. The controlled
 real-provider smoke remains `not run` until a user-owned credential is present;
 it is not claimed as passed.
 
+`vibe secrets status` now calls Secret Service `SearchItems` over the session
+D-Bus and inspects only locked/unlocked item paths. It never invokes
+`secret-tool lookup` and therefore does not resolve provider plaintext into the
+ordinary CLI process.
+
 ## Goal 04C fixed system-service slice
 
 `vibeos-goal04-fixture.service` is a disabled, `Type=notify` user fixture. The
@@ -116,14 +129,18 @@ task boundary remains the sole receipt/evidence owner. The public capability
 count remains 19.
 
 Bounded D-Bus facts and fixed-unit journal lines are persisted before a D0
-context manifest. Model Gateway v1 returns a strict diagnosis/proposal, which
-is persisted before dispatch. A post-action crash enters real-state
+context manifest. Before provider I/O the task persists a stable request ID and
+dispatch record. A crash after dispatch but before result persistence pauses as
+unknown instead of replaying the provider call; the stable ID is also sent as
+the idempotency and trace header. The provider budget is capped by the task
+deadline, and the specialized recovery path terminates expired tasks before
+model or action I/O. A post-action crash enters real-state
 reconciliation. The independent verifier polls bounded fresh observations
 until systemd leaves `activating`, with no action redispatch. TerminalOutcome
 now carries diagnosis, action, current state, evidence IDs, completion judgment
 and unresolved risks.
 
-The 04C suite has 32 tests, including eleven real `os._exit(97)` worker-process
+The 04C suite has 36 tests, including twelve real `os._exit(97)` worker-process
 crash points and the required fault/concurrency matrix. A FedoraLinux-44 WSL
 run used the real systemd user D-Bus provider: the controller proved one failed
 start and one synthetic line, the Agent produced one canonical receipt, and
@@ -131,8 +148,11 @@ independent observation found `active/running`, a live PID and the healthy log.
 The model side of that WSL run was the strict offline fixture because WSL has
 no `secret-tool` or user-owned provider route. See the
 [`Goal 04C acceptance report`](goal04_system_service_acceptance_2026-07-22.md).
-The final local regression is `1063 passed in 103.79s`; Ruff formatting/lint,
+The 2026-07-30 remediation regression is `1072 passed in 113.13s`; Ruff formatting/lint,
 strict mypy over 67 source files and the architecture guard are green.
+The safe/offline VM evidence collector reports `overall: ok` with no failed or
+blocked steps. The direct session D-Bus script is contract-covered by tests but
+was not rerun because this WSL image lacks `dbus-run-session`.
 
 ## Remaining external Goal 04 evidence
 

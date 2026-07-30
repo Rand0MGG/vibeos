@@ -17,7 +17,7 @@ from vibeos.models import AppEntry, Intent, WindowEntry
 from tests.support_intent_broker import FixtureIntentBroker
 
 
-HEAD_REVISION = "0006_effect_contract_v2"
+HEAD_REVISION = "0007_repair_effect_policy_summary"
 MIGRATION_FILES = (
     "0001_core_foundation.py",
     "0002_durable_task_engine.py",
@@ -25,6 +25,7 @@ MIGRATION_FILES = (
     "0004_goal_contract_version_index.py",
     "0005_persist_dry_run_intent.py",
     "0006_effect_contract_v2.py",
+    "0007_repair_effect_policy_summary.py",
 )
 
 

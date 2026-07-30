@@ -53,17 +53,17 @@ def main() -> int:
             if not isinstance(capabilities, dict) or len(capabilities.get("capabilities", [])) != 19:
                 raise RuntimeError("D-Bus capability discovery did not return the 19-capability baseline")
 
-            e0 = client.request_payload({"schema_version": "v1", "utterance": "status"})
-            e0_receipt = _find_mapping(e0, "action_receipt")
+            e0 = client.request_payload({"schema_version": "v2", "utterance": "status"})
+            e0_receipt = _find_receipt(_command_task(client, e0), "system.status")
             if e0.get("status") != "executed" or e0_receipt.get("capability_id") != "system.status":
                 raise RuntimeError(f"E0 D-Bus execution failed: {e0!r}")
 
-            e1 = client.request_payload({"schema_version": "v1", "utterance": "notify foundation verified"})
-            e1_receipt = _find_mapping(e1, "action_receipt")
+            e1 = client.request_payload({"schema_version": "v2", "utterance": "notify foundation verified"})
+            e1_receipt = _find_receipt(_command_task(client, e1), "notification.send")
             if e1_receipt.get("capability_id") != "notification.send":
                 raise RuntimeError(f"E1 request did not reach the foundation slice: {e1!r}")
 
-            invalid = client.request_payload({"schema_version": "v1", "utterance": "status", "unknown": True})
+            invalid = client.request_payload({"schema_version": "v2", "utterance": "status", "unknown": True})
             if invalid.get("status") != "failed" or _find_value(invalid, "error") != "invalid_contract":
                 raise RuntimeError(f"D-Bus strict-contract rejection failed: {invalid!r}")
 
@@ -115,11 +115,28 @@ def _wait_until_ready(client: DBusDaemonClient, daemon: subprocess.Popen[str]) -
     raise RuntimeError(last_error)
 
 
-def _find_mapping(value: Any, key: str) -> dict[str, Any]:
-    candidate = _find_value(value, key)
-    if not isinstance(candidate, dict):
-        raise RuntimeError(f"{key} was not a mapping")
-    return candidate
+def _command_task(client: DBusDaemonClient, response: dict[str, Any]) -> dict[str, Any]:
+    result = response.get("result")
+    task_id = result.get("task_id") if isinstance(result, dict) else None
+    if not isinstance(task_id, str) or not task_id:
+        raise RuntimeError("command response did not expose its canonical task_id")
+    task = client.call_json_method("TaskShow", task_id)
+    if not isinstance(task, dict):
+        raise RuntimeError(f"canonical task {task_id} was not available")
+    return task
+
+
+def _find_receipt(task: dict[str, Any], capability_id: str) -> dict[str, Any]:
+    receipts = task.get("receipts")
+    if not isinstance(receipts, list):
+        raise RuntimeError("canonical task did not expose receipts")
+    for receipt in receipts:
+        if not isinstance(receipt, dict):
+            continue
+        result = receipt.get("result")
+        if isinstance(result, dict) and result.get("capability_id") == capability_id:
+            return {**result, **receipt}
+    raise RuntimeError(f"canonical receipt for {capability_id} was not found")
 
 
 def _find_value(value: Any, key: str) -> Any:

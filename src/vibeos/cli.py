@@ -15,6 +15,9 @@ from .models import CommandRequest
 from .model_gateway.contracts import ProviderRoute, SecretRef
 from .model_gateway.secrets import (
     ProviderRouteRepository,
+    SecretServiceStatusStore,
+    SecretStatusReader,
+    SecretStore,
     SecretStoreError,
     SecretStoreLocked,
     SecretToolSecretStore,
@@ -321,10 +324,12 @@ def _run(args: argparse.Namespace) -> int:
 def run_secret_command(
     args: argparse.Namespace,
     *,
-    store: SecretToolSecretStore | None = None,
+    store: SecretStore | None = None,
+    status_store: SecretStatusReader | None = None,
     repository: ProviderRouteRepository | None = None,
 ) -> int:
     secret_store = store or SecretToolSecretStore()
+    secret_status = status_store or SecretServiceStatusStore()
     routes = repository or ProviderRouteRepository()
     route = routes.get(args.route_id)
     try:
@@ -355,7 +360,7 @@ def run_secret_command(
         if route is None:
             return _print_secret_result({"status": "missing", "route_id": args.route_id}, args.json, 1)
         if args.secrets_command == "status":
-            status = secret_store.status(route.secret_ref)
+            status = secret_status.status(route.secret_ref)
             code = 0 if status.status == "available" else 1
             return _print_secret_result(
                 {"status": status.status, "route_id": route.route_id, "secret_ref": status.secret_ref_uri, "provider": route.provider, "model": route.model},

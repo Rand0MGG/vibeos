@@ -62,14 +62,16 @@ def main() -> int:
 
         status_payload = _run_vibe("status")
         notification_payload = _run_vibe("notify WSL real action verified")
+        status_task = _run_task_show(status_payload)
+        notification_task = _run_task_show(notification_payload)
         foundation_dbus = _run_json_command([sys.executable, str(Path(__file__).with_name("verify_foundation_dbus.py"))], timeout=40)
         time.sleep(0.3)
         displayed = _run_jsonless(["dunstctl", "count", "displayed"])
         monitor_output = _stop_process(monitor)
         monitor = None
 
-        status_receipt = _find_receipt(status_payload, "system.status")
-        notification_receipt = _find_receipt(notification_payload, "notification.send")
+        status_receipt = _find_receipt(status_task, "system.status")
+        notification_receipt = _find_receipt(notification_task, "notification.send")
         notification_evidence = _find_mapping(notification_payload, "observation_evidence", "notification.send")
         dbus_notify_count = monitor_output.count("member=Notify")
         foundation_e1 = foundation_dbus.get("e1")
@@ -188,7 +190,25 @@ def _run_vibe(utterance: str) -> dict[str, Any]:
 
 
 def _find_receipt(value: object, capability_id: str) -> dict[str, Any]:
-    return _find_mapping(value, "action_receipt", capability_id)
+    if not isinstance(value, dict) or not isinstance(value.get("receipts"), list):
+        raise KeyError("canonical task receipts not found")
+    for receipt in value["receipts"]:
+        if not isinstance(receipt, dict):
+            continue
+        result = receipt.get("result")
+        if isinstance(result, dict) and result.get("capability_id") == capability_id:
+            return {**result, **receipt}
+    raise KeyError(f"canonical receipt for {capability_id} not found")
+
+
+def _run_task_show(command_payload: dict[str, Any]) -> dict[str, Any]:
+    result = command_payload.get("result")
+    task_id = result.get("task_id") if isinstance(result, dict) else None
+    if not isinstance(task_id, str) or not task_id:
+        raise RuntimeError("vibe command did not expose its canonical task_id")
+    vibe = shutil.which("vibe")
+    assert vibe is not None
+    return _run_json_command([vibe, "tasks", "show", task_id, "--json"], timeout=15)
 
 
 def _find_mapping(value: object, key: str, capability_id: str) -> dict[str, Any]:

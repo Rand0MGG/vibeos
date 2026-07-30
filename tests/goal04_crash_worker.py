@@ -195,12 +195,14 @@ def main() -> int:
         task = components.task_repository.list(limit=1)[0]
         result = service.resume(task.task_id, route=route(), run_id=f"resume-{args.boundary}", keyring_unlocked=args.locked_once)
     provider_state = json.loads((args.root / "provider-state.json").read_text(encoding="utf-8"))
+    gateway_state = json.loads((args.root / "gateway-state.json").read_text(encoding="utf-8"))
     print(
         json.dumps(
             {
                 "status": result.task.status.value,
                 "task_id": result.task.task_id,
                 "action_calls": provider_state["action_calls"],
+                "gateway_calls": gateway_state["calls"],
                 "receipt_count": len(components.task_repository.receipts(result.task.task_id)),
             },
             sort_keys=True,

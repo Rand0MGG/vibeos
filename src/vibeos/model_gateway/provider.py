@@ -89,7 +89,12 @@ class OpenAICompatibleTransport:
             response = self.http_client.post(
                 url=f"{route.base_url.rstrip('/')}/chat/completions",
                 body=body,
-                headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {secret}",
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": request.request_id,
+                    "X-VibeOS-Request-Id": request.request_id,
+                },
                 timeout=min(request.budget.timeout_seconds, remaining),
             )
         except (TimeoutError, socket.timeout):

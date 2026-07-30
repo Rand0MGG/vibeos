@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -28,6 +29,7 @@ def check_repository(root: Path) -> list[GuardViolation]:
     violations.extend(check_quality(root, config))
     violations.extend(check_goal04_contracts(root / "src" / "vibeos"))
     violations.extend(check_goal04_test_contracts(root / "tests"))
+    violations.extend(check_goal04_script_contracts(root / "scripts"))
     return violations
 
 
@@ -93,6 +95,25 @@ def check_goal04_test_contracts(test_root: Path) -> list[GuardViolation]:
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in forbidden_levels:
                 violations.append(GuardViolation("goal04_test_contract", str(path), f"ordinary test contains legacy level {node.value}"))
+    return violations
+
+
+def check_goal04_script_contracts(script_root: Path) -> list[GuardViolation]:
+    violations: list[GuardViolation] = []
+    forbidden_tokens = ("risk_level", "RiskLevel", "PermissionPolicy", "permission_policy", "action_receipt")
+    legacy_level = re.compile(r"[\"']L[0-4][\"']")
+    legacy_transport = re.compile(r"schema_version.{0,12}[\"']v1[\"']")
+    for path in sorted((*script_root.rglob("*.py"), *script_root.rglob("*.sh"))):
+        if path.name == "architecture_guard.py":
+            continue
+        source = path.read_text(encoding="utf-8")
+        for token in forbidden_tokens:
+            if token in source:
+                violations.append(GuardViolation("goal04_script_contract", str(path), f"acceptance script contains forbidden token {token}"))
+        if legacy_level.search(source):
+            violations.append(GuardViolation("goal04_script_contract", str(path), "acceptance script contains a legacy effect level"))
+        if legacy_transport.search(source):
+            violations.append(GuardViolation("goal04_script_contract", str(path), "acceptance script sends a legacy transport contract"))
     return violations
 
 

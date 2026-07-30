@@ -77,15 +77,15 @@ def test_empty_database_is_created_by_alembic_with_required_pragmas(tmp_path: Pa
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
     assert {"goal_contracts", "task_runs", "task_leases", "current_state", "domain_events", "outbox"} <= tables
     assert {"reviews", "review_events"}.isdisjoint(tables)
-    assert revision == "0006_effect_contract_v2"
+    assert revision == "0007_repair_effect_policy_summary"
     assert database.health() == {
         "ready": True,
         "journal_mode": "wal",
         "foreign_keys": 1,
         "busy_timeout_ms": 5000,
         "schema_ready": True,
-        "alembic_revision": "0006_effect_contract_v2",
-        "expected_alembic_revision": "0006_effect_contract_v2",
+        "alembic_revision": "0007_repair_effect_policy_summary",
+        "expected_alembic_revision": "0007_repair_effect_policy_summary",
         "missing_tables": "",
         "path": str(database.path),
     }
@@ -109,7 +109,7 @@ def test_legacy_goal_contract_task_uniqueness_is_repaired_for_versioning(tmp_pat
         versions = connection.execute("SELECT version FROM goal_contracts WHERE task_id = 'task_1' ORDER BY version").fetchall()
         revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
     assert versions == [(1,), (2,)]
-    assert revision == "0006_effect_contract_v2"
+    assert revision == "0007_repair_effect_policy_summary"
 
 
 def test_database_health_rejects_pragmas_without_authoritative_schema(tmp_path: Path) -> None:
