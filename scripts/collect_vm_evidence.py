@@ -5,6 +5,8 @@ import json
 import os
 import subprocess
 import sys
+import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -225,8 +227,7 @@ def collect_real_action_evidence(steps: list[dict[str, Any]], env: dict[str, str
             "contract_clipboard_content_alias",
             direct_intent_dry_run_command("clipboard.write", {"content": "VibeOS evidence"}),
             env,
-            expected_status="review_required",
-            expected_returncodes={1},
+            expected_status="dry_run",
             validator=lambda value: contract_probe_ok(value, "clipboard.write", "text", "VibeOS evidence"),
             category="contract",
         )
@@ -236,8 +237,7 @@ def collect_real_action_evidence(steps: list[dict[str, Any]], env: dict[str, str
             "contract_open_uri_name_alias",
             direct_intent_dry_run_command("portal.open_uri", {"name": "https://example.com", "kind": "uri"}),
             env,
-            expected_status="review_required",
-            expected_returncodes={1},
+            expected_status="dry_run",
             validator=lambda value: contract_probe_ok(value, "portal.open_uri", "uri", "https://example.com"),
             category="contract",
         )
@@ -253,58 +253,25 @@ def collect_real_action_evidence(steps: list[dict[str, Any]], env: dict[str, str
         )
     )
 
-    clipboard_review = run_json_step(
-        "real_clipboard_review_required",
+    clipboard_write = run_json_step(
+        "real_clipboard_write",
         cli("ask", "clipboard VibeOS evidence", "--json"),
         env,
-        expected_status="review_required",
-        expected_returncodes={1},
+        expected_status="executed",
         validator=command_transport_ok,
         category="real_action",
     )
-    steps.append(clipboard_review)
-    clipboard_review_id = extract_review_id(clipboard_review.get("parsed"))
-    if clipboard_review_id:
-        steps.append(
-            run_json_step(
-                "real_clipboard_approve",
-                cli("approve", clipboard_review_id, "--json"),
-                env,
-                expected_status="executed",
-                validator=command_transport_ok,
-                category="real_action",
-                depends_on=["real_clipboard_review_required"],
-            )
+    steps.append(clipboard_write)
+    steps.append(
+        run_text_step(
+            "real_clipboard_content_observed",
+            ["wl-paste", "--no-newline"],
+            env,
+            validator=lambda value: value == "VibeOS evidence",
+            category="real_action",
+            depends_on=["real_clipboard_write"],
         )
-        steps.append(
-            run_json_step(
-                "real_clipboard_reapprove_rejected",
-                cli("approve", clipboard_review_id, "--json"),
-                env,
-                expected_status="rejected",
-                expected_returncodes={1},
-                validator=command_transport_ok,
-                category="real_action",
-                depends_on=["real_clipboard_approve"],
-            )
-        )
-    else:
-        steps.append(
-            blocked_step(
-                "real_clipboard_approve",
-                "missing review_id from real_clipboard_review_required",
-                depends_on=["real_clipboard_review_required"],
-                category="real_action",
-            )
-        )
-        steps.append(
-            blocked_step(
-                "real_clipboard_reapprove_rejected",
-                "missing review_id from real_clipboard_review_required",
-                depends_on=["real_clipboard_approve"],
-                category="real_action",
-            )
-        )
+    )
 
     steps.append(
         run_json_step(
@@ -317,11 +284,12 @@ def collect_real_action_evidence(steps: list[dict[str, Any]], env: dict[str, str
         )
     )
     steps.append(
-        run_json_step(
+        run_polled_json_step(
             "real_browser_target_observed",
             cli("windows"),
             env,
             validator=example_domain_browser_visible,
+            timeout_seconds=30,
             category="real_action",
             depends_on=["real_browser_open_url"],
         )
@@ -372,9 +340,9 @@ def collect_real_daemon_evidence(env: dict[str, str]) -> list[dict[str, Any]]:
         ),
         run_value_step(
             "http_daemon_status",
-            lambda: fetch_http_json("http://127.0.0.1:8765/v1/status"),
+            lambda: fetch_http_json("http://127.0.0.1:8765/v2/status"),
             validator=lambda value: daemon_status_ok(value, required_transports={"dbus", "http"}),
-            meta={"url": "http://127.0.0.1:8765/v1/status"},
+            meta={"url": "http://127.0.0.1:8765/v2/status"},
             category="daemon",
         ),
     ]
@@ -408,6 +376,48 @@ def run_json_step(
                 "stdout": completed.stdout,
                 "stderr": completed.stderr,
                 "parsed": parsed,
+            },
+            category=category,
+            depends_on=depends_on,
+        ),
+        env,
+    )
+
+
+def run_polled_json_step(
+    name: str,
+    command: list[str],
+    env: dict[str, str],
+    validator: Callable[[Any], bool],
+    timeout_seconds: float,
+    category: str = "general",
+    depends_on: list[str] | None = None,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    attempts = 0
+    completed: subprocess.CompletedProcess[str] | None = None
+    parsed: Any = None
+    ok = False
+    while time.monotonic() < deadline:
+        attempts += 1
+        completed = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+        parsed = parse_json(completed.stdout)
+        ok = completed.returncode == 0 and parsed is not None and bool(validator(parsed))
+        if ok:
+            break
+        time.sleep(1)
+    assert completed is not None
+    return enrich_step_context(
+        annotate_step(
+            {
+                "name": name,
+                "ok": ok,
+                "command": command,
+                "returncode": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+                "parsed": parsed,
+                "meta": {"attempts": attempts, "timeout_seconds": timeout_seconds},
             },
             category=category,
             depends_on=depends_on,
@@ -648,7 +658,7 @@ def target_policy_ok(value: Any) -> bool:
 def contract_probe_ok(value: Any, action: str, canonical_key: str, expected_value: str) -> bool:
     if not isinstance(value, dict):
         return False
-    if value.get("status") != "review_required":
+    if value.get("status") != "dry_run":
         return False
     payload = value.get("result")
     if not isinstance(payload, dict):
@@ -839,7 +849,7 @@ def collect_report_diagnostics(env: dict[str, str], state_dir: Path | None, *, i
                 env,
                 parser=parse_gdbus_json,
             ),
-            "http_daemon_status": capture_value(fetch_http_json, "http://127.0.0.1:8765/v1/status"),
+            "http_daemon_status": capture_value(fetch_http_json, "http://127.0.0.1:8765/v2/status"),
             "gnome_extension_info": capture_text_command(["gnome-extensions", "info", "vibeos@local"], env),
             "shell_bridge_windows": capture_text_command(
                 [

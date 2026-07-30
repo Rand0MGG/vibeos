@@ -4,7 +4,7 @@ import json
 import subprocess
 from typing import Any
 
-from scripts.collect_vm_evidence import capabilities_ok, target_policy_command, target_policy_ok
+from scripts.collect_vm_evidence import capabilities_ok, contract_probe_ok, target_policy_command, target_policy_ok
 from scripts.verify_foundation_dbus import _command_task, _find_receipt
 from scripts.verify_wsl_real_actions import _find_receipt as find_wsl_receipt
 
@@ -59,3 +59,21 @@ def test_vm_target_policy_probe_executes_current_effect_contract() -> None:
     payload = json.loads(completed.stdout)
     assert target_policy_ok(payload)
     assert payload["effect_level"] == "E4"
+
+
+def test_vm_contract_probe_accepts_automatic_e1_dry_run() -> None:
+    payload = {
+        "status": "dry_run",
+        "result": {
+            "plan": {
+                "steps": [
+                    {
+                        "action": "clipboard.write",
+                        "target": {"text": "VibeOS evidence"},
+                    }
+                ]
+            }
+        },
+    }
+    assert contract_probe_ok(payload, "clipboard.write", "text", "VibeOS evidence")
+    assert not contract_probe_ok({**payload, "status": "review_required"}, "clipboard.write", "text", "VibeOS evidence")
