@@ -180,11 +180,25 @@ class OpenAICompatibleTransport:
         facts = request.context.items[0]
         system_prompt = (
             "Diagnose only the fixed VibeOS systemd user-service fixture. Return one JSON object matching service_diagnosis/v1. "
-            "Do not invent units or arguments. action must be start, restart, or none; effect_level is E1 for start/restart and E0 for none."
+            "Return JSON only, without Markdown fences or explanatory text. Do not invent units or arguments. "
+            "action must be start, restart, or none; effect_level is E1 for start/restart and E0 for none."
         )
+        response_example = {
+            "schema_version": "v1",
+            "diagnosis": "The fixed fixture is unhealthy and requires a bounded restart.",
+            "confidence": 0.95,
+            "proposal": {
+                "action": "restart",
+                "unit": "vibeos-goal04-fixture.service",
+                "arguments": [],
+                "effect_level": "E1",
+                "fact_digest": facts.sha256,
+            },
+        }
         content = {
             "operation": request.operation,
             "response_schema": request.response_schema.model_dump(mode="json"),
+            "json_output_example": response_example,
             "fact_digest": facts.sha256,
             "service_facts": facts.payload.model_dump(mode="json"),
         }
@@ -195,6 +209,7 @@ class OpenAICompatibleTransport:
                 {"role": "user", "content": json.dumps(content, ensure_ascii=False, sort_keys=True)},
             ],
             "temperature": 0,
+            "thinking": {"type": "disabled"},
             "response_format": {"type": "json_object"},
             "max_tokens": request.budget.max_output_tokens,
         }

@@ -186,6 +186,11 @@ def test_openai_transport_returns_strict_response_without_leaking_secret() -> No
         "X-VibeOS-Request-Id": request.request_id,
     }
     assert LEAK_CANARY.encode() not in client.calls[0]["body"]
+    request_body = json.loads(client.calls[0]["body"])
+    assert request_body["thinking"] == {"type": "disabled"}
+    assert request_body["response_format"] == {"type": "json_object"}
+    user_content = json.loads(request_body["messages"][1]["content"])
+    assert user_content["json_output_example"]["proposal"]["fact_digest"] == request.context.items[0].sha256
     assert LEAK_CANARY not in result.model_dump_json()
     assert LEAK_CANARY not in request.model_dump_json()
     assert LEAK_CANARY not in _route().model_dump_json()
