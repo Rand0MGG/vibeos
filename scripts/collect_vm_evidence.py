@@ -268,6 +268,7 @@ def collect_real_action_evidence(steps: list[dict[str, Any]], env: dict[str, str
             ["wl-paste", "--no-newline"],
             env,
             validator=lambda value: value == "VibeOS evidence",
+            timeout_seconds=10,
             category="real_action",
             depends_on=["real_clipboard_write"],
         )
@@ -434,9 +435,28 @@ def run_text_step(
     validator=None,
     category: str = "general",
     depends_on: list[str] | None = None,
+    timeout_seconds: float = 180,
 ) -> dict[str, Any]:
     expected_returncodes = expected_returncodes or {0}
-    completed = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+    try:
+        completed = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        return enrich_step_context(
+            annotate_step(
+                {
+                    "name": name,
+                    "ok": False,
+                    "command": command,
+                    "returncode": None,
+                    "stdout": exc.stdout or "",
+                    "stderr": f"command timed out after {timeout_seconds:g} seconds",
+                    "parsed": None,
+                },
+                category=category,
+                depends_on=depends_on,
+            ),
+            env,
+        )
     stdout = completed.stdout
     ok = completed.returncode in expected_returncodes
     if validator is not None:

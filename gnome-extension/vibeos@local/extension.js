@@ -1,6 +1,7 @@
 import Gio from 'gi://Gio';
 import Shell from 'gi://Shell';
 import Meta from 'gi://Meta';
+import St from 'gi://St';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const BUS_NAME = 'org.vibeos.Shell';
@@ -26,6 +27,10 @@ const XML = `
     </method>
     <method name="CloseWindow">
       <arg type="s" name="window_id" direction="in"/>
+      <arg type="s" name="result" direction="out"/>
+    </method>
+    <method name="SetClipboard">
+      <arg type="s" name="text" direction="in"/>
       <arg type="s" name="result" direction="out"/>
     </method>
   </interface>
@@ -121,6 +126,14 @@ export default class VibeOSExtension extends Extension {
         }
         window.delete(global.get_current_time());
         return JSON.stringify({status: 'closed', window_id: windowId});
+    }
+
+    SetClipboard(text) {
+        if (!text) {
+            return JSON.stringify({status: 'failed', error: 'clipboard text must not be empty'});
+        }
+        St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
+        return JSON.stringify({status: 'written', adapter: 'gnome-shell'});
     }
 
     _trackWindow(window) {
