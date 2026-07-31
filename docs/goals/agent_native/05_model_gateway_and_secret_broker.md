@@ -1,10 +1,10 @@
 # Goal 05：收敛 Model Gateway、模型路由与 Secret Broker
 
-- 阶段：05 / 11
+- 阶段：05 / 12
 - 依赖：[Goal 04](04_core_execution_foundation_and_system_service_slice.md)全部完成
 - 规模：XL
 - 风险：高
-- 完成后进入：[Goal 06](06_unprivileged_tasks_and_installable_runtime.md)
+- 完成后进入：[Goal 06](06_bounded_compound_goal_planning.md)
 
 ## 给 Codex 的命令
 
@@ -18,9 +18,19 @@
    Core、planner、模型、Task Store 和日志始终只看到 `SecretRef`，没有读取 secret
    明文的 API。
 
+同时完成 Goal 06 的模型侧进入合同：`goal_understanding`、`goal_synthesis`、
+`route_selection` 等 planning purpose 必须拥有独立、版本化的 strict schema；schema
+rejection、fallback 和 provider failure 必须可诊断且不泄漏原始私人内容。本 Goal 只
+交付模型边界和兼容迁移，不实现跨领域 whole-goal composer、条件执行器或新的 planner。
+
 本 Goal 不是建设任意密码管理器、模型市场或复杂调度平台。模型迁移必须通过兼容
 facade 收敛，不得重写 Durable Task Engine、planning pipeline 或所有语义模块。秘密
 使用必须绑定固定操作，而不是提供 `get_secret()` 给 Agent。
+
+多领域请求在 Goal 06 完成前必须继续 fail-closed。不得删除现有 selector guard、选择
+只覆盖部分目标的候选，或把 CLI 拆分出的多条任务冒充一个完整 Agent 任务。Goal 05
+结束时必须留下清晰、稳定的 planning schema handoff，使 Goal 06 能在不重建 Gateway
+的前提下实现有界复合规划。
 
 Goal 04 的 Gateway request/response、预算与失败分类、SecretRef、transport redacted
 receipt 和进程/D-Bus 隔离是本 Goal 的生产进入合同，不是临时 scaffold。不得复制、
@@ -98,10 +108,16 @@ SecretRef + one-shot SecretGrantRequest + exact operation
 - 扩展严格 `ModelResponse` 与既有 failure taxonomy：unconfigured、locked_secret、timeout、
   cancelled、rate_limited、provider_unavailable、budget_exhausted、invalid_json、
   schema_rejected、policy_denied 和 unknown_delivery。
+- 为每个 production purpose 建立独立、版本化的请求/响应 schema 和 validator；至少
+  覆盖 `goal_understanding`、`goal_synthesis`、`route_selection`、
+  `service_diagnosis`，不得继续用“任意 JSON object”作为最终生产合同。
 - Gateway 负责总预算、timeout、有限重试、响应大小、JSON/schema 校验、审计摘要和
   redaction。caller 不得各自实现无限重试、宽松 parse 或隐式 provider fallback。
 - 模型响应只进入 typed domain boundary；原始 provider payload 默认不持久化，必要的
   调试证据必须脱敏、限长、限期并由用户显式启用。
+- schema rejection 必须保留 provider、model、purpose、schema version、错误类别、
+  响应大小、顶层结构和 response digest；fallback payload 必须单独标记来源，不得写入
+  或展示为 raw provider output。默认不得为了可诊断性持久化完整 prompt/response。
 
 ### 2. 收敛现有调用路径
 
@@ -111,6 +127,9 @@ SecretRef + one-shot SecretGrantRequest + exact operation
   生产源码中不再允许直接读取 API key、直接构造 provider HTTP 或创建私有重试器。
 - 为迁移前后的 clarification、compound goal、replan、acceptance 和离线/fail-closed
   行为建立兼容矩阵。不能为了统一接口降低 Goal 03/04 的行为合同。
+- 对 compound goal 明确记录 Goal 05 的退出边界：模型可以返回 schema-valid、受 host
+  capability boundary 限制的 subgoal proposal；host 在 Goal 06 前仍不得把多领域部分
+  候选送入执行。兼容矩阵必须给出 Goal 06 可直接继承的 schema、错误和删除门禁。
 - 更新 architecture baseline：已完成 Goal 03/04 的 legacy debt 不得继续挂在过期 owner
   名下；仍保留的模块必须有新 owner、边界和删除条件。
 
@@ -184,6 +203,8 @@ SecretRef + one-shot SecretGrantRequest + exact operation
 - 不支持 secret 明文读取、复制、显示、日志或导出；
 - 不新增 Task Store、网络执行平台、风险引擎或 provider 私有任务循环；
 - 不批量重写 planning/understanding 业务逻辑，不因文件旧而删除仍有调用者的模块；
+- 不实现 whole-goal candidate composer、跨领域 coverage gate、条件分支运行时、typed
+  step-output binding 或真实 GNOME 复合任务；这些由 Goal 06 和 Goal 08 承担；
 - 不实现 E2 Reviewer、桌面输入、主动建议、扩展市场或正式发行。
 
 ## 验收条件
@@ -193,6 +214,11 @@ SecretRef + one-shot SecretGrantRequest + exact operation
   request/response、secret owner、网络预算或进程边界；
 - [ ] 生产源码不存在新的直接 API key 读取、provider HTTP、私有重试/预算或宽松 parse；
 - [ ] OpenAI/DeepSeek adapter、两个固定 purpose 和确定性 route/fallback 规则有严格合同；
+- [ ] `goal_understanding`、`goal_synthesis`、`route_selection` 和
+  `service_diagnosis` 不再依赖通用 JSON-object 生产合同，各自 schema/version/validator
+  和分类失败可由 caller 稳定消费；
+- [ ] schema rejection 的脱敏 metadata 与 response digest 可追踪真实 provider failure，
+  fallback provenance 独立，fallback 内容不冒充 raw provider output；
 - [ ] provider 选择、拒绝和 fallback 可解释，数据不会静默发送给另一个 provider；
 - [ ] 本地模型准入按预设门槛执行，未通过时保持 `not_admitted`；
 - [ ] Core/模型/Task DB/CLI/D-Bus/HTTP/扩展没有读取 secret 明文的 API；
@@ -202,11 +228,15 @@ SecretRef + one-shot SecretGrantRequest + exact operation
 - [ ] 有 credential 的 provider 完成真实 smoke；缺失 credential 被准确标为外部阻塞；
 - [ ] Goal 03/04 systemd 场景、19 capability 的发现/参数/基础功能、迁移和共同质量门禁
   无非预期回归；effect/批准行为只允许按已批准矩阵变化；
+- [ ] 多领域请求在没有完整 coverage proof 时仍在任何 effect 前 fail-closed；已形成
+  Goal 06 可继承的 planning-purpose schema、兼容矩阵和明确 handoff；
 - [ ] architecture baseline、当前状态、模型路由、秘密威胁模型和运维文档与代码一致。
 
 ## 必交付物
 
 - 模型调用者/purpose/数据/预算迁移清单和兼容矩阵；
+- planning-purpose strict schema、schema rejection/fallback 诊断合同，以及 Goal 06
+  进入清单；
 - 从 Goal 04 v1 原位扩展的唯一 Model Gateway、OpenAI/DeepSeek adapters、RoutePolicy
   和 failure taxonomy，以及无平行实现的架构证明；
 - 本地模型准入基准、门槛和 admission 结论；

@@ -17,7 +17,7 @@ CLI / D-Bus / loopback HTTP / 本地开发入口
 审计和 trace 只用于诊断，不承担恢复权威。
 
 旧同步任务循环、独立 ReviewStore、loop snapshot、legacy runtime 和 run ledger
-实现已删除。D-Bus 是主要控制面；HTTP 作为 loopback-only 薄兼容层保留到 Goal 09，
+实现已删除。D-Bus 是主要控制面；HTTP 作为 loopback-only 薄兼容层保留到 Goal 10，
 与 D-Bus 使用同一应用服务和 Task Store，不拥有独立状态。
 
 当前实现详情见：

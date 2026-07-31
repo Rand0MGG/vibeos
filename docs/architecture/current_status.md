@@ -1,6 +1,7 @@
 # VibeOS current status
 
-Last verified: 2026-07-31. Goal 04 starts from frozen planning commit
+Runtime evidence last verified: 2026-07-31. Roadmap responsibility last revised:
+2026-08-01. Goal 04 starts from frozen planning commit
 `efe2267`. The 13 files under
 `.codex_vm_artifacts` remain committed Goal 03 evidence assets. Goal 04A has
 replaced the unreleased effect/observation contracts and converged canonical
@@ -33,7 +34,7 @@ receipt, evidence, and reconciliation state are all persisted by the durable
 repository.
 
 D-Bus is the primary Linux local control plane. HTTP is a deprecated,
-loopback-only compatibility adapter retained through the Goal 09 delivery
+loopback-only compatibility adapter retained through the Goal 10 delivery
 decision because repository VM/operations callers existed in Goal 01. It
 serializes requests and responses around the same application service and
 database; it has no independent task or review authority.
@@ -167,17 +168,27 @@ write/readback, browser open/observation, review flows, policy and audit.
 - the detailed evidence is in the
   [`Goal 04C acceptance report`](goal04_system_service_acceptance_2026-07-22.md#2026-07-31-fedora-gnome-vm-external-acceptance).
 
-Existing compatibility debt owned by Goal 05:
+Existing compatibility debt split between Goal 05 and Goal 06:
 
 - semantic modules retain `provider_client` only as an authority-free facade;
   its network path is now the existing Gateway v1, but the allowlisted generic
   JSON-object contracts still need purpose-specific schemas and route/data
   policy before the facade can be deleted;
-- multi-domain compound planning remains a Goal 05 capability gap. Restoring
-  provider reachability does not make the release-check compound task executable.
+- Goal 05 owns purpose-specific planning schemas, schema-rejection diagnostics,
+  response digests and fallback provenance. It does not own an executable
+  whole-goal planner;
+- multi-domain compound planning remains a capability gap owned by the new
+  Goal 06. Restoring provider reachability does not make the release-check
+  compound task executable. The observed VM failure and approved Goal 05/06/08
+  split are documented in the
+  [`compound-goal boundary report`](compound_goal_boundary_report_2026-07-31.md).
 
 Goal 05 must extend the Gateway/SecretRef/transport v1 contract delivered by
-04B rather than replace it.
+04B rather than replace it. Goal 06 must reuse that model boundary, the existing
+single-domain route builders and the Durable Task Engine; it may add bounded
+subgoal/condition/binding/coverage contracts but no second planner, task loop or
+action-result authority. Real browser/clipboard/notification effects remain a
+Goal 08 Fedora GNOME gate.
 
 ## Committed Goal 03 remediation baseline
 

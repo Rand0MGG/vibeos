@@ -1,10 +1,10 @@
-# Goal 08：用一个 E2 金丝雀证明受控提权与完整回滚
+# Goal 09：用一个 E2 金丝雀证明受控提权与完整回滚
 
-- 阶段：08 / 11
-- 依赖：[Goal 07](07_gnome_mixed_task_mvp.md)全部完成
+- 阶段：09 / 12
+- 依赖：[Goal 08](08_gnome_mixed_task_mvp.md)全部完成
 - 规模：XL
 - 风险：极高
-- 完成后进入：[Goal 09](09_proactive_service_advisor.md)
+- 完成后进入：[Goal 10](10_proactive_service_advisor.md)
 
 ## 给 Codex 的命令
 
@@ -32,15 +32,18 @@ E2 的核心不是“命令可逆”，而是完整事务：执行前保存足�
 ## 预期进入状态与现场核对
 
 预期 Goal 04 已建立规范 E0-E4 Effect Policy，Goal 05 已建立唯一 Model Gateway 和
-Secret Broker，Goal 06 已有可安装 Runtime 与少量 E0/E1 provider，Goal 07 已完成
-桌面 MVP。本 canary 不依赖桌面输入，排序只是为了先交付普通用户价值；不得通过
+Secret Broker，Goal 06 已有 E0/E1 有界复合规划，Goal 07 已有可安装 Runtime 与少量
+E0/E1 provider，Goal 08 已完成桌面 MVP。本 canary 不依赖桌面输入，排序只是为了先
+交付普通用户价值；不得通过
 AT-SPI、portal、GNOME extension 或 UI 点击完成提权。开始前必须核对：
 
 - 目标 Fedora 版本、polkit/system-bus 行为和可用 typed 系统 API；
 - 当前用户提出的提权偏好：Agent 自审 E2，但安装/启用特权机制需用户批准；
 - 候选操作的全部直接/间接副作用、持久化位置、并发参与者和恢复边界；
 - 是否存在不需要自有 helper 的成熟系统 API；
-- Goal 06 安装包如何在不默认提权的前提下可选安装机制。
+- Goal 07 安装包如何在不默认提权的前提下可选安装机制；
+- Goal 06 复合规划 v1 只允许 E0/E1；本 Goal 不通过放宽 compound planner 来绕过 E2
+  Reviewer 和最小权限边界。
 - Goal 04 已删除 `PermissionPolicy`/`risk_level`/`L0-L3`，当前只有规范 E0-E4
   EffectPolicy；
 - Goal 05 Gateway 中为 Reviewer 预留的独立 purpose、模型配置、数据最小化和失败边界；
@@ -140,7 +143,7 @@ bootloader、磁盘分区、账户、安全策略、网络主连接、任意文�
 - [ ] rollback 后所有声明副作用与前态一致，不只比较一个状态字段；
 - [ ] rollback 失败进入显式状态并停止扩大影响，不被报告为成功；
 - [ ] 安装/启用特权机制经过用户批准，普通安装默认没有宽泛权限；
-- [ ] Goal 03–07 的兼容、模型/秘密、用户态任务、桌面和安装路径没有回归；
+- [ ] Goal 03–08 的兼容、复合规划、模型/秘密、用户态任务、桌面和安装路径没有回归；
 - [ ] 真实 Fedora VM 完成攻击、崩溃和回滚验收，WSL/mock 不替代该证据；
 - [ ] 共同质量门禁全部通过，仓库中不存在第二个 E2 实现。
 

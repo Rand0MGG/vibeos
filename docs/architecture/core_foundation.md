@@ -22,7 +22,7 @@ revisions are immutable and schema changes require a new revision.
 
 The supervisor owns database readiness, scheduler, outbox, D-Bus, and the
 loopback HTTP compatibility listener on one lifecycle. Both transports call
-the same application service. HTTP remains deprecated until Goal 09; it is not
+the same application service. HTTP remains deprecated until Goal 10; it is not
 a second runtime or persistence path.
 
 Architecture ratchets live in `architecture_baseline.json`. New durable modules

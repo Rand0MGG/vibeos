@@ -1,8 +1,8 @@
 # VibeOS Agent-native 实施计划
 
-- 状态：Goal 01–03 已执行；Goal 04–11 已按“唯一地基、纵向证明、证据驱动扩展”重排
+- 状态：Goal 01–04 已执行；Goal 05–12 已按“唯一地基、完整目标覆盖、纵向证明、证据驱动扩展”重排
 - 制定日期：2026-07-15
-- 最近修订：2026-07-22
+- 最近修订：2026-08-01
 
 ## 1. 计划目的与当前边界
 
@@ -10,18 +10,20 @@
 Codex 的 Goal。每份 Goal 独立包含项目思想、现场起点、固定用户结果、实施边界、
 停止条件、验收和交付物；不要求 Codex 读取本次聊天记录。
 
-Goal 01、02、03 已经执行，是历史合同和决策来源。它们保留原有阶段编号和正文，
+Goal 01、02、03、04 已经执行，是历史合同和决策来源。它们保留原有阶段编号和正文，
 只允许更新必要导航，不应按新路线重新执行：
 
 - Goal 01 建立稳定基础；
 - Goal 02 产生 Durable Task Engine 候选；
-- Goal 03 从 Goal 01 干净基线审计、整合并删除经证明可替代的旧任务内核。
+- Goal 03 从 Goal 01 干净基线审计、整合并删除经证明可替代的旧任务内核；
+- Goal 04 收敛 E0-E4、Gateway/SecretRef v1、canonical receipt，并完成 systemd 与
+  Fedora GNOME 纵向验收。
 
-开始 2026-07-22 规划修订前，本地 `main` 与 `origin/main` 都位于 Goal 03 remediation
-合并提交 `c9b7ca6`，跟踪工作树干净；本次 Goal/状态文档修改需要先形成新的规划提交，
-所以 Goal 04 的实际 HEAD 应晚于该实现基线。`.codex_vm_artifacts` 中的 13 项 VM 证据
-已被 `c9b7ca6` 跟踪并归属 Goal 03。Goal 04 必须从现场重新核对后的干净、可回退基线
-开始，不得改写 Goal 03 证据资产。Git 状态会变化，执行者不能把本段快照当永久事实。
+2026-07-31 的 Goal 04 remediation 基线为 `e3bacd8`；真实 DeepSeek 调用和 Fedora
+GNOME 证据证明 Gateway/Secret 路径可用，同时暴露多领域请求只能产生部分候选的规划
+缺口。该缺口不能通过删除安全 guard 解决，因此 2026-08-01 在 Goal 05 后新增独立
+Goal 06。Git 状态、分支和 remote 会继续变化，执行者必须以
+[当前状态](../../architecture/current_status.md)和现场代码为准，不能把本段快照当永久事实。
 
 执行任何阶段前必须阅读：
 
@@ -110,9 +112,10 @@ D-Bus、HTTP、扩展、任务数据库或日志返回明文。首期同 UID 威
 ```mermaid
 flowchart TD
     U["用户目标"] --> C["Goal Contract"]
-    C --> K["Durable Task Engine"]
+    C --> W["Bounded Planner / Whole-goal Coverage Gate"]
+    W --> K["Durable Task Engine"]
+    W <--> G["Model Gateway / Route Policy"]
     K <--> O["Observation / Machine Facts"]
-    K <--> G["Model Gateway / Route Policy"]
     G <--> S["Secret Broker / Bound Transport"]
     K --> F["Deterministic Effect Policy"]
     F --> T["ToolRegistry / E0-E1 Providers"]
@@ -141,15 +144,17 @@ outbox 和恢复。调度是 at-least-once，通过 lease、幂等、receipt 和
 | 03 | [整合 Goal 01/02](03_reconcile_goal01_goal02.md) | 已执行历史：唯一耐久基线与兼容证据 | XL | 高 |
 | 04 | [最小执行地基与 systemd 验收](04_core_execution_foundation_and_system_service_slice.md) | 唯一 effect/registry/Gateway/SecretRef 地基和首个纵向证明 | XL | 高 |
 | 05 | [Model Gateway 与 Secret Broker](05_model_gateway_and_secret_broker.md) | 云端路由、本地准入和秘密使用唯一入口 | XL | 高 |
-| 06 | [用户态任务与基础 Runtime](06_unprivileged_tasks_and_installable_runtime.md) | 四个固定 API/CLI 任务和可安装 artifact | XL | 中高 |
-| 07 | [GNOME 混合任务](07_gnome_mixed_task_mvp.md) | API 优先、AT-SPI/portal fallback 和用户接管 | XL | 高 |
-| 08 | [单一 E2 与完整回滚](08_privileged_canary_and_rollback.md) | 一个 Reviewer/最小权限/事务 canary | XL | 极高 |
-| 09 | [主动服务建议](09_proactive_service_advisor.md) | 一个可抑制、由用户决定的 detector | M | 中 |
-| 10 | [Runtime 发布生命周期](10_runtime_release_lifecycle.md) | 安装、升级、失败恢复、卸载和支持矩阵 | XL | 高 |
-| 11 | [只读扩展与发行版门禁](11_readonly_extension_and_distro_gate.md) | 一个隔离 E0 扩展和实证发行版 ADR | L | 中高 |
+| 06 | [有界复合目标规划](06_bounded_compound_goal_planning.md) | 完整 subgoal 覆盖、条件、typed binding 和安全选择 | XL | 高 |
+| 07 | [用户态任务与基础 Runtime](07_unprivileged_tasks_and_installable_runtime.md) | 四个固定 API/CLI 任务和可安装 artifact | XL | 中高 |
+| 08 | [GNOME 混合任务](08_gnome_mixed_task_mvp.md) | API 优先、真实复合 smoke、AT-SPI/portal fallback 和用户接管 | XL | 高 |
+| 09 | [单一 E2 与完整回滚](09_privileged_canary_and_rollback.md) | 一个 Reviewer/最小权限/事务 canary | XL | 极高 |
+| 10 | [主动服务建议](10_proactive_service_advisor.md) | 一个可抑制、由用户决定的 detector | M | 中 |
+| 11 | [Runtime 发布生命周期](11_runtime_release_lifecycle.md) | 安装、升级、失败恢复、卸载和支持矩阵 | XL | 高 |
+| 12 | [只读扩展与发行版门禁](12_readonly_extension_and_distro_gate.md) | 一个隔离 E0 扩展和实证发行版 ADR | L | 中高 |
 
-推荐严格串行。Goal 07 不依赖 E2，因此放在 Goal 08 前先证明项目的核心“使用电脑”
-价值；Goal 08 再增加高风险提权。只允许并行开展不改生产代码的 feasibility spike，
+推荐严格串行。Goal 06 必须先证明整个用户目标能被完整规划；Goal 08 不依赖 E2，
+因此放在 Goal 09 前先证明项目的核心“使用电脑”价值；Goal 09 再增加高风险提权。
+只允许并行开展不改生产代码的 feasibility spike，
 结论不能替代前置 Goal 的退出门禁。
 
 里程碑：
@@ -157,10 +162,10 @@ outbox 和恢复。调度是 at-least-once，通过 lease、幂等、receipt 和
 | 里程碑 | Goal | 用户可观察退出结果 |
 | --- | --- | --- |
 | A 已执行历史 | 01–03 | 旧新内核被审计整合成唯一耐久基线 |
-| B 受治理系统 Agent | 04–06 | 真实 service 任务、多模型/秘密边界、少量用户态任务和基础安装 |
-| C 桌面与权限 | 07–08 | 一个真实 GNOME 混合任务和一个可完整回滚的 E2 canary |
-| D 协作 | 09 | 一个有证据、可忽略/稍后/抑制的主动建议 |
-| E 产品化与方向 | 10–11 | 稳定 Runtime 生命周期、一个只读扩展和发行版 ADR |
+| B 受治理系统 Agent | 04–07 | 真实 service 任务、多模型/秘密边界、完整复合规划、少量用户态任务和基础安装 |
+| C 桌面与权限 | 08–09 | 一个真实 GNOME 混合任务和一个可完整回滚的 E2 canary |
+| D 协作 | 10 | 一个有证据、可忽略/稍后/抑制的主动建议 |
+| E 产品化与方向 | 11–12 | 稳定 Runtime 生命周期、一个只读扩展和发行版 ADR |
 
 ## 6. 为什么 Goal 04 使用 systemd user service
 
@@ -172,7 +177,9 @@ Goal 04 必须按 04A effect/动作结果/v2 数据收敛 -> 04B 可继承 Gatew
 进程隔离 -> 04C systemd 场景/崩溃/真实环境验收执行。每段形成独立审查、提交和回退
 点；上一段未形成唯一权威时不得进入下一段。Goal 05 必须原位扩展 Goal 04 的 production
 v1 合同，不得重建 Gateway 或 Secret Broker。完整多 provider 路由、通用 grant、E2
-和桌面能力分别由后续 Goal 承担。
+和桌面能力分别由后续 Goal 承担。Goal 05 只交付 planning-purpose schema handoff；
+Goal 06 在既有 route builder 和 Durable Task 上实现 whole-goal composer/coverage gate，
+不得反向重建 Gateway 或动作权威。
 
 ## 7. 共同执行命令
 
@@ -245,10 +252,12 @@ Codex 应完成仓库内仍安全、仍在范围内的工作，保留旧产品�
 
 ## 10. 总体完成定义
 
-Goal 04–11 全部完成后，用户应能在受支持 GNOME Linux 上安装稳定 VibeOS，交给它
+Goal 04–12 全部完成后，用户应能在受支持 GNOME Linux 上安装稳定 VibeOS，交给它
 一个持续数小时、包含系统、命令和桌面步骤的真实任务，并观察到：
 
 - Agent 基于新鲜、最小、可追溯机器事实规划，优先选择 API/CLI/D-Bus；
+- 多领域目标只有在 host 证明全部 subgoal、条件和数据绑定被覆盖后才执行，不会用
+  一个部分动作冒充完整任务；
 - 实质歧义先澄清，技术细节由 Agent 自主处理；
 - 云端模型经统一 Gateway 路由，本地模型只有通过 purpose 基准才参与；
 - secret 只由绑定 transport 使用，不进入 Agent/模型/日志/任务状态；

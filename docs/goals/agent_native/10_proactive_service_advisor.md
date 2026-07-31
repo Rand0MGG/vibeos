@@ -1,10 +1,10 @@
-# Goal 09：用一个确定性 Detector 交付主动建议闭环
+# Goal 10：用一个确定性 Detector 交付主动建议闭环
 
-- 阶段：09 / 11
-- 依赖：[Goal 08](08_privileged_canary_and_rollback.md)全部完成
+- 阶段：10 / 12
+- 依赖：[Goal 09](09_privileged_canary_and_rollback.md)全部完成
 - 规模：M
 - 风险：中
-- 完成后进入：[Goal 10](10_runtime_release_lifecycle.md)
+- 完成后进入：[Goal 11](11_runtime_release_lifecycle.md)
 
 ## 给 Codex 的命令
 
@@ -28,8 +28,9 @@ Agent 可以比用户更早发现问题，但“发现”不等于“获得解�
 
 ## 预期进入状态与现场核对
 
-预期 Goal 04 已有 service facts 和修复路径，Goal 07 已有真实 GNOME 通知/用户交互、
-Durable Task wait/timer 和用户接管，Goal 08 已证明 E2 边界但本 detector 不需要提权。
+预期 Goal 04 已有 service facts 和修复路径，Goal 06 已有唯一有界复合 planner，
+Goal 08 已有真实 GNOME 通知/用户交互、Durable Task wait/timer 和用户接管，Goal 09
+已证明 E2 边界但本 detector 不需要提权。
 开始前现场确认：
 
 - 受管 unit 的范围和用户可见身份；
@@ -85,6 +86,8 @@ service facts/events
 
 4. **接受后的安全路径**
    - accept 创建普通 GoalContract，引用 Finding evidence 但重新检查 freshness；
+   - 接受后的目标若包含多个 subgoal，必须进入 Goal 06 的同一 composer/coverage gate；
+     Suggestion 聚合不得自带 planner、私有 step 列表或绕过 whole-goal preflight；
    - unit、目标或完成条件有歧义时仍先询问；
    - 后续动作按现有 E0/E1/E2/E3 路径重新评估，不能复用旧 lease/grant/approval；
    - 完成、失败或用户取消回写 Finding，但不自动扩大 detector 范围。
@@ -107,6 +110,7 @@ service facts/events
 - 不自动执行建议，不实现后台 self-improvement 或自装能力；
 - 不增加第二个 detector，不扫描磁盘内容、邮件、聊天、浏览历史或剪贴板；
 - 不让模型生成 detector 条件、severity、通知频率或权限决定；
+- 不建立 suggestion-specific planner；复合目标只使用 Goal 06 的唯一规划权威；
 - 不把一次接受变成长期授权，不做外部营销、推荐或未经请求的消息；
 - 不修改 Goal 04 修复路径或绕过 Task Engine、Effect Policy、Secret/Privilege 边界。
 
@@ -123,7 +127,7 @@ service facts/events
 - [ ] 受控精度/噪声门槛有数据，未达标时 detector 默认关闭；
 - [ ] 文档明确哪些指标来自合成、开发试用和真实用户，不虚构接受率；
 - [ ] 没有新的动作、模型、通知状态或 Task Store 旁路；
-- [ ] Goal 03–08 和共同质量门禁全部通过。
+- [ ] Goal 03–09 和共同质量门禁全部通过。
 
 ## 必交付物
 

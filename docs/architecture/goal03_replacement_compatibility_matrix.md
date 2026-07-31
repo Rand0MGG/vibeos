@@ -28,7 +28,7 @@ Status vocabulary:
 | CLI (`vibe`) | `cli.py` -> runtime -> `TaskApplicationService` | `equivalent` | Commands, reviews, task list/show/control, dry-run, and JSON projection use the one repository. |
 | D-Bus | `dbus_service.py` -> `TaskApplicationService` | `equivalent` | Remains the primary Linux local control plane; transport-only serialization has no task state. |
 | Python facade | `CapabilityBroker` | `equivalent` | Capability calls, pending interactions, approval, supplemental input, rejection, and controls are durable black-box tested. |
-| loopback HTTP | `core/adapters/http.py` and daemon router -> same service | `intentionally_changed` | Preserved through Goal 09, restricted to loopback, and marked deprecated with response headers. Goal 04 replaced the unreleased v1 task/effect payload with `/v2/status`, `/v2/command`, `/v2/apps`, `/v2/windows`, `/v2/capabilities`, `/v2/reviews/pending`, `/v2/audit/tail`, and v2 task routes. Goal 03 v1 evidence is historical only. |
+| loopback HTTP | `core/adapters/http.py` and daemon router -> same service | `intentionally_changed` | Preserved through Goal 10, restricted to loopback, and marked deprecated with response headers. Goal 04 replaced the unreleased v1 task/effect payload with `/v2/status`, `/v2/command`, `/v2/apps`, `/v2/windows`, `/v2/capabilities`, `/v2/reviews/pending`, `/v2/audit/tail`, and v2 task routes. Goal 03 v1 evidence is historical only. |
 | `VIBEOS_RUNTIME=http` | `HTTPDaemonRuntime` / `HTTPDaemonClient` | `equivalent` | Explicit HTTP mode and auto D-Bus -> HTTP -> local fallback preserve historical error behavior without introducing state. |
 | systemd daemon | `daemon.py` | `equivalent` | One composed application service serves D-Bus and the thin HTTP adapter. |
 | repository VM scripts | D-Bus-first scripts with HTTP compatibility retained | `intentionally_changed` | Operational callers migrate to D-Bus; HTTP is not removed and remains contract-tested. |
@@ -60,7 +60,7 @@ The dependency scan before deletion found no production caller outside this lega
 | `legacy_review_migration.py` | self-contained Alembic `0002` migration | `equivalent` | Old action review safely rebinds; old clarification resumes; unrestorable effects pause. |
 | `agent_runtime.py` projections and `projections.py` | `result_projection.py` and broker task projection | `equivalent` | CLI/D-Bus/HTTP/Python normalized projection tests pass. |
 | `run_ledger.py` | attempts, proposals, receipts, evidence, terminal outcomes | `equivalent` | Repository, 19-capability, retry, and crash tests pass. |
-| `core/adapters/http.py` | same thin adapter, retained | `compatibility_missing` for deletion | Goal 03 explicitly forbids deletion. It remains until the Goal 09 delivery decision. |
+| `core/adapters/http.py` | same thin adapter, retained | `compatibility_missing` for deletion | Goal 03 explicitly forbids deletion. It remains until the Goal 10 delivery decision. |
 
 ## Test replacement decisions
 

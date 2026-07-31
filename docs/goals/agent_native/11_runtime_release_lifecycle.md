@@ -1,14 +1,14 @@
-# Goal 10：完成 Runtime 安装、升级、失败恢复与卸载生命周期
+# Goal 11：完成 Runtime 安装、升级、失败恢复与卸载生命周期
 
-- 阶段：10 / 11
-- 依赖：[Goal 09](09_proactive_service_advisor.md)全部完成
+- 阶段：11 / 12
+- 依赖：[Goal 10](10_proactive_service_advisor.md)全部完成
 - 规模：XL
 - 风险：高
-- 完成后进入：[Goal 11](11_readonly_extension_and_distro_gate.md)
+- 完成后进入：[Goal 12](12_readonly_extension_and_distro_gate.md)
 
 ## 给 Codex 的命令
 
-你要把 Goal 06 的基础可安装 artifact 和 Goal 07–09 的真实能力收敛成一个可重复安装、
+你要把 Goal 07 的基础可安装 artifact 和 Goal 08–10 的真实能力收敛成一个可重复安装、
 配置、升级、失败恢复、卸载和重装的版本化 Runtime。用户不能依赖源码 checkout、
 editable install、仓库 `.env`、开发者 home 或手工修数据库。
 
@@ -30,9 +30,10 @@ VibeOS 首先是在成熟 Linux 发行版上交付的本地 Agent Runtime。稳�
 
 ## 预期进入状态与现场核对
 
-预期已有：Goal 05 唯一 Model Gateway/Secret Broker；Goal 06 非 editable 基础 artifact
-和干净 Fedora 安装证据；Goal 07 GNOME 混合任务；Goal 08 可选单一 E2 mechanism；
-Goal 09 Finding/Suggestion 聚合与主动建议闭环。
+预期已有：Goal 05 唯一 Model Gateway/Secret Broker；Goal 06 有界复合规划及版本化
+plan/coverage/binding；Goal 07 非 editable 基础 artifact 和干净 Fedora 安装证据；
+Goal 08 GNOME 混合任务；Goal 09 可选单一 E2 mechanism；Goal 10 Finding/Suggestion
+聚合与主动建议闭环。
 
 开始前现场确认：
 
@@ -45,7 +46,7 @@ Goal 09 Finding/Suggestion 聚合与主动建议闭环。
 - 当前开发安装、VM 脚本和真实用户调用者，避免无证据删除；
 - portal、keyring、用户 session、锁屏、登出和 reboot 对升级流程的影响。
 
-若 Goal 06 artifact 仍依赖 editable/source path，先修复基础 artifact，不并行设计另一套
+若 Goal 07 artifact 仍依赖 editable/source path，先修复基础 artifact，不并行设计另一套
 打包系统。改变 wheel/installer 体系需要 ADR 和用户确认。
 
 ## 核心目标
@@ -64,15 +65,15 @@ versioned artifact + manifest + digest
   -> reinstall/import and continue
 ```
 
-固定用户结果是：一个不了解仓库结构的用户可以安装并配置 VibeOS，完成 Goal 07 主
-场景和 Goal 09 建议闭环；带着未完成任务升级；在注入失败后恢复前一可运行版本；
+固定用户结果是：一个不了解仓库结构的用户可以安装并配置 VibeOS，完成 Goal 08 主
+场景和 Goal 10 建议闭环；带着未完成复合任务升级；在注入失败后恢复前一可运行版本；
 卸载默认保留可导出状态，重装后按支持窗口继续。
 
 ## 必须实施
 
 ### 1. 正式 Runtime artifact
 
-- 基于 Goal 06 方式生成 versioned、非 editable、依赖可复现的 release candidate；
+- 基于 Goal 07 方式生成 versioned、非 editable、依赖可复现的 release candidate；
   记录 artifact digest、来源、许可证、依赖清单/SBOM、Python/OS/desktop 兼容范围。
 - installer 幂等配置 systemd user service、D-Bus、desktop integration、数据库迁移、
   非敏感 provider route 和用户选择的可选 E2 mechanism；不得写入 provider key 明文。
@@ -100,6 +101,9 @@ versioned artifact + manifest + digest
 
 - 覆盖空库、Goal 01/02/03 数据、当前 release 前一版本、未完成 Task、awaiting review/
   clarification、timer、outbox、Finding/Suggestion 和 terminal evidence。
+- 至少包含一个 Goal 06 新 schema 的未完成复合任务：coverage certificate、冻结的条件
+  结果/typed binding、completed/skipped step 和 plan revision 在升级后保持一致；旧版
+  不支持时按书面 disposition 暂停或只读导出，不能降级成单领域部分计划。
 - 旧 approval、SecretGrant、PrivilegeLease、portal session、AT-SPI node 和截图坐标按
   各自生命周期重新验证；不得因数据库里存在记录就自动恢复权限或 UI 控制。
 - 升级后重新绑定 effect/policy/model route/helper version；绑定变化时安全等待新的
@@ -132,14 +136,14 @@ versioned artifact + manifest + digest
 
 ### 6. 发布验证矩阵
 
-- Fedora GNOME 是主支持环境：clean install -> configure provider -> Goal 07 主场景
-  -> Goal 09 建议 -> unfinished task upgrade -> injected failure recovery -> uninstall/
+- Fedora GNOME 是主支持环境：clean install -> configure provider -> Goal 08 主场景
+  -> Goal 10 建议 -> unfinished compound-task upgrade -> injected failure recovery -> uninstall/
   reinstall。
 - Ubuntu GNOME 只验证一个明确版本的安装、daemon/D-Bus、数据库、provider 和 E0/E1
   smoke；不通过时可以暂不支持，但必须记录真实原因。
 - 机器可读证据包含 artifact/schema/OS/desktop/component versions、命令、结果、hash
   和未覆盖边界；WSL/mock/source checkout 不能替代发布矩阵。
-- 发布候选重跑 Goal 03–09 的核心黄金场景、共同质量门禁、secret/PII 扫描和架构
+- 发布候选重跑 Goal 03–10 的核心黄金场景、共同质量门禁、secret/PII 扫描和架构
   守卫；只声明实际通过的组合。
 
 ## 明确非目标
@@ -161,7 +165,7 @@ versioned artifact + manifest + digest
 - [ ] 所列升级/断电故障点可以继续或回退；失败回退进入显式安全状态；
 - [ ] 卸载默认保留状态，显式 purge 边界清楚，重装可验证恢复；
 - [ ] Fedora 完整发布矩阵通过，Ubuntu smoke 的支持/排除有真实证据；
-- [ ] Goal 03–09 的任务、模型、秘密、桌面、E2 和建议边界无回归；
+- [ ] Goal 03–10 的任务、复合规划、模型、秘密、桌面、E2 和建议边界无回归；
 - [ ] 发布候选没有 WSL/mock/source checkout 冒充真实安装或现实效果；
 - [ ] 安装、升级、恢复、卸载、支持和紧急处置文档可由新用户执行。
 
