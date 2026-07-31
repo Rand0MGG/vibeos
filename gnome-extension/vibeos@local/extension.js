@@ -1,4 +1,5 @@
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
 import Meta from 'gi://Meta';
 import St from 'gi://St';
@@ -32,6 +33,9 @@ const XML = `
     <method name="SetClipboard">
       <arg type="s" name="text" direction="in"/>
       <arg type="s" name="result" direction="out"/>
+    </method>
+    <method name="GetClipboard">
+      <arg type="s" name="text" direction="out"/>
     </method>
   </interface>
 </node>`;
@@ -134,6 +138,15 @@ export default class VibeOSExtension extends Extension {
         }
         St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, text);
         return JSON.stringify({status: 'written', adapter: 'gnome-shell'});
+    }
+
+    GetClipboardAsync(_params, invocation) {
+        St.Clipboard.get_default().get_text(
+            St.ClipboardType.CLIPBOARD,
+            (_clipboard, text) => invocation.return_value(
+                new GLib.Variant('(s)', [text ?? ''])
+            )
+        );
     }
 
     _trackWindow(window) {

@@ -263,12 +263,16 @@ def collect_real_action_evidence(steps: list[dict[str, Any]], env: dict[str, str
     )
     steps.append(clipboard_write)
     steps.append(
-        run_text_step(
+        run_json_step(
             "real_clipboard_content_observed",
-            ["wl-paste", "--no-newline"],
+            [
+                sys.executable,
+                "-c",
+                ("import json; from vibeos.clipboard import ClipboardAdapter; print(json.dumps(ClipboardAdapter().observe(), ensure_ascii=False))"),
+            ],
             env,
-            validator=lambda value: value == "VibeOS evidence",
-            timeout_seconds=10,
+            expected_status="observed",
+            validator=lambda value: value.get("text") == "VibeOS evidence" and value.get("adapter") == "org.vibeos.Shell.GetClipboard",
             category="real_action",
             depends_on=["real_clipboard_write"],
         )

@@ -72,6 +72,19 @@ class ClipboardAdapter:
         except (ImportError, OSError, RuntimeError, ValueError):
             return None
 
+    def observe(self) -> dict[str, str]:
+        if os.name != "posix":
+            return {"status": "unsupported", "error": "clipboard observation is only implemented for Linux sessions"}
+        if not os.environ.get("DBUS_SESSION_BUS_ADDRESS"):
+            return {"status": "unavailable", "error": "GNOME Shell session bus is unavailable"}
+        try:
+            result = asyncio.run(self._get_gnome_clipboard())
+        except (ImportError, OSError, RuntimeError, ValueError):
+            result = None
+        if result is None:
+            return {"status": "unavailable", "error": "GNOME Shell clipboard bridge is unavailable"}
+        return result
+
     @staticmethod
     async def _set_gnome_clipboard(text: str) -> dict[str, str] | None:
         from dbus_next import BusType, Message, MessageType
@@ -96,6 +109,33 @@ class ClipboardAdapter:
             if not isinstance(payload, dict) or payload.get("status") != "written":
                 return None
             return {"status": "written", "adapter": "org.vibeos.Shell.SetClipboard"}
+        finally:
+            if bus is not None:
+                bus.disconnect()
+
+    @staticmethod
+    async def _get_gnome_clipboard() -> dict[str, str] | None:
+        from dbus_next import BusType, Message, MessageType
+        from dbus_next.aio import MessageBus
+
+        bus: Any = None
+        try:
+            bus = await MessageBus(bus_type=BusType.SESSION).connect()
+            reply = await bus.call(
+                Message(
+                    destination="org.vibeos.Shell",
+                    path="/org/vibeos/Shell",
+                    interface="org.vibeos.Shell",
+                    member="GetClipboard",
+                )
+            )
+            if reply.message_type is MessageType.ERROR or len(reply.body) != 1 or not isinstance(reply.body[0], str):
+                return None
+            return {
+                "status": "observed",
+                "adapter": "org.vibeos.Shell.GetClipboard",
+                "text": reply.body[0],
+            }
         finally:
             if bus is not None:
                 bus.disconnect()
