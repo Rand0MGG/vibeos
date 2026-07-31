@@ -1,16 +1,16 @@
 # VibeOS current status
 
-Last verified: 2026-07-30. Goal 04 starts from frozen planning commit
+Last verified: 2026-07-31. Goal 04 starts from frozen planning commit
 `efe2267`. The 13 files under
 `.codex_vm_artifacts` remain committed Goal 03 evidence assets. Goal 04A has
 replaced the unreleased effect/observation contracts and converged canonical
 action-result ownership. Goal 04B's offline Gateway/SecretRef/process contract
 is implemented. Goal 04C's fixed systemd user-service slice, real worker-crash
 matrix and WSL systemd D-Bus evidence are implemented. The controlled real
-provider and Fedora GNOME VM gates remain explicitly not run. Review findings
-against the offline implementation were remediated on
-`codex/goal04-review-remediation`; this is an implementation candidate, not a
-claim that the external Goal 04 gates have passed.
+provider and Fedora GNOME VM gates passed on Fedora 44, GNOME Shell 50.2,
+Wayland. Review findings were remediated on
+`codex/goal04-review-remediation`; product revision `d6e7694` passed the
+external gates and `2e5de30` isolates pytest from live desktop configuration.
 
 ## Supported runtime
 
@@ -107,11 +107,10 @@ one-shot explicit environment migration are documented in the
 failure semantics and the threat model are in the
 [`Gateway boundary`](goal04_model_gateway_and_secret_boundary.md).
 
-Offline tests cover D0 success, 429/5xx/timeout/bad JSON/schema/budget/cancel/
+Tests cover D0 success, 429/5xx/timeout/bad JSON/schema/budget/cancel/
 unknown-delivery failures, locked-to-wait/unlock-to-resume, leak canary, strict
 route persistence and the real subprocess isolation probe. The controlled
-real-provider smoke remains `not run` until a user-owned credential is present;
-it is not claimed as passed.
+DeepSeek V4 Pro smoke passed through a user-owned SecretRef on 2026-07-31.
 
 `vibe secrets status` now calls Secret Service `SearchItems` over the session
 D-Bus and inspects only locked/unlocked item paths. It never invokes
@@ -148,18 +147,21 @@ independent observation found `active/running`, a live PID and the healthy log.
 The model side of that WSL run was the strict offline fixture because WSL has
 no `secret-tool` or user-owned provider route. See the
 [`Goal 04C acceptance report`](goal04_system_service_acceptance_2026-07-22.md).
-The 2026-07-30 remediation regression is `1072 passed in 113.13s`; Ruff formatting/lint,
+The final Fedora GNOME regression is `1075 passed in 39.40s`; Ruff formatting/lint,
 strict mypy over 67 source files and the architecture guard are green.
-The safe/offline VM evidence collector reports `overall: ok` with no failed or
-blocked steps. The direct session D-Bus script is contract-covered by tests but
-was not rerun because this WSL image lacks `dbus-run-session`.
+The real VM evidence collector reports `overall: ok` with no failed or blocked
+steps. It covered D-Bus and loopback HTTP, notification, GNOME Shell clipboard
+write/readback, browser open/observation, review flows, policy and audit.
 
-## Remaining external Goal 04 evidence
+## External Goal 04 evidence
 
-- run and record one controlled real-provider smoke with a user-owned SecretRef;
-- run and record Secret Service locked/unlocked plus the complete fixture path
-  in the Fedora GNOME VM. VMware execution was skipped at the user's request
-  for this pass and is not represented by WSL evidence.
+- Secret Service locked/unlocked behavior was exercised in the Fedora GNOME VM;
+  locked state prevented dispatch and expiry failed closed before resumption.
+- DeepSeek V4 Pro produced exactly one model result for the controlled fixture.
+- one bounded restart produced one proposal and one canonical receipt with the
+  same idempotency key; independent systemd verification passed.
+- the detailed evidence is in the
+  [`Goal 04C acceptance report`](goal04_system_service_acceptance_2026-07-22.md#2026-07-31-fedora-gnome-vm-external-acceptance).
 
 Existing compatibility debt owned by Goal 05:
 

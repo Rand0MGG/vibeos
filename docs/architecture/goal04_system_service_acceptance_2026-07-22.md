@@ -112,8 +112,9 @@ the action.
 
 ## Explicitly not accepted here
 
-The controlled real-provider smoke, GNOME Keyring locked/unlocked behavior and
-the complete Fedora GNOME VM fixture run are **not run**. The user requested
+At the time of this 2026-07-22 record, the controlled real-provider smoke,
+GNOME Keyring locked/unlocked behavior and the complete Fedora GNOME VM fixture
+run were **not run**. The user requested
 that VMware verification be skipped for this pass. An SSH attempt reached the
 VM but had no accepted public key; no password was placed in argv, environment,
 files or tool logs. These gates remain external follow-up evidence and are not
@@ -152,5 +153,36 @@ The direct `verify_foundation_dbus.py` entry could not be rerun in this WSL
 image because `dbus-run-session` is not installed; its v2 request/task-receipt
 logic is covered by `tests/test_goal04_acceptance_scripts.py`. The controlled
 real-provider smoke, GNOME Keyring locked/unlocked behavior and complete Fedora
-GNOME VM fixture remain explicitly **not run**, so Goal 04 is still not claimed
-as fully externally accepted.
+GNOME VM fixture remained explicitly **not run** in that remediation pass. They
+were completed in the follow-up below.
+
+## 2026-07-31 Fedora GNOME VM external acceptance
+
+The external gates were executed on Fedora 44, GNOME Shell 50.2, Wayland.
+Product revision `d6e7694` was installed from a verified archive; test follow-up
+`2e5de30` isolates pytest from live desktop D-Bus and provider configuration.
+
+The standard real collector wrote
+`/home/rand0mg/goal04-real-evidence-d6e7694/vibeos_vm_evidence_20260731T123509Z.json`
+and returned `overall: ok`, with no failed or blocked steps. Real actions
+included notification delivery, GNOME Shell clipboard write and independent
+readback, opening `https://example.com`, and observing its browser window. The
+run also validated D-Bus and loopback HTTP status, capabilities, applications,
+windows, review approve/reject flows, E4 rejection and audit output.
+
+The controlled provider/systemd task was
+`task_goal04_service_ea8e5e66774156c3296c`. DeepSeek V4 Pro diagnosed the fixed
+fixture as unhealthy and selected one bounded restart. Independent observation
+reported `loaded/active/running`, live PID `17097`, a healthy fixture log and no
+unresolved risk. Read-only audit inspection found exactly one model dispatch
+and result, one action proposal and receipt, and the same idempotency key on
+proposal and receipt. Transport was `openai-compatible-subprocess`, delivery
+was confirmed, persisted credential data was only the opaque `secret-service://`
+URI, and usage was 688 input, 127 output and 815 total tokens.
+
+The locked-keyring exercise returned metadata-only `locked`, prevented provider
+dispatch and left the fixture failed. After GNOME unlock, the expired waiting
+task terminated fail-closed with `task_deadline_elapsed`; a fresh task completed
+normally. Finally, the complete VM suite returned `1075 passed in 39.40s`.
+These results close the Goal 04 Fedora GNOME, Secret Service, real-provider and
+fixed systemd fixture gates.
