@@ -98,9 +98,11 @@ budgets. A scrubbed semantic subprocess has neither session bus nor secret-like
 environment names. A separate transport subprocess alone resolves an opaque
 SecretRef through `secret-tool` and calls the OpenAI-compatible HTTPS adapter.
 
-The old `provider_client` transport is disabled and no longer loads or sends
-environment credentials. Its callers remain as a ratcheted Goal 05 migration
-inventory and fail closed until they acquire typed Gateway purposes. The Linux
+The old direct HTTP implementation in `provider_client` remains removed and no
+longer loads or sends environment credentials. A post-Goal04 compatibility
+remediation now gives every existing semantic caller an explicit allowlisted
+purpose and sends its bounded JSON-object request through the same Gateway,
+scrubbed semantic worker, SecretRef route and narrow transport worker. The Linux
 user-service installer no longer injects `.env`. TTY import/status/delete and
 one-shot explicit environment migration are documented in the
 [`SecretRef runbook`](../operations/goal04_secretref_runbook.md); architecture,
@@ -109,7 +111,9 @@ failure semantics and the threat model are in the
 
 Tests cover D0 success, 429/5xx/timeout/bad JSON/schema/budget/cancel/
 unknown-delivery failures, locked-to-wait/unlock-to-resume, leak canary, strict
-route persistence and the real subprocess isolation probe. The controlled
+route persistence, the real subprocess isolation probe, the shared compatibility
+transport boundary, and a plain online `vibe ask` reaching the
+`goal_understanding` purpose. The controlled
 DeepSeek V4 Pro smoke passed through a user-owned SecretRef on 2026-07-31.
 
 `vibe secrets status` now calls Secret Service `SearchItems` over the session
@@ -165,8 +169,12 @@ write/readback, browser open/observation, review flows, policy and audit.
 
 Existing compatibility debt owned by Goal 05:
 
-- semantic modules retain the disabled `provider_client` import surface and
-  cannot use remote models until each purpose is migrated to Gateway v1.
+- semantic modules retain `provider_client` only as an authority-free facade;
+  its network path is now the existing Gateway v1, but the allowlisted generic
+  JSON-object contracts still need purpose-specific schemas and route/data
+  policy before the facade can be deleted;
+- multi-domain compound planning remains a Goal 05 capability gap. Restoring
+  provider reachability does not make the release-check compound task executable.
 
 Goal 05 must extend the Gateway/SecretRef/transport v1 contract delivered by
 04B rather than replace it.

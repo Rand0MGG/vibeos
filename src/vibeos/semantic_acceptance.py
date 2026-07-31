@@ -191,6 +191,7 @@ class OpenAICompatibleSemanticAcceptanceProvider(SemanticAcceptanceProvider):
                 system_prompt=SEMANTIC_SUMMARY_SYSTEM_PROMPT,
                 user_content=json.dumps(input_payload, ensure_ascii=False),
                 max_tokens=384,
+                purpose="semantic_acceptance",
             )
             parsed = response.parsed_object
             summary_text = parsed.get("summary_text")
@@ -254,6 +255,7 @@ class OpenAICompatibleSemanticAcceptanceProvider(SemanticAcceptanceProvider):
                 system_prompt=SEMANTIC_DECISION_SYSTEM_PROMPT,
                 user_content=json.dumps(request_payload, ensure_ascii=False),
                 max_tokens=256,
+                purpose="semantic_acceptance",
             )
             parsed = response.parsed_object
             decision = str(parsed.get("decision") or "").strip()

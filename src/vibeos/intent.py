@@ -274,6 +274,7 @@ class OpenAICompatibleIntentBroker(IntentBroker):
                 system_prompt=SYSTEM_PROMPT,
                 user_content=utterance,
                 max_tokens=512,
+                purpose="intent_parse",
             )
             content = json.dumps(response.parsed_object, ensure_ascii=False)
             parsed = parse_intent_json(content)
@@ -319,7 +320,7 @@ class OpenAICompatibleIntentBroker(IntentBroker):
                 actor="intent_broker",
             )
             return Intent.unknown("model provider timed out")
-        except (KeyError, IntentValidationError, json.JSONDecodeError) as exc:
+        except (KeyError, ValueError, IntentValidationError, json.JSONDecodeError) as exc:
             record_model_io(
                 phase="analysis",
                 provider=self.provider,

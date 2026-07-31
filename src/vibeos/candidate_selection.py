@@ -196,6 +196,7 @@ class OpenAICompatibleCandidateSelectionProvider(CandidateSelectionProvider):
                 system_prompt=ROUTE_SELECTION_SYSTEM_PROMPT,
                 user_content=json.dumps(request_payload, ensure_ascii=False),
                 max_tokens=384,
+                purpose="route_selection",
             )
             parsed = response.parsed_object
             allowed_actions = set(str(item) for item in request_payload["allowed_actions"])

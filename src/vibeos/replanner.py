@@ -139,6 +139,7 @@ class OpenAICompatibleReplanDecisionProvider(ReplanDecisionProvider):
                 system_prompt=REPLANNING_SYSTEM_PROMPT,
                 user_content=json.dumps(request_payload, ensure_ascii=False),
                 max_tokens=384,
+                purpose="replanning",
             )
             parsed = response.parsed_object
             selected_option_id = str(parsed.get("selected_option_id") or "").strip()

@@ -9,6 +9,7 @@ from typing import Callable
 
 from .apps import AppRegistry
 from .config import load_dotenv
+from .model_gateway.routes import route_preferences_from_environment, select_provider_route
 from .model_gateway.secrets import ProviderRouteRepository, SECRET_TOOL
 from .portal import PortalAdapter
 from .runtime import detect_runtime_entry
@@ -31,10 +32,12 @@ class SessionDoctor:
         runner: CommandRunner | None = None,
         apps: AppRegistry | None = None,
         portal: PortalAdapter | None = None,
+        route_repository: ProviderRouteRepository | None = None,
     ) -> None:
         self.runner = runner or run_command
         self.apps = apps or AppRegistry()
         self.portal = portal or PortalAdapter()
+        self.route_repository = route_repository or ProviderRouteRepository()
 
     def run(self) -> dict[str, object]:
         load_dotenv()
@@ -152,15 +155,37 @@ class SessionDoctor:
 
     def check_model_config(self) -> DoctorCheck:
         try:
-            routes = ProviderRouteRepository().list_routes()
+            routes = self.route_repository.list_routes()
         except (OSError, ValueError):
             return DoctorCheck("model_config", "warn", "Model Gateway route metadata is invalid", {"gateway_schema": "v1"})
         if routes and os.path.exists(SECRET_TOOL):
+            selected_route = select_provider_route(
+                route_preferences_from_environment(),
+                route_repository=self.route_repository,
+            )
+            if selected_route is None:
+                return DoctorCheck(
+                    "model_config",
+                    "fail",
+                    "Model Gateway routes exist, but ordinary agent model calls have no deterministic route; set VIBEOS_MODEL_ROUTE",
+                    {
+                        "gateway_schema": "v1",
+                        "routes": [route.route_id for route in routes],
+                        "selected_route": None,
+                        "required_purpose": "goal_understanding",
+                    },
+                )
             return DoctorCheck(
                 "model_config",
                 "ok",
-                "Model Gateway route metadata and Secret Service client are configured; use `vibe secrets status` to verify the keyring item",
-                {"gateway_schema": "v1", "routes": [route.route_id for route in routes], "secret_transport": "secret-tool"},
+                "ordinary agent model calls are routed through Model Gateway; use `vibe secrets status` to verify the keyring item",
+                {
+                    "gateway_schema": "v1",
+                    "routes": [route.route_id for route in routes],
+                    "selected_route": selected_route.route_id,
+                    "required_purpose": "goal_understanding",
+                    "secret_transport": "secret-tool",
+                },
             )
         return DoctorCheck(
             "model_config",

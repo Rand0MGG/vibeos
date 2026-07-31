@@ -19,6 +19,8 @@ from vibeos.model_gateway.contracts import (
     CancellationBinding,
     FailureCode,
     GatewayResult,
+    JsonObjectModelRequest,
+    JsonObjectSemanticWorkerInvocation,
     ModelBudget,
     ModelUsage,
     ProviderRoute,
@@ -29,6 +31,7 @@ from vibeos.model_gateway.contracts import (
     ServiceDiagnosis,
     TaskAttemptBinding,
     TransportEnvelope,
+    build_json_object_model_request,
     build_model_request,
     facts_digest,
 )
@@ -194,6 +197,37 @@ def test_openai_transport_returns_strict_response_without_leaking_secret() -> No
     assert LEAK_CANARY not in result.model_dump_json()
     assert LEAK_CANARY not in request.model_dump_json()
     assert LEAK_CANARY not in _route().model_dump_json()
+
+
+def test_json_compatibility_transport_uses_same_secret_boundary_and_explicit_purpose() -> None:
+    request = JsonObjectModelRequest(
+        request_id="request-goal-understanding-1",
+        purpose="goal_understanding",
+        binding=_binding(),
+        system_prompt="Return one JSON object.",
+        user_content="Classify this request.",
+        temperature=0,
+        budget=_budget(),
+        cancellation=CancellationBinding(token_id="cancel-goal-understanding-1"),
+    )
+    response_payload = {
+        "id": "provider-request-understanding",
+        "choices": [{"message": {"content": json.dumps({"type": "chat", "confidence": 0.9})}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+    client = FakeHttpClient(ProviderHttpResponse(status=200, headers={}, body=json.dumps(response_payload).encode()))
+
+    result = OpenAICompatibleTransport(FakeSecretStore(), client).execute_json_object(_route(), request)
+
+    assert result.status == "succeeded"
+    assert result.response is not None
+    assert result.response.parsed_object == {"type": "chat", "confidence": 0.9}
+    headers = client.calls[0]["headers"]
+    assert isinstance(headers, dict)
+    assert headers["X-VibeOS-Purpose"] == "goal_understanding"
+    assert headers["Idempotency-Key"] == request.request_id
+    assert LEAK_CANARY.encode() not in client.calls[0]["body"]
+    assert LEAK_CANARY not in result.model_dump_json()
 
 
 @pytest.mark.parametrize(
@@ -377,6 +411,65 @@ def test_gateway_uses_semantic_and_transport_process_contracts() -> None:
         request_id=request.request_id,
     )
     assert result.status == "succeeded"
+    assert calls == ["vibeos.model_gateway.semantic_worker", "vibeos.model_gateway.transport_worker"]
+
+
+def test_json_compatibility_gateway_uses_the_same_two_worker_boundaries() -> None:
+    calls: list[str] = []
+    parsed_object = {"type": "chat", "confidence": 0.9, "domains": [], "explanation": "chat", "chat_response": "hello"}
+
+    def runner(argv: list[str], payload: str, environment: dict[str, str], timeout: float) -> subprocess.CompletedProcess[str]:
+        module = argv[-1]
+        calls.append(module)
+        if module.endswith("semantic_worker"):
+            invocation = JsonObjectSemanticWorkerInvocation.model_validate_json(payload)
+            output = {
+                "schema_version": "v1",
+                "request": build_json_object_model_request(invocation).model_dump(mode="json"),
+                "worker_pid": 301,
+                "session_bus_present": False,
+                "secret_environment_present": False,
+            }
+            return subprocess.CompletedProcess(argv, 0, json.dumps(output), "")
+        response = {
+            "schema_version": "v1",
+            "status": "succeeded",
+            "response": {
+                "schema_version": "v1",
+                "request_id": "request-goal-understanding-gateway",
+                "binding": _binding().model_dump(mode="json"),
+                "request_payload": {"model": _route().model},
+                "response_payload": {"id": "provider-understanding-1"},
+                "parsed_object": parsed_object,
+                "usage": ModelUsage(input_tokens=2, output_tokens=1, total_tokens=3).model_dump(mode="json"),
+                "receipt": RedactedTransportReceipt(
+                    route_id=_route().route_id,
+                    provider_request_id="provider-understanding-1",
+                    delivery="confirmed",
+                    transport_pid=302,
+                    secret_ref_uri=_route().secret_ref.uri,
+                    secret_resolved=True,
+                ).model_dump(mode="json"),
+            },
+            "failure": None,
+        }
+        return subprocess.CompletedProcess(argv, 0, json.dumps(response), "")
+
+    result = ModelGateway(runner).request_json_object(
+        route=_route(),
+        binding=_binding(),
+        purpose="goal_understanding",
+        system_prompt="Return one JSON object.",
+        user_content="hello",
+        temperature=0,
+        budget=_budget(),
+        cancellation=CancellationBinding(token_id="cancel-goal-understanding-gateway"),
+        request_id="request-goal-understanding-gateway",
+    )
+
+    assert result.status == "succeeded"
+    assert result.response is not None
+    assert result.response.parsed_object == parsed_object
     assert calls == ["vibeos.model_gateway.semantic_worker", "vibeos.model_gateway.transport_worker"]
 
 

@@ -201,6 +201,7 @@ class OpenAICompatibleStrategySelectionProvider(StrategySelectionProvider):
                 system_prompt=STRATEGY_SELECTION_SYSTEM_PROMPT,
                 user_content=json.dumps(request_payload, ensure_ascii=False),
                 max_tokens=384,
+                purpose="strategy_selection",
             )
             decision = parse_strategy_selection_response(
                 json.dumps(response.parsed_object, ensure_ascii=False),

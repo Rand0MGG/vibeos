@@ -68,6 +68,7 @@ class OpenAICompatibleGoalSynthesisProvider(GoalSynthesisProvider):
                 system_prompt=GOAL_SYNTHESIS_SYSTEM_PROMPT,
                 user_content=json.dumps(request_payload, ensure_ascii=False),
                 max_tokens=768,
+                purpose="goal_synthesis",
             )
             parsed = response.parsed_object
             validated = validate_goal_synthesis_payload(parsed, host_hint=host_hint)

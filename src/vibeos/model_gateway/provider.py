@@ -16,14 +16,16 @@ from .contracts import (
     FailureCode,
     GatewayFailure,
     GatewayResult,
+    JsonObjectGatewayResult,
+    JsonObjectModelRequest,
+    JsonObjectModelResponse,
     ModelRequest,
     ModelResponse,
-    ModelUsage,
     ProviderRoute,
     RedactedTransportReceipt,
-    ServiceDiagnosis,
     validate_service_diagnosis,
 )
+from .provider_payloads import classify_provider_status, json_object_request_payload, parse_json_object_response, parse_service_response, service_request_body
 from .secrets import SecretNotFound, SecretStore, SecretStoreError, SecretStoreLocked
 
 
@@ -81,7 +83,7 @@ class OpenAICompatibleTransport:
             return self._failure(route, request, FailureCode.TRANSPORT_ERROR, "Secret Service operation failed", retryable=True)
 
         try:
-            body = self._request_body(route, request)
+            body = service_request_body(route, request)
             elapsed = monotonic() - started
             remaining = request.budget.total_budget_seconds - elapsed
             if remaining <= 0:
@@ -139,7 +141,7 @@ class OpenAICompatibleTransport:
                 route, request, FailureCode.INVALID_JSON, "provider returned invalid JSON", retryable=False, delivery="confirmed", secret_resolved=True
             )
         try:
-            diagnosis, usage, provider_request_id = self._parse_response(payload)
+            diagnosis, usage, provider_request_id = parse_service_response(payload)
             validate_service_diagnosis(request, diagnosis)
         except json.JSONDecodeError:
             return self._failure(
@@ -175,65 +177,143 @@ class OpenAICompatibleTransport:
         )
         return GatewayResult(status="succeeded", response=model_response)
 
-    @staticmethod
-    def _request_body(route: ProviderRoute, request: ModelRequest) -> bytes:
-        facts = request.context.items[0]
-        system_prompt = (
-            "Diagnose only the fixed VibeOS systemd user-service fixture. Return one JSON object matching service_diagnosis/v1. "
-            "Return JSON only, without Markdown fences or explanatory text. Do not invent units or arguments. "
-            "action must be start, restart, or none; effect_level is E1 for start/restart and E0 for none."
-        )
-        response_example = {
-            "schema_version": "v1",
-            "diagnosis": "The fixed fixture is unhealthy and requires a bounded restart.",
-            "confidence": 0.95,
-            "proposal": {
-                "action": "restart",
-                "unit": "vibeos-goal04-fixture.service",
-                "arguments": [],
-                "effect_level": "E1",
-                "fact_digest": facts.sha256,
-            },
-        }
-        content = {
-            "operation": request.operation,
-            "response_schema": request.response_schema.model_dump(mode="json"),
-            "json_output_example": response_example,
-            "fact_digest": facts.sha256,
-            "service_facts": facts.payload.model_dump(mode="json"),
-        }
-        payload = {
-            "model": route.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(content, ensure_ascii=False, sort_keys=True)},
-            ],
-            "temperature": 0,
-            "thinking": {"type": "disabled"},
-            "response_format": {"type": "json_object"},
-            "max_tokens": request.budget.max_output_tokens,
-        }
-        return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    def execute_json_object(self, route: ProviderRoute, request: JsonObjectModelRequest) -> JsonObjectGatewayResult:
+        """Execute one allowlisted compatibility purpose inside the secret process."""
 
-    @staticmethod
-    def _parse_response(payload: object) -> tuple[ServiceDiagnosis, ModelUsage, str | None]:
-        if not isinstance(payload, dict):
-            raise ValueError("response is not an object")
-        content = payload["choices"][0]["message"]["content"]
-        if not isinstance(content, str):
-            raise ValueError("provider response content is invalid")
-        json.loads(content)
-        diagnosis = ServiceDiagnosis.model_validate_json(content)
-        usage_payload = payload["usage"]
-        usage = ModelUsage(
-            input_tokens=usage_payload["prompt_tokens"],
-            output_tokens=usage_payload["completion_tokens"],
-            total_tokens=usage_payload["total_tokens"],
+        started = monotonic()
+        if request.cancellation.requested:
+            return self._json_failure(route, request, FailureCode.CANCELLED, "model request was cancelled", retryable=False)
+        try:
+            secret = self.secret_store.resolve(route.secret_ref)
+        except SecretStoreLocked:
+            return self._json_failure(
+                route,
+                request,
+                FailureCode.KEYRING_LOCKED,
+                "provider credential is waiting for the session keyring to be unlocked",
+                retryable=True,
+                status="waiting",
+                wait_event_key=f"secret-service:unlocked:{route.secret_ref.secret_id}",
+            )
+        except SecretNotFound:
+            return self._json_failure(
+                route,
+                request,
+                FailureCode.SECRET_NOT_FOUND,
+                "provider credential reference is not available",
+                retryable=False,
+            )
+        except SecretStoreError:
+            return self._json_failure(
+                route,
+                request,
+                FailureCode.TRANSPORT_ERROR,
+                "Secret Service operation failed",
+                retryable=True,
+            )
+
+        request_payload = json_object_request_payload(route, request)
+        try:
+            elapsed = monotonic() - started
+            remaining = request.budget.total_budget_seconds - elapsed
+            if remaining <= 0:
+                return self._json_failure(
+                    route,
+                    request,
+                    FailureCode.BUDGET_EXHAUSTED,
+                    "model request budget was exhausted",
+                    retryable=False,
+                    secret_resolved=True,
+                )
+            response = self.http_client.post(
+                url=f"{route.base_url.rstrip('/')}/chat/completions",
+                body=json.dumps(request_payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {secret}",
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": request.request_id,
+                    "X-VibeOS-Request-Id": request.request_id,
+                    "X-VibeOS-Purpose": request.purpose,
+                },
+                timeout=min(request.budget.timeout_seconds, remaining),
+            )
+        except (TimeoutError, socket.timeout):
+            return self._json_failure(
+                route,
+                request,
+                FailureCode.PROVIDER_TIMEOUT,
+                "provider request timed out",
+                retryable=True,
+                delivery="unknown",
+                secret_resolved=True,
+            )
+        except (urllib.error.URLError, OSError):
+            return self._json_failure(
+                route,
+                request,
+                FailureCode.UNKNOWN_DELIVERY,
+                "provider delivery outcome is unknown; reconciliation is required",
+                retryable=False,
+                delivery="unknown",
+                secret_resolved=True,
+            )
+        finally:
+            secret = ""
+
+        status_failure = classify_provider_status(response.status)
+        if status_failure is not None:
+            code, message, retryable = status_failure
+            return self._json_failure(
+                route,
+                request,
+                code,
+                message,
+                retryable=retryable,
+                delivery="confirmed",
+                secret_resolved=True,
+            )
+        try:
+            response_payload, parsed_object, usage, provider_request_id = parse_json_object_response(response.body)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return self._json_failure(
+                route,
+                request,
+                FailureCode.INVALID_JSON,
+                "provider returned invalid JSON",
+                retryable=False,
+                delivery="confirmed",
+                secret_resolved=True,
+            )
+        except (KeyError, IndexError, TypeError, ValueError, ValidationError):
+            return self._json_failure(
+                route,
+                request,
+                FailureCode.SCHEMA_MISMATCH,
+                "provider response did not match the JSON object contract",
+                retryable=False,
+                delivery="confirmed",
+                secret_resolved=True,
+            )
+        if usage.total_tokens > request.budget.max_total_tokens or usage.output_tokens > request.budget.max_output_tokens:
+            return self._json_failure(
+                route,
+                request,
+                FailureCode.BUDGET_EXHAUSTED,
+                "provider response exceeded the bound token budget",
+                retryable=False,
+                delivery="confirmed",
+                secret_resolved=True,
+            )
+        model_response = JsonObjectModelResponse(
+            request_id=request.request_id,
+            binding=request.binding,
+            request_payload=request_payload,
+            response_payload=response_payload,
+            parsed_object=parsed_object,
+            usage=usage,
+            receipt=self._receipt(route, provider_request_id=provider_request_id, delivery="confirmed", secret_resolved=True),
         )
-        response_id = payload.get("id")
-        if response_id is not None and not isinstance(response_id, str):
-            raise ValueError("provider response id is invalid")
-        return diagnosis, usage, response_id
+        return JsonObjectGatewayResult(status="succeeded", response=model_response)
 
     @staticmethod
     def _receipt(
@@ -277,3 +357,28 @@ class OpenAICompatibleTransport:
             receipt=receipt,
         )
         return GatewayResult(status=status, failure=failure)
+
+    def _json_failure(
+        self,
+        route: ProviderRoute,
+        request: JsonObjectModelRequest,
+        code: FailureCode,
+        message: str,
+        *,
+        retryable: bool,
+        delivery: DeliveryState = "not_sent",
+        status: Literal["failed", "waiting"] = "failed",
+        wait_event_key: str | None = None,
+        secret_resolved: bool = False,
+    ) -> JsonObjectGatewayResult:
+        failure = GatewayFailure(
+            request_id=request.request_id,
+            binding=request.binding,
+            code=code,
+            retryable=retryable,
+            delivery=delivery,
+            safe_message=message,
+            wait_event_key=wait_event_key,
+            receipt=self._receipt(route, delivery=delivery, secret_resolved=secret_resolved),
+        )
+        return JsonObjectGatewayResult(status=status, failure=failure)

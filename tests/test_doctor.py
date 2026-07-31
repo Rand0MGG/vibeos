@@ -1,6 +1,8 @@
 import subprocess
 
 from vibeos.doctor import DoctorCheck, SessionDoctor, summarize
+from vibeos.model_gateway.contracts import ProviderRoute, SecretRef
+from vibeos.model_gateway.secrets import ProviderRouteRepository
 
 
 class FakeApps:
@@ -59,6 +61,58 @@ def test_missing_model_key_reports_explicit_offline_fallback(monkeypatch) -> Non
 
     assert check.status == "warn"
     assert "use --offline" in check.message
+
+
+def test_model_config_confirms_plain_agent_gateway_route(tmp_path, monkeypatch) -> None:
+    repository = ProviderRouteRepository(tmp_path / "routes.json")
+    route = ProviderRoute(
+        route_id="agent-primary",
+        model="deepseek-v4-pro",
+        base_url="https://api.deepseek.com",
+        secret_ref=SecretRef(secret_id="agent-primary", provider="openai-compatible"),
+    )
+    repository.save(route)
+    monkeypatch.setenv("VIBEOS_MODEL_PROVIDER", "deepseek")
+    monkeypatch.setenv("DEEPSEEK_MODEL", route.model)
+    monkeypatch.setattr("vibeos.doctor.os.path.exists", lambda _path: True)
+
+    check = SessionDoctor(
+        runner=fake_runner,
+        apps=FakeApps(),
+        portal=FakePortal(),
+        route_repository=repository,
+    ).check_model_config()
+
+    assert check.status == "ok"
+    assert check.detail is not None
+    assert check.detail["selected_route"] == route.route_id
+    assert check.detail["required_purpose"] == "goal_understanding"
+
+
+def test_model_config_fails_when_multiple_routes_are_ambiguous(tmp_path, monkeypatch) -> None:
+    repository = ProviderRouteRepository(tmp_path / "routes.json")
+    for route_id, model in (("route-a", "model-a"), ("route-b", "model-b")):
+        repository.save(
+            ProviderRoute(
+                route_id=route_id,
+                model=model,
+                base_url=f"https://{route_id}.invalid/v1",
+                secret_ref=SecretRef(secret_id=route_id, provider="openai-compatible"),
+            )
+        )
+    monkeypatch.setenv("VIBEOS_MODEL_PROVIDER", "openai-compatible")
+    monkeypatch.delenv("VIBEOS_MODEL_ROUTE", raising=False)
+    monkeypatch.setattr("vibeos.doctor.os.path.exists", lambda _path: True)
+
+    check = SessionDoctor(
+        runner=fake_runner,
+        apps=FakeApps(),
+        portal=FakePortal(),
+        route_repository=repository,
+    ).check_model_config()
+
+    assert check.status == "fail"
+    assert "deterministic route" in check.message
 
 
 def test_missing_gdbus_is_warning_off_linux(monkeypatch) -> None:
