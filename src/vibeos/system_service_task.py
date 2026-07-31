@@ -26,9 +26,9 @@ from .planning_service import PlanningService
 from .system_service_contracts import FIXTURE_UNIT, ServiceFactsV2
 from .system_service_provider import ServiceProviderError
 from .system_service_reconciliation import SystemServiceActionReconciler
-from .system_service_task_support import FIXED_SERVICE_GOAL, FIXED_SERVICE_GOAL_EN, SCENARIO_SCOPE, SystemServiceEvidenceLedger, SystemServiceTaskResult
-from .system_service_task_support import build_system_service_planning, facts_fresh, is_goal04_contract, observe_for_verification, validate_initial_facts
-from .task_validation import validate_plan
+from .system_service_task_support import FIXED_SERVICE_GOAL, FIXED_SERVICE_GOAL_EN, SCENARIO_SCOPE, SystemServiceEvidenceLedger, SystemServiceRecoveryGuard
+from .system_service_task_support import SystemServiceTaskResult, build_system_service_planning, commit_system_service_verification, facts_fresh
+from .system_service_task_support import is_goal04_contract, observe_for_verification, system_service_plan_is_valid, validate_initial_facts
 
 
 class ServiceDiagnosisGateway(Protocol):
@@ -68,6 +68,7 @@ class SystemServiceTaskService:
         self.checkpoint = checkpoint or (lambda _stage: None)
         self.lease_seconds = lease_seconds
         self.evidence = SystemServiceEvidenceLedger(repository)
+        self.recovery = SystemServiceRecoveryGuard(repository, self.evidence)
         self.action_executor = DurableActionExecutor(
             repository,
             engine.execution,
@@ -127,6 +128,9 @@ class SystemServiceTaskService:
         if lease is None:
             return self._result(state)
         try:
+            expired = self.recovery.expire_if_overdue(state, lease)
+            if expired is not None:
+                return self._result(expired)
             if state.status is TaskStatus.WAITING:
                 if not keyring_unlocked or not state.wait_event_key:
                     self.checkpoint("while_waiting")
@@ -160,10 +164,16 @@ class SystemServiceTaskService:
     def _drive(self, state: TaskRun, route: ProviderRoute, run_id: str, lease: TaskLease) -> SystemServiceTaskResult:
         if state.status in TERMINAL_STATUSES or state.status in {TaskStatus.PAUSED, TaskStatus.AWAITING_CLARIFICATION, TaskStatus.WAITING}:
             return self._result(state)
+        expired = self.recovery.expire_if_overdue(state, lease)
+        if expired is not None:
+            return self._result(expired)
         if state.status is TaskStatus.PLANNING:
             state = self._plan(state, route, lease)
             if state.status is not TaskStatus.READY:
                 return self._result(state)
+        expired = self.recovery.expire_if_overdue(state, lease)
+        if expired is not None:
+            return self._result(expired)
         planning = load_planning(state, self.repository, self.planning)
         if planning is None or planning.plan is None:
             state = self._fail(state, lease, "persisted system-service plan is missing", "plan_missing")
@@ -231,13 +241,37 @@ class SystemServiceTaskService:
         self.checkpoint("after_context_manifest")
         diagnosis = self.evidence.diagnosis_for_digest(state.task_id, digest)
         if diagnosis is None:
+            unresolved = self.evidence.unresolved_model_dispatch(state.task_id, digest)
+            if unresolved is not None:
+                return self.recovery.pause_unknown_model_delivery(state, lease, unresolved)
             self.checkpoint("before_model_call")
             request_id = stable_id("modelreq_goal04_service", state.task_id, digest)
+            dispatch_evidence = self.evidence.make(
+                state,
+                "model_request_dispatched",
+                {"fact_digest": digest, "request_id": request_id, "route_id": route.route_id},
+                "model request dispatch recorded before provider invocation",
+            )
+            state = self.repository.commit(
+                transition(state, event(state, TaskEventType.FACTS_CAPTURED, reason="model request dispatch durably recorded")),
+                evidence=dispatch_evidence,
+                lease=lease,
+            )
+            self.checkpoint("after_model_dispatch_commit")
+            remaining = self.recovery.deadline_remaining_seconds(state)
+            if remaining <= 0:
+                return self.recovery.timeout(state, lease)
+            total_budget = min(30.0, remaining)
             gateway_result = self.gateway.diagnose_service(
                 route=route,
                 binding=TaskAttemptBinding(task_id=state.task_id, attempt_id=stable_id("modelattempt", request_id), attempt_number=1),
                 facts=facts,
-                budget=ModelBudget(timeout_seconds=20.0, total_budget_seconds=30.0, max_output_tokens=500, max_total_tokens=4096),
+                budget=ModelBudget(
+                    timeout_seconds=min(20.0, total_budget),
+                    total_budget_seconds=total_budget,
+                    max_output_tokens=500,
+                    max_total_tokens=4096,
+                ),
                 cancellation=CancellationBinding(token_id=stable_id("cancel", request_id)),
                 request_id=request_id,
             )
@@ -246,7 +280,11 @@ class SystemServiceTaskService:
                 evidence = self.evidence.make(
                     state,
                     "model_failure",
-                    gateway_result.failure.model_dump(mode="json"),
+                    {
+                        "fact_digest": digest,
+                        "dispatch_evidence_id": dispatch_evidence.evidence_id,
+                        **gateway_result.failure.model_dump(mode="json"),
+                    },
                     gateway_result.failure.safe_message,
                 )
                 state = self.repository.commit(
@@ -278,6 +316,8 @@ class SystemServiceTaskService:
                 "model_result",
                 {
                     "fact_digest": digest,
+                    "request_id": request_id,
+                    "dispatch_evidence_id": dispatch_evidence.evidence_id,
                     "diagnosis": diagnosis.model_dump(mode="json"),
                     "usage": gateway_result.response.usage.model_dump(mode="json"),
                     "receipt": gateway_result.response.receipt.model_dump(mode="json"),
@@ -290,11 +330,13 @@ class SystemServiceTaskService:
                 lease=lease,
             )
             self.checkpoint("after_typed_proposal_commit")
+            expired = self.recovery.expire_if_overdue(state, lease)
+            if expired is not None:
+                return expired
         if diagnosis.proposal.action == "none":
             return self._fail(state, lease, "model proposed no bounded recovery for an unhealthy fixture", "recovery_not_proposed")
         artifacts = build_system_service_planning(state, diagnosis, FIXED_SERVICE_GOAL)
-        validation = validate_plan(artifacts.plan) if artifacts.plan is not None else None
-        if validation is None or not validation.ok:
+        if not system_service_plan_is_valid(artifacts.plan):
             return self._fail(state, lease, "typed system-service plan failed deterministic validation", "plan_invalid")
         return self.engine.plans.accept(state, artifacts, lease=lease)
 
@@ -303,54 +345,7 @@ class SystemServiceTaskService:
             facts, healthy = observe_for_verification(self.observation)
         except ServiceProviderError as exc:
             return self._fail(state, lease, str(exc), exc.code)
-        evidence = self.evidence.make(
-            state,
-            "independent_verification",
-            {"facts": facts.model_dump(mode="json"), "healthy": healthy, "controller_state_used": False},
-            "independent systemd verification passed" if healthy else "independent systemd verification failed",
-        )
-        diagnosis = self.evidence.latest_diagnosis(state.task_id)
-        action = diagnosis.proposal.action if diagnosis is not None else None
-        current = f"{facts.load_state}/{facts.active_state}/{facts.sub_state}/pid={facts.process.main_pid}"
-        if not healthy:
-            return self.repository.commit(
-                transition(
-                    state,
-                    event(
-                        state,
-                        TaskEventType.FAIL,
-                        reason="one bounded recovery did not reach the defined healthy state",
-                        evidence_ids=(*self.evidence.ids(state.task_id), evidence.evidence_id),
-                        diagnosis=diagnosis.diagnosis if diagnosis is not None else None,
-                        action=action,
-                        current_state=current,
-                        completion_judgment="failed independent verification",
-                        unresolved_risks=("fixture remains unhealthy",),
-                    ),
-                ),
-                evidence=evidence,
-                lease=lease,
-            )
-        return self.repository.commit(
-            transition(
-                state,
-                event(
-                    state,
-                    TaskEventType.VERIFICATION_PASSED,
-                    step_id=state.current_step_id,
-                    terminal_status=TaskStatus.SUCCEEDED,
-                    reason="fixed fixture recovery independently verified",
-                    evidence_ids=(*self.evidence.ids(state.task_id), evidence.evidence_id),
-                    diagnosis=diagnosis.diagnosis if diagnosis is not None else None,
-                    action=action,
-                    current_state=current,
-                    completion_judgment="active/running with a live main process and healthy fixture log",
-                    unresolved_risks=(),
-                ),
-            ),
-            evidence=evidence,
-            lease=lease,
-        )
+        return commit_system_service_verification(self.repository, self.evidence, state, lease, facts, healthy)
 
     def _fail(self, state: TaskRun, lease: TaskLease, message: str, code: str) -> TaskRun:
         evidence = self.evidence.make(state, "failure", {"code": code, "message": message}, message)

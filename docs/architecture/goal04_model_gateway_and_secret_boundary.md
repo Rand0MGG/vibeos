@@ -1,18 +1,19 @@
 # Goal 04 Model Gateway v1 and SecretRef boundary
 
-Last updated: 2026-07-22.
+Last updated: 2026-07-31.
 
 ## Authority and process topology
 
 `vibeos.model_gateway.ModelGateway` is the only production model-call authority
-introduced by Goal 04. Its v1 contracts bind one request to a task and attempt,
-one D0 context item, an explicit timeout/total/token budget, cancellation token,
-purpose, operation and strict response schema.
+introduced by Goal 04. Its v1 contracts bind each request to a task/run and
+attempt, an explicit timeout/total/token budget, cancellation token, allowlisted
+purpose, operation and response contract. The fixed service request additionally
+binds exactly one D0 context item and its strict domain schema.
 
 ```text
 Core / Durable Task
   -> semantic_worker subprocess (scrubbed environment, no session bus)
-  -> ModelRequest v1 + opaque SecretRef + provider route metadata
+  -> ModelRequest v1 or bounded compatibility request + opaque SecretRef route
   -> transport_worker subprocess (session bus allowed)
   -> secret-tool / freedesktop Secret Service, just-in-time resolve
   -> OpenAI-compatible HTTPS adapter
@@ -49,18 +50,24 @@ results. A locked keyring is a durable `WAITING` condition keyed by
 `secret-service:unlocked:<secret-id>`; the matching unlock event resumes the
 same task state.
 
-## Legacy provider-call inventory
+## Compatibility remediation and remaining inventory
 
-The old direct HTTP implementation is disabled: it no longer reads credentials
-or sends provider requests. Its import surface remains temporarily so the
-following semantic callers fail closed without a big-bang rewrite.
+The old direct HTTP implementation remains deleted: it neither reads
+credentials nor sends provider requests. On 2026-07-31 the retained
+`provider_client` surface was converted into an authority-free facade over this
+same Gateway after ordinary `vibe ask` was found to have no live provider path.
+Every caller supplies an allowlisted purpose; route selection is deterministic
+(`VIBEOS_MODEL_ROUTE`, one exact metadata match, or one configured route), and
+ambiguous route sets fail closed. The semantic worker still has no session bus
+or secret environment, and only the existing transport worker resolves the
+SecretRef.
 
-| Callers | Current owner | Goal 05 deletion gate |
+| Callers | Gateway compatibility purpose | Goal 05 deletion gate |
 | --- | --- | --- |
-| `intent.py`, `understanding.py`, `clarification.py` | understanding migration | Each purpose has a typed Gateway v1 schema and recorded route policy. |
-| `goal_synthesizer.py`, `candidate_selection.py`, `strategy.py`, `replanner.py` | planning migration | Each purpose uses task/attempt binding, total budget, cancellation and strict result validation. |
-| `semantic_acceptance.py` | acceptance migration | Acceptance input/output is typed and model output remains non-authoritative. |
-| `command_service.py`, `daemon.py` | budget compatibility | All migrated purposes use Gateway budget authority; the old context manager can then be deleted. |
+| `intent.py`, `understanding.py`, `clarification.py` | `intent_parse`, `goal_understanding`, `understanding_transition`, `clarification` | Replace the bounded JSON-object compatibility response with purpose-specific schemas and data policy. |
+| `goal_synthesizer.py`, `candidate_selection.py`, `strategy.py`, `replanner.py` | `goal_synthesis`, `route_selection`, `strategy_selection`, `replanning` | Add purpose-specific schemas/route policy, then delete the facade calls. |
+| `semantic_acceptance.py` | `semantic_acceptance` | Type summary/decision separately and retain non-authoritative validation. |
+| `command_service.py`, `daemon.py` | shared command budget | Replace the compatibility context with native Gateway task/attempt/deadline bindings. |
 
 `architecture_guard.py` rejects any new `provider_client` caller outside this
 inventory and rejects provider authorization material outside the Gateway
@@ -71,6 +78,9 @@ transport adapter.
 Offline acceptance covers synthetic D0 facts, strict success, every required
 failure class, locked/unlocked durable transitions, leak canary, secret-tool
 stdin/argv handling, route persistence and a real semantic subprocess without
-session bus or secret environment. A controlled real-provider smoke is a
-separate environment gate and must not be reported as passed unless a user
-credential is present in the session Secret Service.
+session bus or secret environment. The compatibility remediation adds a shared
+transport/leak test and a production-shaped plain `vibe ask` test proving that
+`goal_understanding` reaches Gateway. The dedicated controlled DeepSeek V4 Pro
+service smoke passed with a user-owned SecretRef; the compatibility purposes
+still require a fresh real-provider VM smoke before that extension is considered
+externally accepted.

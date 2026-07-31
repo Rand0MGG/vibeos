@@ -8,7 +8,7 @@ import pytest
 from alembic import command
 from pydantic import ValidationError
 
-from vibeos.capabilities import capability_payload
+from vibeos.capabilities import capability_payload, effect_policy_summary
 from vibeos.core.adapters.contracts import StatusRequestV2
 from vibeos.core.adapters.database import CoreDatabase
 from vibeos.core.adapters.task_repository import SqliteTaskRepository
@@ -21,6 +21,12 @@ def test_0006_migrates_resumable_json_and_preserves_terminal_v1_bytes(tmp_path: 
     terminal_payload = _task_payload("terminal", "succeeded", timestamp, terminal=True)
     terminal_raw = json.dumps(terminal_payload, separators=(",", ":"))
     active_payload = _task_payload("active", "ready", timestamp)
+    active_payload["permission_policy"] = {
+        "L0": "automatic observe-only",
+        "L1": "automatic low-risk action with audit",
+        "L2": "requires stored review approval",
+        "L3": "rejected",
+    }
     plan_payload = {
         "schema_version": "v1",
         "plan": {
@@ -74,6 +80,7 @@ def test_0006_migrates_resumable_json_and_preserves_terminal_v1_bytes(tmp_path: 
     assert terminal_after == ("v1", terminal_raw)
     assert active_after[0] == "v2"
     assert json.loads(active_after[1])["schema_version"] == "v2"
+    assert json.loads(active_after[1])["effect_policy"] == effect_policy_summary()
     assert plan_after["plan"]["steps"][0]["effect_level"] == "E1"
     assert plan_after["plan"]["steps"][0]["schema_version"] == "v2"
     assert plan_after["observation"]["level"] == "O1"
@@ -106,6 +113,30 @@ def test_0006_pauses_unbound_legacy_effect_for_manual_disposition(tmp_path: Path
     assert state is not None
     assert state.status.value == "paused"
     assert "manual effect disposition" in (state.pending_reason or "")
+
+
+def test_0007_repairs_policy_summary_written_by_original_0006(tmp_path: Path) -> None:
+    database = CoreDatabase(tmp_path / "broken-policy.sqlite3")
+    command.upgrade(database._alembic_config(), "0006_effect_contract_v2")
+    timestamp = "2099-01-01T00:00:00.000Z"
+    payload = _task_payload("broken-policy", "ready", timestamp)
+    payload["schema_version"] = "v2"
+    payload["effect_policy"] = {
+        "E0": "automatic observe-only",
+        "E1": "automatic low-risk action with audit",
+        "E2": "requires stored review approval",
+        "E3": "rejected",
+    }
+    with sqlite3.connect(database.path) as connection:
+        _insert_task_family(connection, "broken-policy", "ready", json.dumps(payload), timestamp)
+
+    database.upgrade()
+
+    with sqlite3.connect(database.path) as connection:
+        repaired = json.loads(connection.execute("SELECT payload_json FROM task_runs WHERE task_id='broken-policy'").fetchone()[0])
+        revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+    assert repaired["effect_policy"] == effect_policy_summary()
+    assert revision == "0007_repair_effect_policy_summary"
 
 
 def test_v2_contracts_and_fixed_service_action_fail_closed() -> None:

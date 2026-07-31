@@ -109,7 +109,7 @@ def test_command_transport_ok_requires_transport() -> None:
 
 def test_contract_probe_accepts_canonical_plan_without_private_validation_projection() -> None:
     payload = {
-        "status": "review_required",
+        "status": "dry_run",
         "result": {"plan": {"steps": [{"action": "clipboard.write", "target": {"text": "VibeOS evidence"}}]}},
     }
     assert contract_probe_ok(payload, "clipboard.write", "text", "VibeOS evidence")
@@ -238,20 +238,23 @@ def test_collect_real_action_evidence_matches_browser_and_clipboard_policy(monke
 
     def fake_run_json_step(name, *args, **kwargs):
         calls.append(name)
-        parsed = {}
-        if name == "real_clipboard_review_required":
-            parsed["review_id"] = f"rev_{name}"
-        return {"name": name, "parsed": parsed}
+        return {"name": name, "parsed": {}}
+
+    def fake_run_text_step(name, *args, **kwargs):
+        calls.append(name)
+        return {"name": name, "parsed": None}
 
     monkeypatch.setattr("scripts.collect_vm_evidence.run_json_step", fake_run_json_step)
+    monkeypatch.setattr("scripts.collect_vm_evidence.run_polled_json_step", fake_run_json_step)
+    monkeypatch.setattr("scripts.collect_vm_evidence.run_text_step", fake_run_text_step)
     steps: list[dict[str, object]] = []
     collect_real_action_evidence(steps, {"VIBEOS_STATE_DIR": "/tmp/test"})
 
-    assert "real_clipboard_reapprove_rejected" in calls
+    assert "real_clipboard_write" in calls
+    assert "real_clipboard_content_observed" in calls
     assert "real_browser_open_url" in calls
     assert "real_browser_target_observed" in calls
-    assert "real_clipboard_adapter_direct" not in calls
-    assert "real_open_uri_reapprove_rejected" not in calls
+    assert "real_clipboard_reapprove_rejected" not in calls
 
 
 def test_safe_review_evidence_keeps_dry_run_review_and_reject_exit_contract(monkeypatch, tmp_path) -> None:

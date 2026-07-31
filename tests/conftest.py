@@ -25,7 +25,10 @@ def _state_dir_for_nodeid(nodeid: str) -> Path:
 def _isolated_vibeos_state_dir(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Path:
     state_dir = _state_dir_for_nodeid(request.node.nodeid)
     state_dir.mkdir(parents=True, exist_ok=True)
+    config_dir = state_dir / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("VIBEOS_STATE_DIR", str(state_dir))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_dir))
     monkeypatch.setenv("VIBEOS_MODEL_PROVIDER", "local")
     monkeypatch.setenv("VIBEOS_ENABLE_MODEL_UNDERSTANDING", "0")
     monkeypatch.setenv("VIBEOS_ENABLE_MODEL_GOAL_SYNTHESIS", "0")
@@ -40,6 +43,7 @@ def _isolated_vibeos_state_dir(monkeypatch: pytest.MonkeyPatch, request: pytest.
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_MODEL", raising=False)
     monkeypatch.delenv("DEEPSEEK_BASE_URL", raising=False)
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
     request.node._vibeos_state_dir = state_dir  # type: ignore[attr-defined]
     return state_dir
 

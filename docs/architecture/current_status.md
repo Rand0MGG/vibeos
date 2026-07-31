@@ -1,13 +1,17 @@
 # VibeOS current status
 
-Last verified: 2026-07-22. Goal 04 starts from frozen planning commit
-`efe2267` on `codex/goal04-execution-foundation`. The 13 files under
+Runtime evidence last verified: 2026-07-31. Roadmap responsibility last revised:
+2026-08-01. Goal 04 starts from frozen planning commit
+`efe2267`. The 13 files under
 `.codex_vm_artifacts` remain committed Goal 03 evidence assets. Goal 04A has
 replaced the unreleased effect/observation contracts and converged canonical
 action-result ownership. Goal 04B's offline Gateway/SecretRef/process contract
 is implemented. Goal 04C's fixed systemd user-service slice, real worker-crash
 matrix and WSL systemd D-Bus evidence are implemented. The controlled real
-provider and Fedora GNOME VM gates remain explicitly not run.
+provider and Fedora GNOME VM gates passed on Fedora 44, GNOME Shell 50.2,
+Wayland. Review findings were remediated on
+`codex/goal04-review-remediation`; product revision `d6e7694` passed the
+external gates and `2e5de30` isolates pytest from live desktop configuration.
 
 ## Supported runtime
 
@@ -30,14 +34,14 @@ receipt, evidence, and reconciliation state are all persisted by the durable
 repository.
 
 D-Bus is the primary Linux local control plane. HTTP is a deprecated,
-loopback-only compatibility adapter retained through the Goal 09 delivery
+loopback-only compatibility adapter retained through the Goal 10 delivery
 decision because repository VM/operations callers existed in Goal 01. It
 serializes requests and responses around the same application service and
 database; it has no independent task or review authority.
 
 ## Migration and compatibility
 
-Alembic head is `0006_effect_contract_v2`. Goal 03 used the approved
+Alembic head is `0007_repair_effect_policy_summary`. Goal 03 used the approved
 pre-release exception to freeze the actual Goal 01 schema in `0001`, then made
 all revisions self-contained. Revision `0005` was added without modifying the
 frozen `0001`-`0004` history. It persists the immutable dry-run flag in each
@@ -76,7 +80,12 @@ The live task path now has one effect vocabulary and one canonical action-result
   carry the same schema and vocabulary;
 - fixed system-service facts and E1 start/restart ActionSpec contracts exist
   for the single Goal 04 fixture; no arbitrary unit, shell, root or system-bus
-  authority is exposed.
+authority is exposed.
+
+Revision `0006` now replaces a legacy policy-summary dictionary with the
+canonical E0-E4 definitions instead of mechanically renaming L-level keys.
+Revision `0007` repairs active databases that had already run the original
+0006 implementation; terminal rows remain untouched.
 
 The classification and ownership details are in the
 [`effect matrix`](goal04_effect_reclassification_matrix.md) and
@@ -90,20 +99,28 @@ budgets. A scrubbed semantic subprocess has neither session bus nor secret-like
 environment names. A separate transport subprocess alone resolves an opaque
 SecretRef through `secret-tool` and calls the OpenAI-compatible HTTPS adapter.
 
-The old `provider_client` transport is disabled and no longer loads or sends
-environment credentials. Its callers remain as a ratcheted Goal 05 migration
-inventory and fail closed until they acquire typed Gateway purposes. The Linux
+The old direct HTTP implementation in `provider_client` remains removed and no
+longer loads or sends environment credentials. A post-Goal04 compatibility
+remediation now gives every existing semantic caller an explicit allowlisted
+purpose and sends its bounded JSON-object request through the same Gateway,
+scrubbed semantic worker, SecretRef route and narrow transport worker. The Linux
 user-service installer no longer injects `.env`. TTY import/status/delete and
 one-shot explicit environment migration are documented in the
 [`SecretRef runbook`](../operations/goal04_secretref_runbook.md); architecture,
 failure semantics and the threat model are in the
 [`Gateway boundary`](goal04_model_gateway_and_secret_boundary.md).
 
-Offline tests cover D0 success, 429/5xx/timeout/bad JSON/schema/budget/cancel/
+Tests cover D0 success, 429/5xx/timeout/bad JSON/schema/budget/cancel/
 unknown-delivery failures, locked-to-wait/unlock-to-resume, leak canary, strict
-route persistence and the real subprocess isolation probe. The controlled
-real-provider smoke remains `not run` until a user-owned credential is present;
-it is not claimed as passed.
+route persistence, the real subprocess isolation probe, the shared compatibility
+transport boundary, and a plain online `vibe ask` reaching the
+`goal_understanding` purpose. The controlled
+DeepSeek V4 Pro smoke passed through a user-owned SecretRef on 2026-07-31.
+
+`vibe secrets status` now calls Secret Service `SearchItems` over the session
+D-Bus and inspects only locked/unlocked item paths. It never invokes
+`secret-tool lookup` and therefore does not resolve provider plaintext into the
+ordinary CLI process.
 
 ## Goal 04C fixed system-service slice
 
@@ -116,14 +133,18 @@ task boundary remains the sole receipt/evidence owner. The public capability
 count remains 19.
 
 Bounded D-Bus facts and fixed-unit journal lines are persisted before a D0
-context manifest. Model Gateway v1 returns a strict diagnosis/proposal, which
-is persisted before dispatch. A post-action crash enters real-state
+context manifest. Before provider I/O the task persists a stable request ID and
+dispatch record. A crash after dispatch but before result persistence pauses as
+unknown instead of replaying the provider call; the stable ID is also sent as
+the idempotency and trace header. The provider budget is capped by the task
+deadline, and the specialized recovery path terminates expired tasks before
+model or action I/O. A post-action crash enters real-state
 reconciliation. The independent verifier polls bounded fresh observations
 until systemd leaves `activating`, with no action redispatch. TerminalOutcome
 now carries diagnosis, action, current state, evidence IDs, completion judgment
 and unresolved risks.
 
-The 04C suite has 32 tests, including eleven real `os._exit(97)` worker-process
+The 04C suite has 36 tests, including twelve real `os._exit(97)` worker-process
 crash points and the required fault/concurrency matrix. A FedoraLinux-44 WSL
 run used the real systemd user D-Bus provider: the controller proved one failed
 start and one synthetic line, the Agent produced one canonical receipt, and
@@ -131,23 +152,43 @@ independent observation found `active/running`, a live PID and the healthy log.
 The model side of that WSL run was the strict offline fixture because WSL has
 no `secret-tool` or user-owned provider route. See the
 [`Goal 04C acceptance report`](goal04_system_service_acceptance_2026-07-22.md).
-The final local regression is `1063 passed in 103.79s`; Ruff formatting/lint,
+The final Fedora GNOME regression is `1075 passed in 39.40s`; Ruff formatting/lint,
 strict mypy over 67 source files and the architecture guard are green.
+The real VM evidence collector reports `overall: ok` with no failed or blocked
+steps. It covered D-Bus and loopback HTTP, notification, GNOME Shell clipboard
+write/readback, browser open/observation, review flows, policy and audit.
 
-## Remaining external Goal 04 evidence
+## External Goal 04 evidence
 
-- run and record one controlled real-provider smoke with a user-owned SecretRef;
-- run and record Secret Service locked/unlocked plus the complete fixture path
-  in the Fedora GNOME VM. VMware execution was skipped at the user's request
-  for this pass and is not represented by WSL evidence.
+- Secret Service locked/unlocked behavior was exercised in the Fedora GNOME VM;
+  locked state prevented dispatch and expiry failed closed before resumption.
+- DeepSeek V4 Pro produced exactly one model result for the controlled fixture.
+- one bounded restart produced one proposal and one canonical receipt with the
+  same idempotency key; independent systemd verification passed.
+- the detailed evidence is in the
+  [`Goal 04C acceptance report`](goal04_system_service_acceptance_2026-07-22.md#2026-07-31-fedora-gnome-vm-external-acceptance).
 
-Existing compatibility debt owned by Goal 05:
+Existing compatibility debt split between Goal 05 and Goal 06:
 
-- semantic modules retain the disabled `provider_client` import surface and
-  cannot use remote models until each purpose is migrated to Gateway v1.
+- semantic modules retain `provider_client` only as an authority-free facade;
+  its network path is now the existing Gateway v1, but the allowlisted generic
+  JSON-object contracts still need purpose-specific schemas and route/data
+  policy before the facade can be deleted;
+- Goal 05 owns purpose-specific planning schemas, schema-rejection diagnostics,
+  response digests and fallback provenance. It does not own an executable
+  whole-goal planner;
+- multi-domain compound planning remains a capability gap owned by the new
+  Goal 06. Restoring provider reachability does not make the release-check
+  compound task executable. The observed VM failure and approved Goal 05/06/08
+  split are documented in the
+  [`compound-goal boundary report`](compound_goal_boundary_report_2026-07-31.md).
 
 Goal 05 must extend the Gateway/SecretRef/transport v1 contract delivered by
-04B rather than replace it.
+04B rather than replace it. Goal 06 must reuse that model boundary, the existing
+single-domain route builders and the Durable Task Engine; it may add bounded
+subgoal/condition/binding/coverage contracts but no second planner, task loop or
+action-result authority. Real browser/clipboard/notification effects remain a
+Goal 08 Fedora GNOME gate.
 
 ## Committed Goal 03 remediation baseline
 

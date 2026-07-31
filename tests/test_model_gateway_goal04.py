@@ -19,6 +19,8 @@ from vibeos.model_gateway.contracts import (
     CancellationBinding,
     FailureCode,
     GatewayResult,
+    JsonObjectModelRequest,
+    JsonObjectSemanticWorkerInvocation,
     ModelBudget,
     ModelUsage,
     ProviderRoute,
@@ -29,12 +31,13 @@ from vibeos.model_gateway.contracts import (
     ServiceDiagnosis,
     TaskAttemptBinding,
     TransportEnvelope,
+    build_json_object_model_request,
     build_model_request,
     facts_digest,
 )
 from vibeos.model_gateway.gateway import ModelGateway
 from vibeos.model_gateway.provider import OpenAICompatibleTransport, ProviderHttpResponse
-from vibeos.model_gateway.secrets import ProviderRouteRepository, SecretStoreLocked, SecretToolSecretStore
+from vibeos.model_gateway.secrets import ProviderRouteRepository, SecretStatus, SecretStoreLocked, SecretToolSecretStore
 from vibeos.model_gateway.task_integration import keyring_unlocked_event, keyring_wait_event
 from vibeos.system_service_contracts import ServiceFactsV2, ServiceProcessFactV2
 
@@ -179,11 +182,52 @@ def test_openai_transport_returns_strict_response_without_leaking_secret() -> No
     assert result.response is not None
     assert result.response.result.proposal.action == "restart"
     assert result.response.receipt.secret_resolved is True
-    assert client.calls[0]["headers"] == {"Authorization": f"Bearer {LEAK_CANARY}", "Content-Type": "application/json"}
+    assert client.calls[0]["headers"] == {
+        "Authorization": f"Bearer {LEAK_CANARY}",
+        "Content-Type": "application/json",
+        "Idempotency-Key": request.request_id,
+        "X-VibeOS-Request-Id": request.request_id,
+    }
     assert LEAK_CANARY.encode() not in client.calls[0]["body"]
+    request_body = json.loads(client.calls[0]["body"])
+    assert request_body["thinking"] == {"type": "disabled"}
+    assert request_body["response_format"] == {"type": "json_object"}
+    user_content = json.loads(request_body["messages"][1]["content"])
+    assert user_content["json_output_example"]["proposal"]["fact_digest"] == request.context.items[0].sha256
     assert LEAK_CANARY not in result.model_dump_json()
     assert LEAK_CANARY not in request.model_dump_json()
     assert LEAK_CANARY not in _route().model_dump_json()
+
+
+def test_json_compatibility_transport_uses_same_secret_boundary_and_explicit_purpose() -> None:
+    request = JsonObjectModelRequest(
+        request_id="request-goal-understanding-1",
+        purpose="goal_understanding",
+        binding=_binding(),
+        system_prompt="Return one JSON object.",
+        user_content="Classify this request.",
+        temperature=0,
+        budget=_budget(),
+        cancellation=CancellationBinding(token_id="cancel-goal-understanding-1"),
+    )
+    response_payload = {
+        "id": "provider-request-understanding",
+        "choices": [{"message": {"content": json.dumps({"type": "chat", "confidence": 0.9})}}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+    client = FakeHttpClient(ProviderHttpResponse(status=200, headers={}, body=json.dumps(response_payload).encode()))
+
+    result = OpenAICompatibleTransport(FakeSecretStore(), client).execute_json_object(_route(), request)
+
+    assert result.status == "succeeded"
+    assert result.response is not None
+    assert result.response.parsed_object == {"type": "chat", "confidence": 0.9}
+    headers = client.calls[0]["headers"]
+    assert isinstance(headers, dict)
+    assert headers["X-VibeOS-Purpose"] == "goal_understanding"
+    assert headers["Idempotency-Key"] == request.request_id
+    assert LEAK_CANARY.encode() not in client.calls[0]["body"]
+    assert LEAK_CANARY not in result.model_dump_json()
 
 
 @pytest.mark.parametrize(
@@ -370,6 +414,65 @@ def test_gateway_uses_semantic_and_transport_process_contracts() -> None:
     assert calls == ["vibeos.model_gateway.semantic_worker", "vibeos.model_gateway.transport_worker"]
 
 
+def test_json_compatibility_gateway_uses_the_same_two_worker_boundaries() -> None:
+    calls: list[str] = []
+    parsed_object = {"type": "chat", "confidence": 0.9, "domains": [], "explanation": "chat", "chat_response": "hello"}
+
+    def runner(argv: list[str], payload: str, environment: dict[str, str], timeout: float) -> subprocess.CompletedProcess[str]:
+        module = argv[-1]
+        calls.append(module)
+        if module.endswith("semantic_worker"):
+            invocation = JsonObjectSemanticWorkerInvocation.model_validate_json(payload)
+            output = {
+                "schema_version": "v1",
+                "request": build_json_object_model_request(invocation).model_dump(mode="json"),
+                "worker_pid": 301,
+                "session_bus_present": False,
+                "secret_environment_present": False,
+            }
+            return subprocess.CompletedProcess(argv, 0, json.dumps(output), "")
+        response = {
+            "schema_version": "v1",
+            "status": "succeeded",
+            "response": {
+                "schema_version": "v1",
+                "request_id": "request-goal-understanding-gateway",
+                "binding": _binding().model_dump(mode="json"),
+                "request_payload": {"model": _route().model},
+                "response_payload": {"id": "provider-understanding-1"},
+                "parsed_object": parsed_object,
+                "usage": ModelUsage(input_tokens=2, output_tokens=1, total_tokens=3).model_dump(mode="json"),
+                "receipt": RedactedTransportReceipt(
+                    route_id=_route().route_id,
+                    provider_request_id="provider-understanding-1",
+                    delivery="confirmed",
+                    transport_pid=302,
+                    secret_ref_uri=_route().secret_ref.uri,
+                    secret_resolved=True,
+                ).model_dump(mode="json"),
+            },
+            "failure": None,
+        }
+        return subprocess.CompletedProcess(argv, 0, json.dumps(response), "")
+
+    result = ModelGateway(runner).request_json_object(
+        route=_route(),
+        binding=_binding(),
+        purpose="goal_understanding",
+        system_prompt="Return one JSON object.",
+        user_content="hello",
+        temperature=0,
+        budget=_budget(),
+        cancellation=CancellationBinding(token_id="cancel-goal-understanding-gateway"),
+        request_id="request-goal-understanding-gateway",
+    )
+
+    assert result.status == "succeeded"
+    assert result.response is not None
+    assert result.response.parsed_object == parsed_object
+    assert calls == ["vibeos.model_gateway.semantic_worker", "vibeos.model_gateway.transport_worker"]
+
+
 def test_secret_tool_never_places_secret_in_argv() -> None:
     calls: list[tuple[list[str], str | None]] = []
 
@@ -425,9 +528,27 @@ def test_cli_secret_status_and_delete_are_redacted(tmp_path: Path, capsys) -> No
     store = FakeSecretStore()
     store.store(route.secret_ref, LEAK_CANARY)
     status = argparse.Namespace(secrets_command="status", route_id=route.route_id, json=True)
-    assert run_secret_command(status, store=store, repository=repository) == 0
+    assert run_secret_command(status, store=store, status_store=store, repository=repository) == 0
     assert LEAK_CANARY not in capsys.readouterr().out
     delete = argparse.Namespace(secrets_command="delete", route_id=route.route_id, json=True)
     assert run_secret_command(delete, store=store, repository=repository) == 0
     assert repository.get(route.route_id) is None
     assert LEAK_CANARY not in capsys.readouterr().out
+
+
+def test_cli_secret_status_uses_metadata_reader_without_resolving_secret(tmp_path: Path, capsys) -> None:
+    repository = ProviderRouteRepository(tmp_path / "routes.json")
+    route = _route()
+    repository.save(route)
+
+    class ResolveForbiddenStore(FakeSecretStore):
+        def resolve(self, ref: SecretRef) -> str:
+            raise AssertionError(f"status must not resolve {ref.uri}")
+
+    class MetadataStatusReader:
+        def status(self, ref: SecretRef) -> SecretStatus:
+            return SecretStatus(ref.uri, "available")
+
+    args = argparse.Namespace(secrets_command="status", route_id=route.route_id, json=True)
+    assert run_secret_command(args, store=ResolveForbiddenStore(), status_store=MetadataStatusReader(), repository=repository) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "available"

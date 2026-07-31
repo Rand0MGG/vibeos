@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 import hashlib
 import json
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -14,6 +14,17 @@ from ..system_service_contracts import ServiceFactsV2
 MODEL_GATEWAY_SCHEMA_VERSION = "v1"
 DeliveryState = Literal["not_sent", "confirmed", "unknown"]
 GatewayStatus = Literal["succeeded", "failed", "waiting"]
+CompatibilityPurpose = Literal[
+    "intent_parse",
+    "goal_understanding",
+    "understanding_transition",
+    "goal_synthesis",
+    "route_selection",
+    "clarification",
+    "replanning",
+    "semantic_acceptance",
+    "strategy_selection",
+]
 
 
 class StrictGatewayContract(BaseModel):
@@ -127,6 +138,35 @@ class ModelRequest(StrictGatewayContract):
     cancellation: CancellationBinding
 
 
+class JsonObjectResponseSchemaBinding(StrictGatewayContract):
+    name: Literal["json_object"] = "json_object"
+    version: Literal["v1"] = "v1"
+    strict: Literal[True] = True
+
+
+class JsonObjectModelRequest(StrictGatewayContract):
+    """Bounded compatibility request for the pre-Goal05 semantic callers.
+
+    This contract carries prompts but never credentials. The existing Gateway
+    transport remains the only process allowed to resolve ``SecretRef``.
+    """
+
+    schema_version: Literal["v1"] = "v1"
+    request_id: str = Field(min_length=1, max_length=200)
+    purpose: CompatibilityPurpose
+    operation: Literal["request_json_object"] = "request_json_object"
+    binding: TaskAttemptBinding
+    system_prompt: str = Field(min_length=1, max_length=16_000)
+    user_content: str = Field(min_length=1, max_length=64_000)
+    response_schema: JsonObjectResponseSchemaBinding = JsonObjectResponseSchemaBinding()
+    temperature: float = Field(ge=0, le=2)
+    budget: ModelBudget
+    cancellation: CancellationBinding
+
+
+GatewayModelRequest = Annotated[ModelRequest | JsonObjectModelRequest, Field(discriminator="purpose")]
+
+
 class ServiceActionProposal(StrictGatewayContract):
     action: Literal["start", "restart", "none"]
     unit: Literal["vibeos-goal04-fixture.service"] = "vibeos-goal04-fixture.service"
@@ -176,6 +216,17 @@ class ModelResponse(StrictGatewayContract):
     receipt: RedactedTransportReceipt
 
 
+class JsonObjectModelResponse(StrictGatewayContract):
+    schema_version: Literal["v1"] = "v1"
+    request_id: str
+    binding: TaskAttemptBinding
+    request_payload: dict[str, object]
+    response_payload: dict[str, object]
+    parsed_object: dict[str, object]
+    usage: ModelUsage
+    receipt: RedactedTransportReceipt
+
+
 class GatewayFailure(StrictGatewayContract):
     schema_version: Literal["v1"] = "v1"
     request_id: str
@@ -205,10 +256,33 @@ class GatewayResult(StrictGatewayContract):
         return self
 
 
+class JsonObjectGatewayResult(StrictGatewayContract):
+    schema_version: Literal["v1"] = "v1"
+    status: GatewayStatus
+    response: JsonObjectModelResponse | None = None
+    failure: GatewayFailure | None = None
+
+    @model_validator(mode="after")
+    def exactly_one_outcome(self) -> "JsonObjectGatewayResult":
+        if (self.response is None) == (self.failure is None):
+            raise ValueError("gateway result requires exactly one response or failure")
+        if self.status == "succeeded" and self.response is None:
+            raise ValueError("succeeded gateway result requires a response")
+        if self.status != "succeeded" and self.failure is None:
+            raise ValueError("failed gateway result requires a failure")
+        return self
+
+
 class TransportEnvelope(StrictGatewayContract):
     schema_version: Literal["v1"] = "v1"
     route: ProviderRoute
     request: ModelRequest
+
+
+class JsonObjectTransportEnvelope(StrictGatewayContract):
+    schema_version: Literal["v1"] = "v1"
+    route: ProviderRoute
+    request: JsonObjectModelRequest
 
 
 class SemanticWorkerInvocation(StrictGatewayContract):
@@ -220,9 +294,29 @@ class SemanticWorkerInvocation(StrictGatewayContract):
     cancellation: CancellationBinding
 
 
+class JsonObjectSemanticWorkerInvocation(StrictGatewayContract):
+    schema_version: Literal["v1"] = "v1"
+    request_id: str
+    purpose: CompatibilityPurpose
+    binding: TaskAttemptBinding
+    system_prompt: str = Field(min_length=1, max_length=16_000)
+    user_content: str = Field(min_length=1, max_length=64_000)
+    temperature: float = Field(ge=0, le=2)
+    budget: ModelBudget
+    cancellation: CancellationBinding
+
+
 class SemanticWorkerOutput(StrictGatewayContract):
     schema_version: Literal["v1"] = "v1"
     request: ModelRequest
+    worker_pid: int = Field(gt=0)
+    session_bus_present: bool
+    secret_environment_present: bool
+
+
+class JsonObjectSemanticWorkerOutput(StrictGatewayContract):
+    schema_version: Literal["v1"] = "v1"
+    request: JsonObjectModelRequest
     worker_pid: int = Field(gt=0)
     session_bus_present: bool
     secret_environment_present: bool
@@ -243,6 +337,19 @@ def build_model_request(invocation: SemanticWorkerInvocation) -> ModelRequest:
         request_id=invocation.request_id,
         binding=invocation.binding,
         context=ContextManifest(items=(item,)),
+        budget=invocation.budget,
+        cancellation=invocation.cancellation,
+    )
+
+
+def build_json_object_model_request(invocation: JsonObjectSemanticWorkerInvocation) -> JsonObjectModelRequest:
+    return JsonObjectModelRequest(
+        request_id=invocation.request_id,
+        purpose=invocation.purpose,
+        binding=invocation.binding,
+        system_prompt=invocation.system_prompt,
+        user_content=invocation.user_content,
+        temperature=invocation.temperature,
         budget=invocation.budget,
         cancellation=invocation.cancellation,
     )

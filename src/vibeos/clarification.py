@@ -58,6 +58,7 @@ class OpenAICompatibleClarificationProvider(ClarificationProvider):
                 system_prompt=CLARIFICATION_SYSTEM_PROMPT,
                 user_content=json.dumps(request_payload, ensure_ascii=False),
                 max_tokens=256,
+                purpose="clarification",
             )
             parsed = response.parsed_object
             question = parsed.get("question")

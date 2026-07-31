@@ -6,15 +6,16 @@ import json
 from time import monotonic, sleep
 
 from .core.adapters.task_repository import SqliteTaskRepository
-from .core.domain import EffectLevel
-from .core.domain.task import EvidenceBundle, GoalContract, TaskRun
-from .durable_task_support import now_iso, stable_id
+from .core.domain import EffectLevel, transition
+from .core.domain.task import TERMINAL_STATUSES, EvidenceBundle, GoalContract, TaskEventType, TaskLease, TaskRun, TaskStatus
+from .durable_task_support import event, now_iso, stable_id
 from .model_gateway.contracts import ServiceDiagnosis
 from .observation_service import ObservationService
 from .planning_models import PlanningArtifacts
 from .system_service_contracts import FIXTURE_UNIT, SYSTEM_SERVICE_RECOVERY_ACTION, ServiceFactsV2
 from .system_service_provider import SYNTHETIC_FAILURE_MARKER
 from .task_models import DisplayFields, ExpectedState, StepProvenance, TaskPlan, TaskRoute, TaskStep, UtteranceAnalysis
+from .task_validation import validate_plan
 from .understanding import UnderstandingArtifact
 
 
@@ -65,6 +66,21 @@ class SystemServiceEvidenceLedger:
                 return ServiceDiagnosis.model_validate_json(json.dumps(value)) if isinstance(value, dict) else None
         return None
 
+    def unresolved_model_dispatch(self, task_id: str, digest: str) -> dict[str, object] | None:
+        dispatches: dict[str, dict[str, object]] = {}
+        resolved: set[str] = set()
+        for evidence in self.repository.evidence(task_id):
+            payload = _json_object(evidence.payload_json)
+            if payload.get("fact_digest") != digest:
+                continue
+            if payload.get("kind") == "model_request_dispatched":
+                dispatches[evidence.evidence_id] = payload
+                continue
+            dispatch_evidence_id = payload.get("dispatch_evidence_id")
+            if payload.get("kind") in {"model_result", "model_failure"} and isinstance(dispatch_evidence_id, str):
+                resolved.add(dispatch_evidence_id)
+        return next((payload for evidence_id, payload in dispatches.items() if evidence_id not in resolved), None)
+
     def latest_diagnosis(self, task_id: str) -> ServiceDiagnosis | None:
         payload = self._latest_payload(task_id, "model_result")
         value = payload.get("diagnosis") if payload is not None else None
@@ -97,6 +113,124 @@ class SystemServiceEvidenceLedger:
             if payload.get("kind") == kind:
                 return payload
         return None
+
+
+class SystemServiceRecoveryGuard:
+    def __init__(self, repository: SqliteTaskRepository, evidence: SystemServiceEvidenceLedger) -> None:
+        self.repository = repository
+        self.evidence = evidence
+
+    def pause_unknown_model_delivery(self, state: TaskRun, lease: TaskLease, dispatch: dict[str, object]) -> TaskRun:
+        message = "model request delivery may have completed before its result was persisted; automatic replay is unsafe"
+        evidence = self.evidence.make(
+            state,
+            "model_delivery_unknown",
+            {
+                "fact_digest": dispatch.get("fact_digest"),
+                "request_id": dispatch.get("request_id"),
+                "route_id": dispatch.get("route_id"),
+            },
+            message,
+        )
+        return self.repository.commit(
+            transition(state, event(state, TaskEventType.PAUSE_REQUESTED, reason=message)),
+            evidence=evidence,
+            lease=lease,
+        )
+
+    def expire_if_overdue(self, state: TaskRun, lease: TaskLease) -> TaskRun | None:
+        if state.status in TERMINAL_STATUSES or state.deadline_at is None or self.deadline_remaining_seconds(state) > 0:
+            return None
+        return self.timeout(state, lease)
+
+    def timeout(self, state: TaskRun, lease: TaskLease) -> TaskRun:
+        message = "Goal04 system-service task deadline elapsed"
+        evidence = self.evidence.make(state, "failure", {"code": "task_deadline_elapsed", "message": message}, message)
+        diagnosis = self.evidence.latest_diagnosis(state.task_id)
+        return self.repository.commit(
+            transition(
+                state,
+                event(
+                    state,
+                    TaskEventType.TIMEOUT,
+                    reason=message,
+                    evidence_ids=(*self.evidence.ids(state.task_id), evidence.evidence_id),
+                    diagnosis=diagnosis.diagnosis if diagnosis is not None else None,
+                    action=diagnosis.proposal.action if diagnosis is not None else None,
+                    completion_judgment="failed closed: task_deadline_elapsed",
+                    unresolved_risks=("task deadline elapsed before completion",),
+                ),
+            ),
+            evidence=evidence,
+            lease=lease,
+        )
+
+    @staticmethod
+    def deadline_remaining_seconds(state: TaskRun) -> float:
+        if state.deadline_at is None:
+            return 30.0
+        deadline = datetime.fromisoformat(state.deadline_at.replace("Z", "+00:00"))
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=timezone.utc)
+        return (deadline - datetime.now(timezone.utc)).total_seconds()
+
+
+def commit_system_service_verification(
+    repository: SqliteTaskRepository,
+    evidence_ledger: SystemServiceEvidenceLedger,
+    state: TaskRun,
+    lease: TaskLease,
+    facts: ServiceFactsV2,
+    healthy: bool,
+) -> TaskRun:
+    evidence = evidence_ledger.make(
+        state,
+        "independent_verification",
+        {"facts": facts.model_dump(mode="json"), "healthy": healthy, "controller_state_used": False},
+        "independent systemd verification passed" if healthy else "independent systemd verification failed",
+    )
+    diagnosis = evidence_ledger.latest_diagnosis(state.task_id)
+    action = diagnosis.proposal.action if diagnosis is not None else None
+    current = f"{facts.load_state}/{facts.active_state}/{facts.sub_state}/pid={facts.process.main_pid}"
+    if not healthy:
+        return repository.commit(
+            transition(
+                state,
+                event(
+                    state,
+                    TaskEventType.FAIL,
+                    reason="one bounded recovery did not reach the defined healthy state",
+                    evidence_ids=(*evidence_ledger.ids(state.task_id), evidence.evidence_id),
+                    diagnosis=diagnosis.diagnosis if diagnosis is not None else None,
+                    action=action,
+                    current_state=current,
+                    completion_judgment="failed independent verification",
+                    unresolved_risks=("fixture remains unhealthy",),
+                ),
+            ),
+            evidence=evidence,
+            lease=lease,
+        )
+    return repository.commit(
+        transition(
+            state,
+            event(
+                state,
+                TaskEventType.VERIFICATION_PASSED,
+                step_id=state.current_step_id,
+                terminal_status=TaskStatus.SUCCEEDED,
+                reason="fixed fixture recovery independently verified",
+                evidence_ids=(*evidence_ledger.ids(state.task_id), evidence.evidence_id),
+                diagnosis=diagnosis.diagnosis if diagnosis is not None else None,
+                action=action,
+                current_state=current,
+                completion_judgment="active/running with a live main process and healthy fixture log",
+                unresolved_risks=(),
+            ),
+        ),
+        evidence=evidence,
+        lease=lease,
+    )
 
 
 def build_system_service_planning(state: TaskRun, diagnosis: ServiceDiagnosis, goal: str) -> PlanningArtifacts:
@@ -149,6 +283,10 @@ def build_system_service_planning(state: TaskRun, diagnosis: ServiceDiagnosis, g
         analysis_model_name="deterministic-local",
     )
     return PlanningArtifacts(understanding, analysis, None, plan, (plan,))
+
+
+def system_service_plan_is_valid(plan: TaskPlan | None) -> bool:
+    return plan is not None and validate_plan(plan).ok
 
 
 def facts_fresh(facts: ServiceFactsV2) -> bool:

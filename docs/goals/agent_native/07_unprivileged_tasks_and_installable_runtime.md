@@ -1,10 +1,10 @@
-# Goal 06：扩展 API/CLI 用户态能力并建立可安装 Runtime
+# Goal 07：扩展 API/CLI 用户态能力并建立可安装 Runtime
 
-- 阶段：06 / 11
-- 依赖：[Goal 05](05_model_gateway_and_secret_broker.md)全部完成
+- 阶段：07 / 12
+- 依赖：[Goal 06](06_bounded_compound_goal_planning.md)全部完成
 - 规模：XL
 - 风险：中高
-- 完成后进入：[Goal 07](07_gnome_mixed_task_mvp.md)
+- 完成后进入：[Goal 08](08_gnome_mixed_task_mvp.md)
 
 ## 给 Codex 的命令
 
@@ -18,6 +18,10 @@ Goal 05 已经收敛 Model Gateway、provider route 和 Secret Broker；本 Goal
 路由。现有 `ContextPackageRegistry`/`ObservationService` 和
 `ToolRegistry`/`CapabilityRecipeRegistry` 仍分别是事实与动作的唯一 production
 注册路径。`MachineFact` 和 ActionSpec 是这些路径的严格合同演进，不是第二套平台。
+
+Goal 06 已交付有界复合目标合同、host-owned composer、coverage gate、条件和 typed
+binding。本 Goal 新增的 MachineFact、ActionSpec 和 verifier 必须能被该合同直接发现
+和校验；不得为四个固定任务新建第二套 planner，或让 adapter 自行解释自然语言。
 
 API/D-Bus/结构化 CLI 仍是默认路径。不要开放任意 shell，不要因为想象中的未来
 插件而设计通用执行平台，也不要强制引入 systemd transient unit 或 Bubblewrap；
@@ -36,7 +40,8 @@ contract，而不是完成一个覆盖所有命令、所有文件和所有应用
 ## 预期进入状态与现场核对
 
 预期 Goal 04 已证明 user service 诊断/恢复纵向链路，Goal 05 已交付唯一 Model
-Gateway、云端路由、Secret Broker、本地模型准入结论和规范 E0-E4 Effect Policy。
+Gateway、云端路由、Secret Broker、本地模型准入结论，Goal 06 已交付有界复合规划，
+并继续复用规范 E0-E4 Effect Policy。
 开始前现场确认：
 
 - Goal 03 的兼容矩阵、19 个 capability 和所有外部入口仍通过；
@@ -74,8 +79,8 @@ GoalContract
 ```
 
 同时交付一个非 editable、版本化的基础 Runtime artifact，在干净 Fedora VM 安装
-后能够运行 daemon、CLI、数据库迁移和上述任务。完整升级回滚留到 Goal 10，扩展交付
-留到 Goal 11。
+后能够运行 daemon、CLI、数据库迁移和上述任务。完整升级回滚留到 Goal 11，扩展交付
+留到 Goal 12。
 
 ## 必须实施
 
@@ -137,6 +142,7 @@ GoalContract
 - 不迁移或删除全部 19 个 capability 的 Registry/执行逻辑；
 - 不开放任意 shell、任意文件操作、root、polkit 或 system-bus；
 - 不构建通用容器平台、插件 SDK、公共市场或复杂 sandbox 编排器；
+- 不重建 Goal 06 的 compound composer、coverage gate、condition/binding 或 selector；
 - 不实现完整安装升级回滚、跨发行版包仓库或独立 Linux 发行版；
 - 不扩大 Goal 05 的 provider/secret 范围，不让本地模型、云模型或扩展决定数据级别
   和效果等级；
@@ -153,6 +159,8 @@ GoalContract
 - [ ] 旧 Registry 未被批量删除，Tool/Context 接点、owner 和未来删除门禁有记录；
 - [ ] 所有模型和 secret 使用继续通过 Goal 05 的唯一 Gateway/Broker，没有 `.env` 或
   私有 provider client 回退；
+- [ ] 新 MachineFact、ActionSpec、typed result 和 verifier 可由 Goal 06 的唯一复合规划
+  合同消费；单领域与复合 preflight 没有第二套 capability 解释；
 - [ ] 如果使用 transient unit/Bubblewrap，有真实需求和对抗测试；未使用时没有新增依赖；
 - [ ] 非 editable artifact 可在干净 Fedora VM 安装、运行固定任务和卸载；
 - [ ] WSL 测试、真实 Fedora 证据和受限环境不可用结果被准确区分；

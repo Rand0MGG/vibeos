@@ -12,10 +12,15 @@ from pydantic import ValidationError
 from ..system_service_contracts import ServiceFactsV2
 from .contracts import (
     CancellationBinding,
+    CompatibilityPurpose,
     DeliveryState,
     FailureCode,
     GatewayFailure,
     GatewayResult,
+    JsonObjectGatewayResult,
+    JsonObjectSemanticWorkerInvocation,
+    JsonObjectSemanticWorkerOutput,
+    JsonObjectTransportEnvelope,
     ModelBudget,
     ProviderRoute,
     SemanticWorkerInvocation,
@@ -115,6 +120,114 @@ class ModelGateway:
                 delivery="unknown",
             )
 
+    def request_json_object(
+        self,
+        *,
+        route: ProviderRoute,
+        binding: TaskAttemptBinding,
+        purpose: CompatibilityPurpose,
+        system_prompt: str,
+        user_content: str,
+        temperature: float,
+        budget: ModelBudget,
+        cancellation: CancellationBinding,
+        request_id: str,
+    ) -> JsonObjectGatewayResult:
+        """Run a legacy semantic purpose through the one governed transport."""
+
+        started = monotonic()
+        if cancellation.requested:
+            return self._json_preflight_failure(request_id, binding, FailureCode.CANCELLED, "model request was cancelled")
+        invocation = JsonObjectSemanticWorkerInvocation(
+            request_id=request_id,
+            purpose=purpose,
+            binding=binding,
+            system_prompt=system_prompt,
+            user_content=user_content,
+            temperature=temperature,
+            budget=budget,
+            cancellation=cancellation,
+        )
+        try:
+            semantic = self.process_runner(
+                [sys.executable, "-m", "vibeos.model_gateway.semantic_worker"],
+                invocation.model_dump_json(),
+                self._semantic_environment(),
+                budget.total_budget_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            return self._json_preflight_failure(
+                request_id,
+                binding,
+                FailureCode.BUDGET_EXHAUSTED,
+                "semantic request budget was exhausted",
+            )
+        if semantic.returncode != 0:
+            return self._json_preflight_failure(
+                request_id,
+                binding,
+                FailureCode.SCHEMA_MISMATCH,
+                "semantic worker rejected the request",
+            )
+        try:
+            semantic_output = JsonObjectSemanticWorkerOutput.model_validate_json(semantic.stdout)
+        except ValidationError:
+            return self._json_preflight_failure(
+                request_id,
+                binding,
+                FailureCode.SCHEMA_MISMATCH,
+                "semantic worker returned an invalid contract",
+            )
+        if semantic_output.session_bus_present or semantic_output.secret_environment_present:
+            return self._json_preflight_failure(
+                request_id,
+                binding,
+                FailureCode.ISOLATION_VIOLATION,
+                "semantic worker isolation check failed",
+            )
+        remaining = budget.total_budget_seconds - (monotonic() - started)
+        if remaining <= 0:
+            return self._json_preflight_failure(
+                request_id,
+                binding,
+                FailureCode.BUDGET_EXHAUSTED,
+                "model request budget was exhausted",
+            )
+        envelope = JsonObjectTransportEnvelope(route=route, request=semantic_output.request)
+        try:
+            transport = self.process_runner(
+                [sys.executable, "-m", "vibeos.model_gateway.transport_worker"],
+                envelope.model_dump_json(),
+                self._transport_environment(),
+                remaining,
+            )
+        except subprocess.TimeoutExpired:
+            return self._json_preflight_failure(
+                request_id,
+                binding,
+                FailureCode.UNKNOWN_DELIVERY,
+                "provider transport exceeded the total budget; delivery is unknown",
+                delivery="unknown",
+            )
+        if transport.returncode != 0:
+            return self._json_preflight_failure(
+                request_id,
+                binding,
+                FailureCode.UNKNOWN_DELIVERY,
+                "provider transport failed without a classified result; delivery is unknown",
+                delivery="unknown",
+            )
+        try:
+            return JsonObjectGatewayResult.model_validate_json(transport.stdout)
+        except ValidationError:
+            return self._json_preflight_failure(
+                request_id,
+                binding,
+                FailureCode.SCHEMA_MISMATCH,
+                "provider transport returned an invalid contract",
+                delivery="unknown",
+            )
+
     @staticmethod
     def _base_environment() -> dict[str, str]:
         allowed = ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LANG", "LC_ALL", "VIRTUAL_ENV")
@@ -151,6 +264,27 @@ class ModelGateway:
         delivery: DeliveryState = "not_sent",
     ) -> GatewayResult:
         return GatewayResult(
+            status="failed",
+            failure=GatewayFailure(
+                request_id=request_id,
+                binding=binding,
+                code=code,
+                retryable=False,
+                delivery=delivery,
+                safe_message=message,
+            ),
+        )
+
+    @staticmethod
+    def _json_preflight_failure(
+        request_id: str,
+        binding: TaskAttemptBinding,
+        code: FailureCode,
+        message: str,
+        *,
+        delivery: DeliveryState = "not_sent",
+    ) -> JsonObjectGatewayResult:
+        return JsonObjectGatewayResult(
             status="failed",
             failure=GatewayFailure(
                 request_id=request_id,

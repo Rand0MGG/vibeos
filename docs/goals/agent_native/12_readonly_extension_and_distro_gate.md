@@ -1,20 +1,20 @@
-# Goal 11：验证一个只读扩展并作出独立发行版决策
+# Goal 12：验证一个只读扩展并作出独立发行版决策
 
-- 阶段：11 / 11
-- 依赖：[Goal 10](10_runtime_release_lifecycle.md)全部完成
+- 阶段：12 / 12
+- 依赖：[Goal 11](11_runtime_release_lifecycle.md)全部完成
 - 规模：L
 - 风险：中高
 
 ## 给 Codex 的命令
 
-你要在 Goal 10 已稳定交付的 Core contract 上实现一个只读 E0 collector/verifier
+你要在 Goal 11 已稳定交付的 Core contract 上实现一个只读 E0 collector/verifier
 扩展，证明用户可以显式增加能力，而扩展不能绕过 Task、事实、模型、秘密、动作、
-权限和审计边界。随后只使用 Goal 03–10 的真实平台和维护证据，作出是否继续 Runtime、
+权限和审计边界。随后只使用 Goal 03–11 的真实平台和维护证据，作出是否继续 Runtime、
 是否探索定制镜像/发行版的正式 ADR。
 
 固定扩展是 `host.boot_session`：读取 Linux boot ID 与 monotonic uptime，输出本机作用域
 哈希后的 boot-session ID、uptime bucket、captured_at 和 source，用来区分 daemon
-重启与整机重启。它只改善恢复证据，不得追溯性改写 Goal 07 的旧验收结论；安装后应
+重启与整机重启。它只改善恢复证据，不得追溯性改写 Goal 08 的旧验收结论；安装后应
 重新运行相关恢复场景形成新增证据。
 
 不得建设公共插件市场、远程自动下载、E1/E2 扩展或发行版实现。若 ADR 选择
@@ -33,14 +33,14 @@ Secret Broker、Privilege 边界、Tool/Context Registry、审计和完成判断
 
 ## 预期进入状态与现场核对
 
-预期 Goal 10 已有正式 artifact、稳定 install/upgrade/rollback/uninstall 生命周期、
+预期 Goal 11 已有正式 artifact、稳定 install/upgrade/rollback/uninstall 生命周期、
 Fedora 主支持证据和 Ubuntu smoke 结论。开始前现场确认：
 
 - Core 当前真正稳定、适合开放的最小 collector/verifier port；
 - ContextPackageRegistry/ObservationService、EvidenceBundle 和 verifier 的版本化合同；
 - artifact 如何显式安装、升级、禁用和移除可选组件；
 - 可用的进程隔离、资源控制和 IPC 机制，不能凭想象承诺 sandbox；
-- Goal 03–10 实际发生的平台限制、失败恢复、维护成本和用户收益；
+- Goal 03–11 实际发生的平台限制、失败恢复、维护成本和用户收益；
 - Fedora/Ubuntu、GNOME、systemd、Secret Service、portal、polkit 和打包限制的证据
   来源，区分一次缺陷、实现债务和结构性平台限制。
 
@@ -94,7 +94,7 @@ ADR 必须给出结论、证据、反证条件、资源和复审触发点，而�
   不 import Core 私有模块，不与 Core 同进程执行任意 Python。
 - 进程只能获得完成 `host.boot_session` 所需的读取范围、wall-time、CPU、内存、输出和
   并发预算；无网络、secret、UI input、任意文件写入、数据库或 helper 访问。
-- Core 验证 schema、大小、时间、source 和数据级别后，才把事实写入 Goal 04/06 已有
+- Core 验证 schema、大小、时间、source 和数据级别后，才把事实写入 Goal 04/07 已有
   Observation/Evidence 路径。扩展不能直接写 Task DB、outbox、audit 或完成状态。
 - crash、timeout、坏 schema、资源超限、IPC 截断和恶意输出使该扩展调用失败/隔离，
   Core 和其他任务继续运行或进入可解释等待。
@@ -108,13 +108,13 @@ ADR 必须给出结论、证据、反证条件、资源和复审触发点，而�
 - uptime 只输出有明确恢复价值的 bucket，不提供不必要的精细设备行为画像。
 - verifier 用该事实区分 daemon restart 与 host reboot；事实 stale/extension unavailable
   时不得猜测。
-- 安装后重跑 Goal 07 的相关 daemon/reboot 恢复子场景，记录新增证据和仍需用户 session
+- 安装后重跑 Goal 08 的相关 daemon/reboot 恢复子场景，记录新增证据和仍需用户 session
   的边界。
 
 ### 4. 扩展生命周期与隔离攻击测试
 
 - 支持 install、compatibility check、enable、disable、upgrade、quarantine、remove；
-  操作由 Goal 10 Runtime 生命周期管理且用户可审计。
+  操作由 Goal 11 Runtime 生命周期管理且用户可审计。
 - disable/remove 后停止调度并清理非必要扩展缓存，保留 Core-owned 历史 evidence 的
   来源可读性；不能让任务悬挂在不可恢复私有状态。
 - 连续 crash、timeout、坏 schema 或资源超限自动 quarantine；用户可以查看原因、
@@ -132,7 +132,7 @@ ADR 必须给出结论、证据、反证条件、资源和复审触发点，而�
   限制；单次 VM 故障不能直接成为发行版理由。
 - 比较普通 Runtime、容器/immutable host、定制镜像和完整发行版的用户收益、安全
   收益、工程成本、更新责任、硬件兼容、供应链、支持负担和退出成本。
-- 使用 Goal 10 Fedora/Ubuntu 证据，不追求新发行版全矩阵；必要的补充探针必须只读、
+- 使用 Goal 11 Fedora/Ubuntu 证据，不追求新发行版全矩阵；必要的补充探针必须只读、
   可复核，不创建镜像。
 
 ### 6. 正式 ADR
@@ -167,7 +167,7 @@ ADR 必须给出结论、证据、反证条件、资源和复审触发点，而�
 - [ ] install/enable/disable/upgrade/quarantine/remove 和失败恢复通过；
 - [ ] crash、timeout、坏 schema、资源超限和越权攻击 fail-closed，不影响 Core；
 - [ ] 重新运行的 daemon/reboot 场景证明事实价值且不改写旧验收；
-- [ ] 发行版 ADR 使用真实 Goal 03–10 证据并区分实现债务与平台限制；
+- [ ] 发行版 ADR 使用真实 Goal 03–11 证据并区分实现债务与平台限制；
 - [ ] 若证据不足，结论诚实为 `insufficient-evidence`；
 - [ ] 仓库没有未经用户授权的发行版或市场实现；共同质量门禁全部通过。
 

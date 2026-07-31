@@ -38,6 +38,7 @@ from vibeos.system_service_contracts import (
 )
 from vibeos.system_service_provider import SYNTHETIC_FAILURE_MARKER, ServiceProviderError
 from vibeos.system_service_task import FIXED_SERVICE_GOAL, SystemServiceTaskService
+from vibeos.system_service_task_support import SystemServiceRecoveryGuard
 from vibeos.task_trace import TaskTraceStore
 
 
@@ -218,7 +219,7 @@ def test_goal04_golden_path_uses_one_canonical_receipt_and_independent_verificat
     assert len(receipts) == 1
     assert receipts[0].status == "succeeded"
     evidence_kinds = [json.loads(item.payload_json).get("kind") for item in components.task_repository.evidence(result.task.task_id)]
-    assert evidence_kinds[:3] == ["service_facts", "context_manifest", "model_result"]
+    assert evidence_kinds[:4] == ["service_facts", "context_manifest", "model_request_dispatched", "model_result"]
     assert evidence_kinds[-1] == "independent_verification"
     assert result.task.terminal_outcome is not None
     assert result.task.terminal_outcome.action == "restart"
@@ -314,6 +315,8 @@ def test_ineffective_recovery_fails_after_one_dispatch(tmp_path: Path) -> None:
         "before_fact_collection",
         "after_context_manifest",
         "before_model_call",
+        "after_model_dispatch_commit",
+        "after_model_call_before_commit",
         "after_typed_proposal_commit",
         "before_external_action",
         "after_dispatch_proposal_commit",
@@ -356,10 +359,11 @@ def test_crash_boundaries_resume_without_duplicate_unknown_side_effect(tmp_path:
     )
     resumed = resumed_service.resume(task.task_id, route=_route(), run_id=f"resume-{boundary}")
 
-    if boundary == "after_dispatch_proposal_commit":
+    if boundary in {"after_model_dispatch_commit", "after_model_call_before_commit", "after_dispatch_proposal_commit"}:
         assert resumed.task.status is TaskStatus.PAUSED
         assert provider.action_calls == 0
         assert len(components.task_repository.receipts(task.task_id)) == 0
+        assert gateway.calls == (1 if boundary == "after_model_call_before_commit" else 0 if boundary == "after_model_dispatch_commit" else 1)
     else:
         assert resumed.task.status is TaskStatus.SUCCEEDED
         assert provider.action_calls == 1
@@ -433,6 +437,7 @@ def test_fixture_unit_is_disabled_notify_service_with_one_writable_state_scope()
         "after_fact_collection_before_commit",
         "after_context_manifest",
         "before_model_call",
+        "after_model_dispatch_commit",
         "after_model_call_before_commit",
         "after_typed_proposal_commit",
         "before_external_action",
@@ -462,14 +467,50 @@ def test_real_worker_process_crash_matrix_recovers_once(tmp_path: Path, boundary
         check=False,
         timeout=30,
     )
-    expected_returncode = 2 if boundary == "after_dispatch_proposal_commit" else 0
+    paused_boundaries = {"after_model_dispatch_commit", "after_model_call_before_commit", "after_dispatch_proposal_commit"}
+    expected_returncode = 2 if boundary in paused_boundaries else 0
     assert resumed.returncode == expected_returncode, resumed.stderr
     payload = json.loads(resumed.stdout.splitlines()[-1])
-    if boundary == "after_dispatch_proposal_commit":
+    if boundary in paused_boundaries:
         assert payload["status"] == "paused"
         assert payload["action_calls"] == 0
         assert payload["receipt_count"] == 0
+        assert payload["gateway_calls"] == (1 if boundary == "after_model_call_before_commit" else 0 if boundary == "after_model_dispatch_commit" else 1)
     else:
         assert payload["status"] == "succeeded"
         assert payload["action_calls"] == 1
         assert payload["receipt_count"] == 1
+
+
+def test_specialized_resumer_enforces_expired_task_deadline_before_model_call(tmp_path: Path, monkeypatch) -> None:
+    provider = FakeSystemServiceProvider()
+    gateway = FakeGateway()
+    components, routes = _components(tmp_path, provider, gateway)
+
+    def crash_before_model(stage: str) -> None:
+        if stage == "before_model_call":
+            raise SimulatedCrash(stage)
+
+    service = SystemServiceTaskService(
+        engine=components.task_engine,
+        repository=components.task_repository,
+        planning=components.planning,
+        observation=components.observation,
+        gateway=gateway,
+        route_repository=routes,
+        checkpoint=crash_before_model,
+    )
+    with pytest.raises(SimulatedCrash, match="before_model_call"):
+        service.start(goal=FIXED_SERVICE_GOAL, route=_route(), run_id="expired-specialized")
+    task = components.task_repository.list(limit=1)[0]
+    assert gateway.calls == 0
+
+    monkeypatch.setattr(SystemServiceRecoveryGuard, "deadline_remaining_seconds", staticmethod(lambda _state: -1.0))
+    components.task_engine.resume_task(task.task_id)
+
+    expired = components.task_repository.get(task.task_id)
+    assert expired is not None
+    assert expired.status is TaskStatus.FAILED
+    assert expired.last_event == "timeout"
+    assert gateway.calls == 0
+    assert provider.action_calls == 0

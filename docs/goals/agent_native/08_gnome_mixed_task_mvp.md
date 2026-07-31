@@ -1,10 +1,10 @@
-# Goal 07：交付真实 GNOME 混合任务与桌面 fallback MVP
+# Goal 08：交付真实 GNOME 混合任务与桌面 fallback MVP
 
-- 阶段：07 / 11
-- 依赖：[Goal 06](06_unprivileged_tasks_and_installable_runtime.md)全部完成
+- 阶段：08 / 12
+- 依赖：[Goal 07](07_unprivileged_tasks_and_installable_runtime.md)全部完成
 - 规模：XL
 - 风险：高
-- 完成后进入：[Goal 08](08_privileged_canary_and_rollback.md)
+- 完成后进入：[Goal 09](09_privileged_canary_and_rollback.md)
 
 ## 给 Codex 的命令
 
@@ -13,9 +13,10 @@
 优先，缺失时才使用 AT-SPI，AT-SPI 也无法完成时才在用户授权的 XDG RemoteDesktop/
 ScreenCast portal 会话中使用鼠标键盘和视觉定位。
 
-先单独完成 portal/AT-SPI feasibility gate，再实现下文固定的一个主黄金场景和一个
-受控 portal fallback 场景。不要承诺任意应用自动化，不要一次建设五个场景、运行十轮
-矩阵或清理所有旧 desktop bridge。若 portal 授权无法跨 daemon 重启或用户登出
+先单独完成 portal/AT-SPI feasibility gate，再实现下文固定的一个主黄金场景、一个
+受控 portal fallback 场景，以及一个复用 Goal 06 计划的 API-first 四领域验收 smoke。
+不要承诺任意应用自动化，不要一次建设更多场景、运行十轮矩阵或清理所有旧 desktop
+bridge。若 portal 授权无法跨 daemon 重启或用户登出
 恢复，真实产品状态必须是 `awaiting_user_session`，不能伪装成后台持续控制 UI。
 
 ## 项目总体思想
@@ -31,8 +32,9 @@ VibeOS 是“像真实用户一样完成任务”的 Agent，但比人类多出 
 
 ## 预期进入状态与现场核对
 
-预期 Goal 05 已提供唯一 Model Gateway/Secret Broker，Goal 06 已提供可安装 Runtime
-和少量 API/CLI 用户态任务。本 Goal 不依赖 E2，也不得为桌面自动化引入提权。
+预期 Goal 05 已提供唯一 Model Gateway/Secret Broker，Goal 06 已提供有界复合规划，
+Goal 07 已提供可安装 Runtime 和少量 API/CLI 用户态任务。本 Goal 不依赖 E2，也不得
+为桌面自动化引入提权。
 Goal 03 的补充 Fedora GNOME 验收已经证明基础 portal 状态、GNOME extension bridge、
 应用注册和部分真实窗口/浏览器观察；这些是起点，不是 AT-SPI 或 RemoteDesktop 已经
 完成的证据。开始前现场核对：
@@ -40,7 +42,7 @@ Goal 03 的补充 Fedora GNOME 验收已经证明基础 portal 状态、GNOME ex
 - 目标 Fedora GNOME、Wayland、AT-SPI、RemoteDesktop/ScreenCast portal 版本；
 - portal 授权是否可持久、daemon 重启/用户登出/锁屏后的行为；
 - 现有 GNOME extension、window/app/browser adapter 的真实可用能力和调用者；
-- Goal 03/06 已有的 app.open、window observation、notification 和安装证据，避免
+- Goal 03/07 已有的 app.open、window observation、notification 和安装证据，避免
   重复实现同一 bridge；
 - AT-SPI 对选定真实应用的 role/name/state/action 覆盖与稳定性；
 - 当前安装 artifact 能否在干净 GNOME VM 启动 daemon、D-Bus 和用户交互面；
@@ -76,6 +78,18 @@ portal fallback 场景固定为一个运行在真实 GNOME 会话中的受控测
 可见的随机 challenge marker。该窗口无网络、不读写用户文件、不访问剪贴板。测试
 必须用动作前生成的 challenge 和动作后 marker 证明没有点击错误对象；它只验证
 fallback 安全性，不能冒充真实应用产品价值。
+
+API-first 四领域验收 smoke 固定为：
+
+> 检查当前系统和 VibeOS 测试服务状态。如果 host-owned `HealthPolicy` 判定健康，
+> 在浏览器打开 acceptance harness 提供的 task-scoped loopback 报告页，把包含检查
+> 时间和状态的摘要复制到剪贴板，并发送“VibeOS 发布前检查完成”的桌面通知。
+
+该 smoke 必须直接恢复并执行 Goal 06 的一个 whole-goal plan，不在 CLI、测试控制器
+或桌面 adapter 中手工拆成四条任务。loopback 页面只属于 acceptance harness，绑定
+loopback、使用随机 task challenge、无公网和用户数据；不要为此建设永久 Core Web
+Server。浏览器、剪贴板和通知分别通过独立 observation/readback 验证。GitHub 页面可
+作为额外公网 smoke，但不是本 Goal 的硬门禁。
 
 ## 必须实施
 
@@ -119,6 +133,18 @@ fallback 安全性，不能冒充真实应用产品价值。
    - 至少连续重复三轮主场景和三轮 portal 受控场景；先获得稳定证据，再在未来扩大
      场景数，不以高轮次数掩盖单一场景设计问题。
 
+7. **复合计划真实效果验收**
+   - 复用 Goal 06 的 subgoal/span、coverage certificate、condition、typed binding 和
+     selector，不在本 Goal 新建 planner、模型调用或完成权威；
+   - 在真实 Fedora GNOME 中执行上述四领域 smoke，证明 `system.status` 的 typed result
+     决定条件，动态摘要按冻结 binding 写入 clipboard，浏览器和通知各执行一次；
+   - acceptance harness 为正向 smoke 建立确定性 `healthy` 初态，另用非健康初态验证条件
+     为假；不能只跑跳过分支就声称四个领域已经真实执行；
+   - 条件为假、browser unavailable、clipboard readback 失败、notification verify 失败、
+     daemon 在任一 E1 receipt 前后重启时，整体结果必须准确且不重复外部效果；
+   - 使用 acceptance-owned loopback fixture 隔离公网可达性；另行记录 GitHub 网络 smoke
+     的通过或 external blocker，不用网络失败掩盖 planner/adapter 缺陷。
+
 ## 明确非目标
 
 - 不支持所有桌面、所有应用、X11、Windows 或 macOS；
@@ -126,6 +152,7 @@ fallback 安全性，不能冒充真实应用产品价值。
 - 不读取浏览器密码/cookie，不绕过 CAPTCHA、MFA、portal 或应用安全提示；
 - 不把鼠标键盘作为默认路径，不启用 `/dev/uinput`；
 - 不实现 E2，不构建主动建议、插件市场或完整桌面 SDK；
+- 不扩展 Goal 06 的 4-domain/8-step/E0-E1 边界，不在桌面层拼装复合计划；
 - 不删除现有 desktop bridge，不把 fake/dry-run 写成真实 GNOME 证据。
 
 ## 验收条件
@@ -136,9 +163,13 @@ fallback 安全性，不能冒充真实应用产品价值。
 - [ ] portal 授权失效、缩放、多屏、取消和 daemon 重启符合报告且不越权降级；
 - [ ] 用户接管立即停止输入，归还后丢弃旧状态并安全继续；
 - [ ] 主黄金场景跨 daemon 重启完成系统和真实桌面步骤，独立证据支持 TerminalOutcome；
+- [ ] Goal 06 四领域 whole-goal plan 在真实 Fedora GNOME 中经 API-first 路径完成；
+  source coverage、健康条件、动态 clipboard 摘要、浏览器页面身份和通知证据均可追踪；
+- [ ] 四领域 smoke 的条件为假和各 E1 故障路径不误报整体成功、不重复效果，GitHub
+  可达性与本地能力分别记录；
 - [ ] 主场景和受控 portal 场景分别连续通过至少三轮，无错误外部副作用；
-- [ ] 干净 Fedora GNOME VM 从 Goal 06 artifact 安装后可复现；
-- [ ] Goal 03–06 兼容、秘密、用户态任务和 E2 边界没有回归；
+- [ ] 干净 Fedora GNOME VM 从 Goal 07 artifact 安装后可复现；
+- [ ] Goal 03–07 兼容、秘密、复合规划、用户态任务和 E2 边界没有回归；
 - [ ] 共同质量门禁通过，文档准确区分真实 GNOME、WSL、fixture 和 mock。
 
 ## 必交付物
@@ -146,6 +177,8 @@ fallback 安全性，不能冒充真实应用产品价值。
 - AT-SPI/portal feasibility 报告和支持边界；
 - 窄 AT-SPI provider、portal fallback、桌面 observation/evidence；
 - 上述主混合黄金场景和受控 portal 场景及故障矩阵；
+- API-first 四领域复合 smoke、loopback fixture、独立 desktop evidence 和公网 blocker
+  记录；
 - 用户接管/归还、等待 session/授权和数据处理说明；
 - 可重建 Fedora GNOME VM、安装步骤和重复运行证据。
 

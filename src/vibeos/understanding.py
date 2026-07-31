@@ -177,6 +177,7 @@ class OpenAICompatibleUnderstandingAnalysisProvider(UnderstandingAnalysisProvide
                 system_prompt=UNDERSTANDING_SYSTEM_PROMPT,
                 user_content=json.dumps(request_payload, ensure_ascii=False),
                 max_tokens=512,
+                purpose="goal_understanding",
             )
             parsed = response.parsed_object
             analysis = validated_understanding_from_payload(utterance=utterance, payload=parsed, host_hint=host_hint)
@@ -237,6 +238,7 @@ class OpenAICompatibleUnderstandingTransitionProvider(UnderstandingTransitionPro
                 system_prompt=UNDERSTANDING_TRANSITION_SYSTEM_PROMPT,
                 user_content=json.dumps(request_payload, ensure_ascii=False),
                 max_tokens=512,
+                purpose="understanding_transition",
             )
             parsed = response.parsed_object
             analysis = validated_understanding_from_payload(

@@ -41,6 +41,13 @@ _ACTION_EFFECT = {
     "unknown": "E4",
 }
 _OBSERVATION = {"L0": "O0", "L1": "O1", "L2": "O2"}
+_EFFECT_POLICY = {
+    "E0": "automatic observe-only",
+    "E1": "automatic bounded local action with independent verification",
+    "E2": "requires an independent reviewer and a complete rollback contract",
+    "E3": "requires stored per-action user approval",
+    "E4": "rejected",
+}
 _SCHEMA_TABLES = (
     "task_runs",
     "goal_contracts",
@@ -146,7 +153,7 @@ def _transform(value: Any, ambiguous: list[str], *, path: str, parent: dict[str,
         elif key == "level" and "observation_id" in value and item in _OBSERVATION:
             migrated[new_key] = _OBSERVATION[str(item)]
         elif key == "permission_policy" and isinstance(item, dict):
-            migrated[new_key] = {str(policy_key).replace("L", "E", 1): policy_value for policy_key, policy_value in item.items()}
+            migrated[new_key] = dict(_EFFECT_POLICY)
         elif key == "schema_version":
             migrated[new_key] = "v2"
         else:
